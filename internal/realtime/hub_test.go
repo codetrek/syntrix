@@ -35,7 +35,7 @@ func TestHub_Broadcast(t *testing.T) {
 		Type: storage.EventCreate,
 		Path: "users/123",
 		Document: &storage.Document{
-			Path:       "users/123",
+			Id:         "users/123",
 			Collection: "users",
 			Data:       map[string]interface{}{"name": "Alice"},
 		},
@@ -54,7 +54,7 @@ func TestHub_Broadcast(t *testing.T) {
 		assert.Equal(t, "sub1", payload.SubID)
 		assert.Equal(t, evt.Type, payload.Delta.Type)
 		assert.Equal(t, evt.Path, payload.Delta.Path)
-		assert.Equal(t, evt.Document.Data["name"], payload.Delta.Document.Data["name"])
+		assert.Equal(t, evt.Document.Data["name"], payload.Delta.Document["name"])
 	case <-time.After(1 * time.Second):
 		t.Fatal("Timeout waiting for broadcast message")
 	}

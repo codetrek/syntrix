@@ -15,8 +15,8 @@ var (
 
 // Document represents a stored document in the database
 type Document struct {
-	// Path is the unique identifier for the document (e.g., "users/alice")
-	Path string `json:"path" bson:"_id"`
+	// Id is the unique identifier for the document (e.g., "chats/chatroom-1/members/alice")
+	Id string `json:"id" bson:"_id"`
 
 	// Collection is the parent collection name
 	Collection string `json:"collection" bson:"collection"`
@@ -96,9 +96,9 @@ type Order struct {
 }
 
 // NewDocument creates a new document instance with initialized metadata
-func NewDocument(path string, collection string, data map[string]interface{}) *Document {
+func NewDocument(id string, collection string, data map[string]interface{}) *Document {
 	return &Document{
-		Path:       path,
+		Id:         id,
 		Collection: collection,
 		Data:       data,
 		UpdatedAt:  time.Now().UnixNano(),

@@ -15,7 +15,7 @@ func TestEngine_GetDocument(t *testing.T) {
 	engine := NewEngine(mockStorage, "http://mock-csp")
 	ctx := context.Background()
 
-	expectedDoc := &storage.Document{Path: "test/1", Data: map[string]interface{}{"foo": "bar"}}
+	expectedDoc := &storage.Document{Id: "test/1", Data: map[string]interface{}{"foo": "bar"}}
 	mockStorage.On("Get", ctx, "test/1").Return(expectedDoc, nil)
 
 	doc, err := engine.GetDocument(ctx, "test/1")
@@ -29,7 +29,7 @@ func TestEngine_CreateDocument(t *testing.T) {
 	engine := NewEngine(mockStorage, "http://mock-csp")
 	ctx := context.Background()
 
-	doc := &storage.Document{Path: "test/1", Data: map[string]interface{}{"foo": "bar"}}
+	doc := &storage.Document{Id: "test/1", Data: map[string]interface{}{"foo": "bar"}}
 	mockStorage.On("Create", ctx, doc).Return(nil)
 
 	err := engine.CreateDocument(ctx, doc)
@@ -52,7 +52,7 @@ func TestEngine_ReplaceDocument_Create(t *testing.T) {
 
 	doc, err := engine.ReplaceDocument(ctx, path, collection, data)
 	assert.NoError(t, err)
-	assert.Equal(t, path, doc.Path)
+	assert.Equal(t, path, doc.Id)
 	assert.Equal(t, data, doc.Data)
 	mockStorage.AssertExpectations(t)
 }
@@ -65,12 +65,12 @@ func TestEngine_ReplaceDocument_Update(t *testing.T) {
 	path := "test/1"
 	collection := "test"
 	data := map[string]interface{}{"foo": "new"}
-	existingDoc := &storage.Document{Path: path, Version: 1, Data: map[string]interface{}{"foo": "old"}}
+	existingDoc := &storage.Document{Id: path, Version: 1, Data: map[string]interface{}{"foo": "old"}}
 
 	// Simulate Found -> Update -> Get
 	mockStorage.On("Get", ctx, path).Return(existingDoc, nil).Once()
 	mockStorage.On("Update", ctx, path, data, int64(1)).Return(nil)
-	mockStorage.On("Get", ctx, path).Return(&storage.Document{Path: path, Version: 2, Data: data}, nil).Once()
+	mockStorage.On("Get", ctx, path).Return(&storage.Document{Id: path, Version: 2, Data: data}, nil).Once()
 
 	doc, err := engine.ReplaceDocument(ctx, path, collection, data)
 	assert.NoError(t, err)
@@ -86,7 +86,7 @@ func TestEngine_PatchDocument(t *testing.T) {
 	path := "test/1"
 	patchData := map[string]interface{}{"bar": "baz"}
 	existingDoc := &storage.Document{
-		Path:    path,
+		Id:      path,
 		Version: 1,
 		Data:    map[string]interface{}{"foo": "old"},
 	}
@@ -97,7 +97,7 @@ func TestEngine_PatchDocument(t *testing.T) {
 	expectedMergedData := map[string]interface{}{"foo": "old", "bar": "baz"}
 	mockStorage.On("Update", ctx, path, expectedMergedData, int64(1)).Return(nil)
 
-	mockStorage.On("Get", ctx, path).Return(&storage.Document{Path: path, Version: 2, Data: expectedMergedData}, nil).Once()
+	mockStorage.On("Get", ctx, path).Return(&storage.Document{Id: path, Version: 2, Data: expectedMergedData}, nil).Once()
 
 	doc, err := engine.PatchDocument(ctx, path, patchData)
 	assert.NoError(t, err)
@@ -114,18 +114,18 @@ func TestEngine_PatchDocument_ConflictRetry(t *testing.T) {
 	patchData := map[string]interface{}{"bar": "baz"}
 
 	// Attempt 1: Get -> Update (Conflict)
-	doc1 := &storage.Document{Path: path, Version: 1, Data: map[string]interface{}{"foo": "old"}}
+	doc1 := &storage.Document{Id: path, Version: 1, Data: map[string]interface{}{"foo": "old"}}
 	mockStorage.On("Get", ctx, path).Return(doc1, nil).Once()
 	mockStorage.On("Update", ctx, path, mock.Anything, int64(1)).Return(storage.ErrVersionConflict).Once()
 
 	// Attempt 2: Get -> Update (Success) -> Get
-	doc2 := &storage.Document{Path: path, Version: 2, Data: map[string]interface{}{"foo": "old_v2"}}
+	doc2 := &storage.Document{Id: path, Version: 2, Data: map[string]interface{}{"foo": "old_v2"}}
 	mockStorage.On("Get", ctx, path).Return(doc2, nil).Once()
 
 	expectedMergedData := map[string]interface{}{"foo": "old_v2", "bar": "baz"}
 	mockStorage.On("Update", ctx, path, expectedMergedData, int64(2)).Return(nil).Once()
 
-	mockStorage.On("Get", ctx, path).Return(&storage.Document{Path: path, Version: 3, Data: expectedMergedData}, nil).Once()
+	mockStorage.On("Get", ctx, path).Return(&storage.Document{Id: path, Version: 3, Data: expectedMergedData}, nil).Once()
 
 	doc, err := engine.PatchDocument(ctx, path, patchData)
 	assert.NoError(t, err)
@@ -145,8 +145,8 @@ func TestEngine_Pull(t *testing.T) {
 	}
 
 	expectedDocs := []*storage.Document{
-		{Path: "test/1", UpdatedAt: 101},
-		{Path: "test/2", UpdatedAt: 102},
+		{Id: "test/1", UpdatedAt: 101},
+		{Id: "test/2", UpdatedAt: 102},
 	}
 
 	mockStorage.On("Query", ctx, mock.MatchedBy(func(q storage.Query) bool {
@@ -165,7 +165,7 @@ func TestEngine_Push(t *testing.T) {
 	engine := NewEngine(mockStorage, "http://mock-csp")
 	ctx := context.Background()
 
-	doc := &storage.Document{Path: "test/1", Collection: "test", Data: map[string]interface{}{"foo": "bar"}, Version: 1}
+	doc := &storage.Document{Id: "test/1", Collection: "test", Data: map[string]interface{}{"foo": "bar"}, Version: 1}
 	req := storage.ReplicationPushRequest{
 		Collection: "test",
 		Changes: []storage.ReplicationPushChange{
@@ -174,7 +174,7 @@ func TestEngine_Push(t *testing.T) {
 	}
 
 	// Simulate Get -> Update (Success)
-	existingDoc := &storage.Document{Path: "test/1", Version: 1}
+	existingDoc := &storage.Document{Id: "test/1", Version: 1}
 	mockStorage.On("Get", ctx, "test/1").Return(existingDoc, nil)
 	mockStorage.On("Update", ctx, "test/1", doc.Data, int64(1)).Return(nil)
 

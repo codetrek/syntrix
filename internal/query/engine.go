@@ -185,6 +185,10 @@ func (e *Engine) Pull(ctx context.Context, req storage.ReplicationPullRequest) (
 		return nil, err
 	}
 
+	if docs == nil {
+		docs = make([]*storage.Document, 0)
+	}
+
 	newCheckpoint := req.Checkpoint
 	if len(docs) > 0 {
 		newCheckpoint = docs[len(docs)-1].UpdatedAt
@@ -215,7 +219,7 @@ func (e *Engine) Push(ctx context.Context, req storage.ReplicationPushRequest) (
 		// 2. If not found, Create.
 		// 3. If found, check version/conflict.
 
-		existing, err := e.storage.Get(ctx, doc.Path)
+		existing, err := e.storage.Get(ctx, doc.Id)
 		if err != nil {
 			if err == storage.ErrNotFound {
 				if err := e.storage.Create(ctx, doc); err != nil {
@@ -237,10 +241,10 @@ func (e *Engine) Push(ctx context.Context, req storage.ReplicationPushRequest) (
 		}
 
 		// Update
-		if err := e.storage.Update(ctx, doc.Path, doc.Data, existing.Version); err != nil {
+		if err := e.storage.Update(ctx, doc.Id, doc.Data, existing.Version); err != nil {
 			if err == storage.ErrVersionConflict {
 				// Fetch latest to return as conflict
-				latest, _ := e.storage.Get(ctx, doc.Path)
+				latest, _ := e.storage.Get(ctx, doc.Id)
 				if latest != nil {
 					conflicts = append(conflicts, latest)
 				}

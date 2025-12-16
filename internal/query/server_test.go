@@ -24,7 +24,7 @@ func TestServer_GetDocument(t *testing.T) {
 	server, mockStorage := setupTestServer()
 
 	path := "test/1"
-	doc := &storage.Document{Path: path, Data: map[string]interface{}{"foo": "bar"}}
+	doc := &storage.Document{Id: path, Data: map[string]interface{}{"foo": "bar"}}
 	mockStorage.On("Get", mock.Anything, path).Return(doc, nil)
 
 	reqBody, _ := json.Marshal(map[string]string{"path": path})
@@ -39,13 +39,13 @@ func TestServer_GetDocument(t *testing.T) {
 	var respDoc storage.Document
 	err := json.Unmarshal(w.Body.Bytes(), &respDoc)
 	assert.NoError(t, err)
-	assert.Equal(t, doc.Path, respDoc.Path)
+	assert.Equal(t, doc.Id, respDoc.Id)
 }
 
 func TestServer_CreateDocument(t *testing.T) {
 	server, mockStorage := setupTestServer()
 
-	doc := &storage.Document{Path: "test/1", Data: map[string]interface{}{"foo": "bar"}}
+	doc := &storage.Document{Id: "test/1", Data: map[string]interface{}{"foo": "bar"}}
 	mockStorage.On("Create", mock.Anything, mock.AnythingOfType("*storage.Document")).Return(nil)
 
 	reqBody, _ := json.Marshal(doc)

@@ -1,11 +1,10 @@
 .PHONY: build run test clean
 
 CLI_APP_NAME=syntrix-cli
-ALL_IN_ONE_NAME=syntrix
+APP_NAME=syntrix
 BUILD_DIR=bin
 
 build:
-	@echo "Building $(API_APP_NAME)..."
 	@mkdir -p $(BUILD_DIR)
 	@echo "Building $(CLI_APP_NAME)..."
 	@go build -o $(BUILD_DIR)/$(CLI_APP_NAME) ./cmd/syntrix-cli
@@ -38,7 +37,7 @@ run-cli: build
 
 test:
 	@echo "Running tests..."
-	@go test ./... -v
+	@go test ./... -count=1
 
 clean:
 	@echo "Cleaning..."

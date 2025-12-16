@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"strings"
 
 	"syntrix/internal/query"
 )
@@ -22,7 +23,11 @@ func NewServer(qs query.Service) *Server {
 		mux:          http.NewServeMux(),
 	}
 	s.mux.HandleFunc("/v1/realtime", func(w http.ResponseWriter, r *http.Request) {
-		ServeWs(h, w, r)
+		if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+			ServeSSE(h, qs, w, r)
+		} else {
+			ServeWs(h, qs, w, r)
+		}
 	})
 	return s
 }
@@ -39,15 +44,18 @@ func (s *Server) StartBackgroundTasks(ctx context.Context) error {
 	}
 
 	go func() {
+		log.Println("[Realtime] Started watching change stream")
 		for {
 			select {
 			case <-ctx.Done():
+				log.Println("[Realtime] Context cancelled, stopping background tasks")
 				return
 			case evt, ok := <-stream:
 				if !ok {
-					log.Println("Realtime: Change stream closed")
+					log.Println("[Realtime] Change stream closed")
 					return
 				}
+				log.Printf("[Realtime] Broadcasting event type=%s collection=%s path=%s", evt.Type, evt.Document.Collection, evt.Path)
 				s.hub.Broadcast(evt)
 			}
 		}

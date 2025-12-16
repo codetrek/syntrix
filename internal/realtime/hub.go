@@ -76,7 +76,12 @@ func (h *Hub) Run() {
 						// Send event
 						payload := EventPayload{
 							SubID: subID,
-							Delta: message,
+							Delta: PublicEvent{
+								Type:      message.Type,
+								Document:  flattenDocument(message.Document),
+								Path:      message.Path,
+								Timestamp: message.Timestamp,
+							},
 						}
 						msg := BaseMessage{
 							Type:    TypeEvent,
@@ -100,6 +105,21 @@ func (h *Hub) Run() {
 
 func (h *Hub) Broadcast(event storage.Event) {
 	h.broadcast <- event
+}
+
+func flattenDocument(doc *storage.Document) map[string]interface{} {
+	if doc == nil {
+		return nil
+	}
+	flat := make(map[string]interface{})
+	// Copy data
+	for k, v := range doc.Data {
+		flat[k] = v
+	}
+	// Add system fields
+	flat["_version"] = doc.Version
+	flat["_updated_at"] = doc.UpdatedAt
+	return flat
 }
 
 func mustMarshal(v interface{}) []byte {

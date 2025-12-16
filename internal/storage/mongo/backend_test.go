@@ -48,7 +48,7 @@ func TestMongoBackend_CRUD(t *testing.T) {
 	// 2. Get
 	fetchedDoc, err := backend.Get(ctx, docPath)
 	require.NoError(t, err)
-	assert.Equal(t, doc.Path, fetchedDoc.Path)
+	assert.Equal(t, doc.Id, fetchedDoc.Id)
 	assert.Equal(t, doc.Collection, fetchedDoc.Collection)
 	assert.Equal(t, "Test User", fetchedDoc.Data["name"])
 	assert.Equal(t, int64(1), fetchedDoc.Version)

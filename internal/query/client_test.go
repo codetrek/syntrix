@@ -14,7 +14,7 @@ import (
 )
 
 func TestClient_GetDocument(t *testing.T) {
-	expectedDoc := &storage.Document{Path: "test/1", Data: map[string]interface{}{"foo": "bar"}}
+	expectedDoc := &storage.Document{Id: "test/1", Data: map[string]interface{}{"foo": "bar"}}
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/internal/v1/document/get", r.URL.Path)
@@ -41,7 +41,7 @@ func TestClient_CreateDocument(t *testing.T) {
 	defer ts.Close()
 
 	client := NewClient(ts.URL)
-	doc := &storage.Document{Path: "test/1"}
+	doc := &storage.Document{Id: "test/1"}
 	err := client.CreateDocument(context.Background(), doc)
 	assert.NoError(t, err)
 }

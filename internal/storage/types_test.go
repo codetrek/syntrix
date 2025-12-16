@@ -16,7 +16,7 @@ func TestNewDocument(t *testing.T) {
 	doc := NewDocument(path, collection, data)
 	after := time.Now().UnixNano()
 
-	assert.Equal(t, path, doc.Path)
+	assert.Equal(t, path, doc.Id)
 	assert.Equal(t, collection, doc.Collection)
 	assert.Equal(t, data, doc.Data)
 	assert.Equal(t, int64(1), doc.Version)

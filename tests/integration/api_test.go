@@ -55,54 +55,55 @@ func TestAPIIntegration(t *testing.T) {
 		"name": "Integration User",
 		"age":  42,
 	}
-	body, _ := json.Marshal(map[string]interface{}{"data": docData})
+	body, _ := json.Marshal(docData)
 
 	resp, err := client.Post(fmt.Sprintf("%s/v1/%s", ts.URL, collection), "application/json", bytes.NewBuffer(body))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
-	var createdDoc storage.Document
+	var createdDoc map[string]interface{}
 	err = json.NewDecoder(resp.Body).Decode(&createdDoc)
 	require.NoError(t, err)
 	resp.Body.Close()
 
-	assert.NotEmpty(t, createdDoc.Path)
-	assert.Equal(t, collection, createdDoc.Collection)
-	assert.Equal(t, "Integration User", createdDoc.Data["name"])
+	assert.NotEmpty(t, createdDoc["id"])
+	// Collection is not returned in flattened response
+	// assert.Equal(t, collection, createdDoc.Collection)
+	assert.Equal(t, "Integration User", createdDoc["name"])
 
-	docID := createdDoc.Path[len(collection)+1:] // Extract ID from "collection/id"
+	docID := createdDoc["id"].(string)
 
 	// 4. Scenario: Get Document
 	resp, err = client.Get(fmt.Sprintf("%s/v1/%s/%s", ts.URL, collection, docID))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var fetchedDoc storage.Document
+	var fetchedDoc map[string]interface{}
 	err = json.NewDecoder(resp.Body).Decode(&fetchedDoc)
 	require.NoError(t, err)
 	resp.Body.Close()
 
-	assert.Equal(t, createdDoc.Path, fetchedDoc.Path)
-	assert.Equal(t, float64(42), fetchedDoc.Data["age"]) // JSON numbers are floats
+	assert.Equal(t, createdDoc["id"], fetchedDoc["id"])
+	assert.Equal(t, float64(42), fetchedDoc["age"]) // JSON numbers are floats
 
 	// 4.5 Scenario: Patch Document
 	patchData := map[string]interface{}{
 		"age": 43,
 	}
-	patchBody, _ := json.Marshal(map[string]interface{}{"data": patchData})
+	patchBody, _ := json.Marshal(patchData)
 	req, _ := http.NewRequest("PATCH", fmt.Sprintf("%s/v1/%s/%s", ts.URL, collection, docID), bytes.NewBuffer(patchBody))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err = client.Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var patchedDoc storage.Document
+	var patchedDoc map[string]interface{}
 	err = json.NewDecoder(resp.Body).Decode(&patchedDoc)
 	require.NoError(t, err)
 	resp.Body.Close()
 
-	assert.Equal(t, "Integration User", patchedDoc.Data["name"]) // Should remain unchanged
-	assert.Equal(t, float64(43), patchedDoc.Data["age"])         // Should be updated
+	assert.Equal(t, "Integration User", patchedDoc["name"]) // Should remain unchanged
+	assert.Equal(t, float64(43), patchedDoc["age"])         // Should be updated
 
 	// 5. Scenario: Query Document
 	query := storage.Query{
@@ -116,14 +117,14 @@ func TestAPIIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var queryResults []*storage.Document
+	var queryResults []map[string]interface{}
 	err = json.NewDecoder(resp.Body).Decode(&queryResults)
 	require.NoError(t, err)
 	resp.Body.Close()
 
 	found := false
 	for _, d := range queryResults {
-		if d.Path == createdDoc.Path {
+		if d["id"] == createdDoc["id"] {
 			found = true
 			break
 		}

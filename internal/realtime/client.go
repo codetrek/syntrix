@@ -1,12 +1,15 @@
 package realtime
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
 	"time"
 
+	"syntrix/internal/query"
 	"syntrix/internal/storage"
 
 	"github.com/gorilla/websocket"
@@ -36,7 +39,8 @@ var upgrader = websocket.Upgrader{
 
 // Client is a middleman between the websocket connection and the hub.
 type Client struct {
-	hub *Hub
+	hub          *Hub
+	queryService query.Service
 
 	// The websocket connection.
 	conn *websocket.Conn
@@ -62,18 +66,22 @@ func (c *Client) readPump() {
 	c.conn.SetReadLimit(maxMessageSize)
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error { c.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
+	log.Println("[Info][WS] WebSocket connection established")
+
 	for {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("error: %v", err)
+				log.Printf("[Warning][WS] Websocket connection closed: %v", err)
+			} else {
+				log.Println("[Info][WS] WebSocket connection closed")
 			}
 			break
 		}
 
 		var msg BaseMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
-			log.Printf("error unmarshalling message: %v", err)
+			log.Printf("[Warning][WS] unmarshalling message: %v", err)
 			continue
 		}
 
@@ -82,6 +90,7 @@ func (c *Client) readPump() {
 }
 
 func (c *Client) handleMessage(msg BaseMessage) {
+	log.Printf("[Info][WS] Received message type=%s id=%s", msg.Type, msg.ID)
 	switch msg.Type {
 	case TypeAuth:
 		// TODO: Implement auth
@@ -89,20 +98,67 @@ func (c *Client) handleMessage(msg BaseMessage) {
 	case TypeSubscribe:
 		var payload SubscribePayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			log.Printf("[Error][WS] unmarshalling subscribe payload: %v", err)
 			return
 		}
 		c.mu.Lock()
 		c.subscriptions[msg.ID] = payload.Query
 		c.mu.Unlock()
+		log.Printf("[Info][WS] Subscribed to collection=%s id=%s", payload.Query.Collection, msg.ID)
 		// TODO: Send initial snapshot?
+	case TypeStream:
+		var payload StreamPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			log.Printf("[Error][WS] unmarshalling stream payload: %v", err)
+			return
+		}
+		c.mu.Lock()
+		c.subscriptions[msg.ID] = storage.Query{Collection: payload.Collection}
+		c.mu.Unlock()
+		log.Printf("[Info][WS] Stream requested for collection=%s checkpoint=%d id=%s", payload.Collection, payload.Checkpoint, msg.ID)
+
+		// Fetch changes
+		req := storage.ReplicationPullRequest{
+			Collection: payload.Collection,
+			Checkpoint: payload.Checkpoint,
+			Limit:      100, // Default limit
+		}
+		// Use a background context or create one with timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		resp, err := c.queryService.Pull(ctx, req)
+		if err != nil {
+			log.Printf("[Error][WS] Pull failed: %v", err)
+			return
+		}
+
+		flatDocs := make([]map[string]interface{}, len(resp.Documents))
+		for i, doc := range resp.Documents {
+			flatDocs[i] = flattenDocument(doc)
+		}
+
+		streamPayload := StreamEventPayload{
+			StreamID:   msg.ID,
+			Documents:  flatDocs,
+			Checkpoint: resp.Checkpoint,
+		}
+
+		c.send <- BaseMessage{
+			ID:      msg.ID,
+			Type:    TypeStreamEvent,
+			Payload: mustMarshal(streamPayload),
+		}
 	case TypeUnsubscribe:
 		var payload UnsubscribePayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			log.Printf("[Warning][WS] unmarshalling unsubscribe payload: %v", err)
 			return
 		}
 		c.mu.Lock()
 		delete(c.subscriptions, payload.ID)
 		c.mu.Unlock()
+		log.Printf("[Info][WS] Unsubscribed id=%s", payload.ID)
 		c.send <- BaseMessage{ID: msg.ID, Type: TypeUnsubscribeAck}
 	}
 }
@@ -142,17 +198,92 @@ func (c *Client) writePump() {
 }
 
 // ServeReplicationStream handles websocket requests from the peer.
-func ServeWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
+func ServeWs(hub *Hub, qs query.Service, w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	client := &Client{hub: hub, conn: conn, send: make(chan BaseMessage, 256), subscriptions: make(map[string]storage.Query)}
+	client := &Client{hub: hub, queryService: qs, conn: conn, send: make(chan BaseMessage, 256), subscriptions: make(map[string]storage.Query)}
 	client.hub.register <- client
 
 	// Allow collection of memory referenced by the caller by doing all work in
 	// new goroutines.
 	go client.writePump()
 	go client.readPump()
+}
+
+// ServeSSE handles Server-Sent Events requests.
+func ServeSSE(hub *Hub, qs query.Service, w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Create client without websocket connection
+	client := &Client{
+		hub:           hub,
+		queryService:  qs,
+		conn:          nil,
+		send:          make(chan BaseMessage, 256),
+		subscriptions: make(map[string]storage.Query),
+	}
+
+	// Handle initial subscription from query params
+	collection := r.URL.Query().Get("collection")
+	// If collection is provided, subscribe to it.
+	// If not provided, we subscribe to everything (empty string matches all in Hub).
+	// We use "default" as the subscription ID.
+	client.subscriptions["default"] = storage.Query{Collection: collection}
+	log.Printf("[Info][SSE] connection established. Subscribed to collection=%s", collection)
+
+	client.hub.register <- client
+
+	// Unregister on exit
+	defer func() {
+		client.hub.unregister <- client
+		log.Println("[Info][SSE] connection closed")
+	}()
+
+	// Send initial comment to establish connection
+	fmt.Fprintf(w, ": connected\n\n")
+	flusher.Flush()
+
+	// Heartbeat ticker
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			log.Println("[Info][SSE] context cancelled, closing connection")
+			return
+		case <-ticker.C:
+			if _, err := fmt.Fprintf(w, ": heartbeat\n\n"); err != nil {
+				log.Println("[Warning][SSE] heartbeat error:", err)
+				return
+			}
+			flusher.Flush()
+		case message, ok := <-client.send:
+			if !ok {
+				log.Println("[Info][SSE] send channel closed")
+				return
+			}
+			data, err := json.Marshal(message)
+			if err != nil {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+				log.Println("[Error][SSE] write error:", err)
+				return
+			}
+			flusher.Flush()
+		}
+	}
 }

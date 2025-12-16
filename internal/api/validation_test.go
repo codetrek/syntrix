@@ -223,7 +223,7 @@ func TestValidateReplicationPush(t *testing.T) {
 			storage.ReplicationPushRequest{
 				Collection: "users",
 				Changes: []storage.ReplicationPushChange{
-					{Doc: &storage.Document{Path: "users/alice"}},
+					{Doc: &storage.Document{Id: "users/alice"}},
 				},
 			},
 			false,
@@ -248,7 +248,7 @@ func TestValidateReplicationPush(t *testing.T) {
 			storage.ReplicationPushRequest{
 				Collection: "users",
 				Changes: []storage.ReplicationPushChange{
-					{Doc: &storage.Document{Path: "users/alice!"}},
+					{Doc: &storage.Document{Id: "users/alice!"}},
 				},
 			},
 			true,
@@ -258,7 +258,7 @@ func TestValidateReplicationPush(t *testing.T) {
 			storage.ReplicationPushRequest{
 				Collection: "users",
 				Changes: []storage.ReplicationPushChange{
-					{Doc: &storage.Document{Path: "posts/post1"}},
+					{Doc: &storage.Document{Id: "posts/post1"}},
 				},
 			},
 			true,
@@ -268,7 +268,7 @@ func TestValidateReplicationPush(t *testing.T) {
 			storage.ReplicationPushRequest{
 				Collection: "users",
 				Changes: []storage.ReplicationPushChange{
-					{Doc: &storage.Document{Path: "users/alice/posts"}},
+					{Doc: &storage.Document{Id: "users/alice/posts"}},
 				},
 			},
 			true,

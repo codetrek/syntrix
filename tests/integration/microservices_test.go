@@ -104,32 +104,33 @@ func TestMicroservices_FullFlow(t *testing.T) {
 	docData := map[string]interface{}{
 		"msg": "Hello Microservices",
 	}
-	body, _ := json.Marshal(map[string]interface{}{"data": docData})
+	body, _ := json.Marshal(docData)
 
 	resp, err := client.Post(fmt.Sprintf("%s/v1/%s", env.APIServer.URL, collection), "application/json", bytes.NewBuffer(body))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
-	var createdDoc storage.Document
+	var createdDoc map[string]interface{}
 	err = json.NewDecoder(resp.Body).Decode(&createdDoc)
 	require.NoError(t, err)
 	resp.Body.Close()
 
-	assert.Equal(t, "Hello Microservices", createdDoc.Data["msg"])
-	docID := createdDoc.Path[len(collection)+1:]
+	assert.Equal(t, "Hello Microservices", createdDoc["msg"])
+	docID := createdDoc["id"].(string)
+	docPath := fmt.Sprintf("%s/%s", collection, docID)
 
 	// 2. Verify via Query Service directly (bypass API Gateway)
 	// We can use the internal client for this
 	qClient := query.NewClient(env.QueryServer.URL)
-	fetchedDoc, err := qClient.GetDocument(context.Background(), createdDoc.Path)
+	fetchedDoc, err := qClient.GetDocument(context.Background(), docPath)
 	require.NoError(t, err)
-	assert.Equal(t, createdDoc.Path, fetchedDoc.Path)
+	assert.Equal(t, docPath, fetchedDoc.Id)
 
 	// 3. Update Document via API Gateway
 	patchData := map[string]interface{}{
 		"msg": "Updated Message",
 	}
-	patchBody, _ := json.Marshal(map[string]interface{}{"data": patchData})
+	patchBody, _ := json.Marshal(patchData)
 	req, _ := http.NewRequest("PATCH", fmt.Sprintf("%s/v1/%s/%s", env.APIServer.URL, collection, docID), bytes.NewBuffer(patchBody))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err = client.Do(req)

@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
-	"strings"
 	"syntrix/internal/query"
 	"syntrix/internal/storage"
 
@@ -38,6 +36,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mux.ServeHTTP(w, r)
+}
+
+func flattenDocument(doc *storage.Document) Document {
+	if doc == nil {
+		return nil
+	}
+	flat := make(Document)
+
+	// Copy data
+	for k, v := range doc.Data {
+		flat[k] = v
+	}
+	// Add system fields
+	flat["_version"] = doc.Version
+	flat["_updated_at"] = doc.UpdatedAt
+	return flat
 }
 
 func (s *Server) routes() {
@@ -83,7 +97,7 @@ func (s *Server) handleGetDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(doc)
+	json.NewEncoder(w).Encode(flattenDocument(doc))
 }
 
 func (s *Server) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
@@ -94,23 +108,33 @@ func (s *Server) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Data map[string]interface{} `json:"data"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var data map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	if err := validateData(req.Data); err != nil {
+	if err := validateData(data); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	docID := uuid.New().String()
+	// Extract ID from data or generate it
+	var docID string
+	if idVal, ok := data["id"]; ok {
+		if idStr, ok := idVal.(string); ok && idStr != "" {
+			docID = idStr
+		}
+	}
+
+	if docID == "" {
+		docID = uuid.New().String()
+		data["id"] = docID
+	}
+
 	path := collection + "/" + docID
 
-	doc := storage.NewDocument(path, collection, req.Data)
+	doc := storage.NewDocument(path, collection, stripSystemFields(data))
 
 	if err := s.engine.CreateDocument(r.Context(), doc); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -119,39 +143,35 @@ func (s *Server) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(doc)
+	json.NewEncoder(w).Encode(flattenDocument(doc))
 }
 
 func (s *Server) handleReplaceDocument(w http.ResponseWriter, r *http.Request) {
 	path := r.PathValue("path")
 
-	if err := validateDocumentPath(path); err != nil {
+	collection, docID, err := validateAndExplodeFullpath(path)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	// Extract collection from path
-	i := strings.LastIndex(path, "/")
-	if i == -1 {
-		http.Error(w, "Invalid document path", http.StatusBadRequest)
+	if docID == "" {
+		http.Error(w, "Invalid document path: missing document ID", http.StatusBadRequest)
 		return
 	}
-	collection := path[:i]
 
-	var req struct {
-		Data map[string]interface{} `json:"data"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var data map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	if err := validateData(req.Data); err != nil {
+	data["id"] = docID
+	if err := validateData(data); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	doc, err := s.engine.ReplaceDocument(r.Context(), path, collection, req.Data)
+	doc, err := s.engine.ReplaceDocument(r.Context(), path, collection, stripSystemFields(data))
 	if err != nil {
 		if errors.Is(err, storage.ErrVersionConflict) {
 			http.Error(w, "Version conflict", http.StatusConflict)
@@ -162,31 +182,42 @@ func (s *Server) handleReplaceDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(doc)
+	json.NewEncoder(w).Encode(flattenDocument(doc))
 }
 
 func (s *Server) handleUpdateDocument(w http.ResponseWriter, r *http.Request) {
 	path := r.PathValue("path")
 
-	if err := validateDocumentPath(path); err != nil {
+	_, docID, err := validateAndExplodeFullpath(path)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	var req struct {
-		Data map[string]interface{} `json:"data"`
+	if docID == "" {
+		http.Error(w, "Invalid document path: missing document ID", http.StatusBadRequest)
+		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+
+	var data map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	if err := validateData(req.Data); err != nil {
+	if err := validateData(data); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	doc, err := s.engine.PatchDocument(r.Context(), path, req.Data)
+	delete(data, "id") // ID comes from path
+	data = stripSystemFields(data)
+	if len(data) == 0 {
+		http.Error(w, "No data to update", http.StatusBadRequest)
+		return
+	}
+
+	data["id"] = docID
+	doc, err := s.engine.PatchDocument(r.Context(), path, data)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			http.Error(w, "Document not found", http.StatusNotFound)
@@ -201,7 +232,7 @@ func (s *Server) handleUpdateDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(doc)
+	json.NewEncoder(w).Encode(flattenDocument(doc))
 }
 
 func (s *Server) handleDeleteDocument(w http.ResponseWriter, r *http.Request) {
@@ -242,85 +273,11 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(docs)
-}
-
-func (s *Server) handlePull(w http.ResponseWriter, r *http.Request) {
-	collection := r.URL.Query().Get("collection")
-	if collection == "" {
-		http.Error(w, "collection is required", http.StatusBadRequest)
-		return
-	}
-	checkpointStr := r.URL.Query().Get("checkpoint")
-	limitStr := r.URL.Query().Get("limit")
-
-	checkpoint := int64(0)
-	if checkpointStr != "" {
-		var err error
-		checkpoint, err = strconv.ParseInt(checkpointStr, 10, 64)
-		if err != nil {
-			http.Error(w, "Invalid checkpoint", http.StatusBadRequest)
-			return
-		}
-	}
-
-	limit := 100
-	if limitStr != "" {
-		var err error
-		limit, err = strconv.Atoi(limitStr)
-		if err != nil {
-			http.Error(w, "Invalid limit", http.StatusBadRequest)
-			return
-		}
-	}
-
-	req := storage.ReplicationPullRequest{
-		Collection: collection,
-		Checkpoint: checkpoint,
-		Limit:      limit,
-	}
-
-	if err := validateReplicationPull(req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	resp, err := s.engine.Pull(r.Context(), req)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	flatDocs := make([]map[string]interface{}, len(docs))
+	for i, doc := range docs {
+		flatDocs[i] = flattenDocument(doc)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
-}
-
-func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
-	collection := r.URL.Query().Get("collection")
-	if collection == "" {
-		http.Error(w, "collection is required", http.StatusBadRequest)
-		return
-	}
-
-	var req storage.ReplicationPushRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-	req.Collection = collection
-
-	if err := validateReplicationPush(req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	resp, err := s.engine.Push(r.Context(), req)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(flatDocs)
 }

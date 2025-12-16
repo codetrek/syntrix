@@ -2,6 +2,7 @@ package csp
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"syntrix/internal/storage"
@@ -40,6 +41,7 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 		Collection string `json:"collection"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Println("[Error][Watch] invalid request body:", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -47,6 +49,7 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	// Ensure the writer supports flushing
 	flusher, ok := w.(http.Flusher)
 	if !ok {
+		log.Println("[Error][Watch] streaming not supported")
 		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
 		return
 	}
@@ -62,22 +65,29 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	stream, err := s.storage.Watch(r.Context(), req.Collection)
 	if err != nil {
 		// Headers already sent, can't send error status now.
+		log.Println("[Error][Watch] failed to start watch:", err)
 		return
 	}
+
+	log.Printf("[Info][Watch] starting watch on collection: %s", req.Collection)
 
 	encoder := json.NewEncoder(w)
 
 	for {
 		select {
 		case <-r.Context().Done():
+				log.Println("[Info][Watch] context cancelled, stopping watch")
 			return
 		case evt, ok := <-stream:
 			if !ok {
+				log.Println("[Info][Watch] watch stream closed")
 				return
 			}
 			if err := encoder.Encode(evt); err != nil {
+				log.Println("[Error][Watch] failed to encode event:", err)
 				return
 			}
+			log.Println("[Trace][Watch] sending event:", evt)
 			flusher.Flush()
 		}
 	}

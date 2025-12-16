@@ -95,7 +95,7 @@ func TestHandleGetDocument(t *testing.T) {
 	server := NewServer(mockService)
 
 	doc := &storage.Document{
-		Path:       "rooms/room-1/messages/msg-1",
+		Id:         "rooms/room-1/messages/msg-1",
 		Collection: "rooms/room-1/messages",
 		Data:       map[string]interface{}{"name": "Alice"},
 		Version:    1,
@@ -110,10 +110,11 @@ func TestHandleGetDocument(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 
-	var resp storage.Document
+	var resp map[string]interface{}
 	json.Unmarshal(rr.Body.Bytes(), &resp)
-	assert.Equal(t, "rooms/room-1/messages/msg-1", resp.Path)
-	assert.Equal(t, "Alice", resp.Data["name"])
+	// Path is not returned in flattened response unless it's in data.id
+	// assert.Equal(t, "rooms/room-1/messages/msg-1", resp.Path)
+	assert.Equal(t, "Alice", resp["name"])
 }
 
 func TestHandleCreateDocument(t *testing.T) {
@@ -124,7 +125,7 @@ func TestHandleCreateDocument(t *testing.T) {
 	// Assuming it calls CreateDocument for POST /v1/collection
 	mockService.On("CreateDocument", mock.Anything, mock.AnythingOfType("*storage.Document")).Return(nil)
 
-	body := []byte(`{"data": {"name": "Bob"}}`)
+	body := []byte(`{"name": "Bob"}`)
 	req, _ := http.NewRequest("POST", "/v1/rooms/room-1/messages", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 

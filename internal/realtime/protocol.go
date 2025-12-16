@@ -49,15 +49,22 @@ type UnsubscribePayload struct {
 
 // EventPayload (Server -> Client)
 type EventPayload struct {
-	SubID string        `json:"subId"`
-	Delta storage.Event `json:"delta"`
+	SubID string      `json:"subId"`
+	Delta PublicEvent `json:"delta"`
+}
+
+type PublicEvent struct {
+	Type      storage.EventType      `json:"type"`
+	Document  map[string]interface{} `json:"document,omitempty"`
+	Path      string                 `json:"path"`
+	Timestamp int64                  `json:"timestamp"`
 }
 
 // StreamEventPayload (Server -> Client)
 type StreamEventPayload struct {
-	StreamID   string              `json:"streamId"`
-	Documents  []*storage.Document `json:"documents"`
-	Checkpoint int64               `json:"checkpoint"`
+	StreamID   string                   `json:"streamId"`
+	Documents  []map[string]interface{} `json:"documents"`
+	Checkpoint int64                    `json:"checkpoint"`
 }
 
 // ErrorPayload

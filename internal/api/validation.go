@@ -10,34 +10,56 @@ import (
 
 var (
 	pathRegex = regexp.MustCompile(`^[a-zA-Z0-9_\-\./]+$`)
+	idRegex   = regexp.MustCompile(`^[a-zA-Z0-9_\-\.]{1,64}$`)
 )
 
 func validatePathSyntax(path string) error {
 	if path == "" {
 		return errors.New("path cannot be empty")
 	}
+
 	if !pathRegex.MatchString(path) {
 		return errors.New("path contains invalid characters")
 	}
+
 	// Ensure path does not start or end with /
 	if strings.HasPrefix(path, "/") || strings.HasSuffix(path, "/") {
 		return errors.New("path cannot start or end with /")
 	}
+
 	// Ensure no double slashes
 	if strings.Contains(path, "//") {
 		return errors.New("path cannot contain empty segments")
 	}
+
 	return nil
+}
+
+func validateAndExplodeFullpath(path string) (collection string, docId string, err error) {
+	if err := validatePathSyntax(path); err != nil {
+		return "", "", err
+	}
+
+	parts := strings.Split(path, "/")
+	if len(parts)%2 != 0 {
+		return path, "", nil // It's a collection path
+	}
+
+	// It's a document path
+	collection = strings.Join(parts[:len(parts)-1], "/")
+	docId = parts[len(parts)-1]
+	return collection, docId, nil
 }
 
 func validateDocumentPath(path string) error {
 	if err := validatePathSyntax(path); err != nil {
 		return err
 	}
-	if len(strings.Split(path, "/"))%2 == 0 {
-		return nil
+	parts := strings.Split(path, "/")
+	if len(parts)%2 != 0 {
+		return errors.New("invalid document path: must have even number of segments (e.g. collection/doc)")
 	}
-	return errors.New("invalid document path: must have even number of segments (e.g. collection/doc)")
+	return nil
 }
 
 func validateCollection(collection string) error {
@@ -54,8 +76,30 @@ func validateData(data map[string]interface{}) error {
 	if data == nil {
 		return errors.New("data cannot be nil")
 	}
+
+	if idVal, ok := data["id"]; ok {
+		switch idValue := idVal.(type) {
+		case string:
+			if idValue == "" {
+				return errors.New("data field 'id' cannot be empty")
+			}
+
+			if !idRegex.MatchString(idVal.(string)) {
+				return errors.New("invalid 'id' field: must be 1-64 characters of a-z, A-Z, 0-9, _, ., -")
+			}
+		case int, int32, int64:
+			data["id"] = fmt.Sprintf("%d", idValue)
+		default:
+			return errors.New("data field 'id' must be a string or integer")
+		}
+	}
 	// TODO: Add more strict validation (e.g. max depth, max size)
 	return nil
+}
+
+func stripSystemFields(data map[string]interface{}) map[string]interface{} {
+	delete(data, "_updated_at")
+	return data
 }
 
 func validateQuery(q storage.Query) error {
@@ -108,12 +152,12 @@ func validateReplicationPush(req storage.ReplicationPushRequest) error {
 		if change.Doc == nil {
 			return errors.New("change document cannot be nil")
 		}
-		if err := validateDocumentPath(change.Doc.Path); err != nil {
+		if err := validateDocumentPath(change.Doc.Id); err != nil {
 			return fmt.Errorf("invalid document path in change: %w", err)
 		}
 		// Ensure document path matches collection prefix
-		if !strings.HasPrefix(change.Doc.Path, req.Collection+"/") {
-			return fmt.Errorf("document path %s does not belong to collection %s", change.Doc.Path, req.Collection)
+		if !strings.HasPrefix(change.Doc.Id, req.Collection+"/") {
+			return fmt.Errorf("document path %s does not belong to collection %s", change.Doc.Id, req.Collection)
 		}
 	}
 	return nil
