@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"syntrix/internal/query"
 	"syntrix/internal/storage"
-
-	"github.com/google/uuid"
 )
 
 type Server struct {
@@ -108,32 +106,20 @@ func (s *Server) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var data map[string]interface{}
+	var data Document
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	if err := validateData(data); err != nil {
+	if err := data.ValidateDocument(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Extract ID from data or generate it
-	var docID string
-	if idVal, ok := data["id"]; ok {
-		if idStr, ok := idVal.(string); ok && idStr != "" {
-			docID = idStr
-		}
-	}
+	data.GenerateIDIfEmpty()
 
-	if docID == "" {
-		docID = uuid.New().String()
-		data["id"] = docID
-	}
-
-	path := collection + "/" + docID
-
+	path := collection + "/" + data.GetID()
 	doc := storage.NewDocument(path, collection, stripSystemFields(data))
 
 	if err := s.engine.CreateDocument(r.Context(), doc); err != nil {
@@ -159,14 +145,14 @@ func (s *Server) handleReplaceDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var data map[string]interface{}
+	var data Document
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	data["id"] = docID
-	if err := validateData(data); err != nil {
+	data.SetID(docID)
+	if err := data.ValidateDocument(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -198,25 +184,23 @@ func (s *Server) handleUpdateDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var data map[string]interface{}
+	var data Document
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	if err := validateData(data); err != nil {
+	if err := data.ValidateDocument(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	delete(data, "id") // ID comes from path
-	data = stripSystemFields(data)
-	if len(data) == 0 {
+	if data.IsEmpty() {
 		http.Error(w, "No data to update", http.StatusBadRequest)
 		return
 	}
+	data.SetID(docID)
 
-	data["id"] = docID
 	doc, err := s.engine.PatchDocument(r.Context(), path, data)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {

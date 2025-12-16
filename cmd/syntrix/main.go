@@ -19,15 +19,19 @@ func main() {
 	runCSP := flag.Bool("csp", false, "Run CSP Service")
 	runQuery := flag.Bool("query", false, "Run Query Service")
 	runRealtime := flag.Bool("realtime", false, "Run Realtime Service")
+	runTriggerEvaluator := flag.Bool("trigger-evaluator", false, "Run Trigger Evaluator Service")
+	runTriggerWorker := flag.Bool("trigger-worker", false, "Run Trigger Worker Service")
 	runAll := flag.Bool("all", false, "Run All Services")
 	flag.Parse()
 
 	// Default to running all if no specific flags are provided or if --all is set
-	if *runAll || (!*runAPI && !*runCSP && !*runQuery && !*runRealtime) {
+	if *runAll || (!*runAPI && !*runCSP && !*runQuery && !*runRealtime && !*runTriggerEvaluator && !*runTriggerWorker) {
 		*runAPI = true
 		*runCSP = true
 		*runQuery = true
 		*runRealtime = true
+		*runTriggerEvaluator = true
+		*runTriggerWorker = true
 	}
 
 	// 1. Load Configuration
@@ -45,13 +49,21 @@ func main() {
 	if *runRealtime {
 		log.Println("- Realtime Service: Enabled")
 	}
+	if *runTriggerEvaluator {
+		log.Println("- Trigger Evaluator Service: Enabled")
+	}
+	if *runTriggerWorker {
+		log.Println("- Trigger Worker Service: Enabled")
+	}
 
 	// 2. Initialize Service Manager
 	opts := services.Options{
-		RunAPI:      *runAPI,
-		RunCSP:      *runCSP,
-		RunQuery:    *runQuery,
-		RunRealtime: *runRealtime,
+		RunAPI:              *runAPI,
+		RunCSP:              *runCSP,
+		RunQuery:            *runQuery,
+		RunRealtime:         *runRealtime,
+		RunTriggerEvaluator: *runTriggerEvaluator,
+		RunTriggerWorker:    *runTriggerWorker,
 	}
 	mgr := services.NewManager(cfg, opts)
 

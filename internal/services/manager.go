@@ -14,22 +14,28 @@ import (
 	"syntrix/internal/query"
 	"syntrix/internal/realtime"
 	"syntrix/internal/storage/mongo"
+	"syntrix/internal/trigger"
+
+	"github.com/nats-io/nats.go"
 )
 
 type Options struct {
-	RunAPI      bool
-	RunCSP      bool
-	RunQuery    bool
-	RunRealtime bool
+	RunAPI              bool
+	RunCSP              bool
+	RunQuery            bool
+	RunRealtime         bool
+	RunTriggerEvaluator bool
+	RunTriggerWorker    bool
 }
 
 type Manager struct {
-	cfg            *config.Config
-	opts           Options
-	servers        []*http.Server
-	serverNames    []string
-	storageBackend *mongo.MongoBackend
-	rtServer       *realtime.Server
+	cfg             *config.Config
+	opts            Options
+	servers         []*http.Server
+	serverNames     []string
+	storageBackend  *mongo.MongoBackend
+	rtServer        *realtime.Server
+	triggerConsumer *trigger.Consumer
 }
 
 func NewManager(cfg *config.Config, opts Options) *Manager {
@@ -117,6 +123,50 @@ func (m *Manager) Init(ctx context.Context) error {
 		m.serverNames = append(m.serverNames, "CSP Service")
 	}
 
+	// Trigger Services (Evaluator & Worker)
+	if m.opts.RunTriggerEvaluator || m.opts.RunTriggerWorker {
+		// Connect to NATS
+		natsURL := m.cfg.Trigger.NatsURL
+		if natsURL == "" {
+			natsURL = nats.DefaultURL
+		}
+		nc, err := nats.Connect(natsURL)
+		if err != nil {
+			return fmt.Errorf("failed to connect to NATS: %w", err)
+		}
+
+		// Initialize Evaluator Service
+		if m.opts.RunTriggerEvaluator {
+			evaluator, err := trigger.NewCELEvaluator()
+			if err != nil {
+				return fmt.Errorf("failed to create CEL evaluator: %w", err)
+			}
+
+			publisher, err := trigger.NewNatsPublisher(nc)
+			if err != nil {
+				return fmt.Errorf("failed to create NATS publisher: %w", err)
+			}
+
+			triggerService := trigger.NewTriggerService(evaluator, publisher)
+
+			// TODO: Load triggers from storage
+			// triggerService.LoadTriggers(...)
+
+			// TODO: Hook up triggerService to Change Stream
+			log.Println("Initialized Trigger Evaluator Service", triggerService)
+		}
+
+		// Initialize Worker Service
+		if m.opts.RunTriggerWorker {
+			worker := trigger.NewDeliveryWorker()
+			m.triggerConsumer, err = trigger.NewConsumer(nc, worker)
+			if err != nil {
+				return fmt.Errorf("failed to create trigger consumer: %w", err)
+			}
+			log.Println("Initialized Trigger Worker Service")
+		}
+	}
+
 	return nil
 }
 
@@ -151,6 +201,16 @@ func (m *Manager) Start(bgCtx context.Context) {
 				return
 			}
 			log.Println("CRITICAL: Failed to start realtime background tasks after multiple attempts")
+		}()
+	}
+
+	// Start Trigger Consumer
+	if m.opts.RunTriggerWorker && m.triggerConsumer != nil {
+		go func() {
+			log.Println("Starting Trigger Consumer...")
+			if err := m.triggerConsumer.Start(bgCtx); err != nil {
+				log.Printf("Trigger Consumer stopped with error: %v", err)
+			}
 		}()
 	}
 }

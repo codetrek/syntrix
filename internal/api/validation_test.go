@@ -88,16 +88,16 @@ func TestValidateCollection(t *testing.T) {
 func TestValidateData(t *testing.T) {
 	tests := []struct {
 		name    string
-		data    map[string]interface{}
+		data    Document
 		wantErr bool
 	}{
-		{"valid data", map[string]interface{}{"key": "value"}, false},
+		{"valid data", Document{"key": "value"}, false},
 		{"nil data", nil, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateData(tt.data)
+			err := tt.data.ValidateDocument()
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {

@@ -14,6 +14,7 @@ type Config struct {
 	Realtime RealtimeConfig `yaml:"realtime"`
 	Query    QueryConfig    `yaml:"query"`
 	CSP      CSPConfig      `yaml:"csp"`
+	Trigger  TriggerConfig  `yaml:"trigger"`
 }
 
 type APIConfig struct {
@@ -35,6 +36,10 @@ type QueryConfig struct {
 type CSPConfig struct {
 	Port    int           `yaml:"port"`
 	Storage StorageConfig `yaml:"storage"`
+}
+
+type TriggerConfig struct {
+	NatsURL string `yaml:"nats_url"`
 }
 
 type StorageConfig struct {
@@ -69,6 +74,9 @@ func LoadConfig() *Config {
 				MongoURI:     "mongodb://localhost:27017",
 				DatabaseName: "syntrix",
 			},
+		},
+		Trigger: TriggerConfig{
+			NatsURL: "nats://localhost:4222",
 		},
 	}
 
@@ -123,6 +131,10 @@ func LoadConfig() *Config {
 	}
 	if val := os.Getenv("CSP_DB_NAME"); val != "" {
 		cfg.CSP.Storage.DatabaseName = val
+	}
+
+	if val := os.Getenv("TRIGGER_NATS_URL"); val != "" {
+		cfg.Trigger.NatsURL = val
 	}
 
 	return cfg
