@@ -8,7 +8,7 @@ export default defineConfig({
     global: 'window', // RxDB needs global to be defined
   },
   server: {
-    port: 3000,
+    port: 5173,
     strictPort: true,
   },
 })

@@ -49,8 +49,13 @@ type Client struct {
 	send chan BaseMessage
 
 	// Subscriptions
-	subscriptions map[string]storage.Query
+	subscriptions map[string]Subscription
 	mu            sync.Mutex
+}
+
+type Subscription struct {
+	Query       storage.Query
+	IncludeData bool
 }
 
 // readPump pumps messages from the websocket connection to the hub.
@@ -102,52 +107,45 @@ func (c *Client) handleMessage(msg BaseMessage) {
 			return
 		}
 		c.mu.Lock()
-		c.subscriptions[msg.ID] = payload.Query
+		c.subscriptions[msg.ID] = Subscription{
+			Query:       payload.Query,
+			IncludeData: payload.IncludeData,
+		}
 		c.mu.Unlock()
-		log.Printf("[Info][WS] Subscribed to collection=%s id=%s", payload.Query.Collection, msg.ID)
-		// TODO: Send initial snapshot?
-	case TypeStream:
-		var payload StreamPayload
-		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-			log.Printf("[Error][WS] unmarshalling stream payload: %v", err)
-			return
-		}
-		c.mu.Lock()
-		c.subscriptions[msg.ID] = storage.Query{Collection: payload.Collection}
-		c.mu.Unlock()
-		log.Printf("[Info][WS] Stream requested for collection=%s checkpoint=%d id=%s", payload.Collection, payload.Checkpoint, msg.ID)
+		log.Printf("[Info][WS] Subscribed to collection=%s id=%s includeData=%v", payload.Query.Collection, msg.ID, payload.IncludeData)
 
-		// Fetch changes
-		req := storage.ReplicationPullRequest{
-			Collection: payload.Collection,
-			Checkpoint: payload.Checkpoint,
-			Limit:      100, // Default limit
-		}
-		// Use a background context or create one with timeout
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
+		if payload.SendSnapshot {
+			// Fetch snapshot
+			req := storage.ReplicationPullRequest{
+				Collection: payload.Query.Collection,
+				Checkpoint: 0,    // From beginning
+				Limit:      1000, // Reasonable limit for snapshot
+			}
+			// Use a background context or create one with timeout
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
 
-		resp, err := c.queryService.Pull(ctx, req)
-		if err != nil {
-			log.Printf("[Error][WS] Pull failed: %v", err)
-			return
-		}
+			resp, err := c.queryService.Pull(ctx, req)
+			if err != nil {
+				log.Printf("[Error][WS] Snapshot pull failed: %v", err)
+				return
+			}
 
-		flatDocs := make([]map[string]interface{}, len(resp.Documents))
-		for i, doc := range resp.Documents {
-			flatDocs[i] = flattenDocument(doc)
-		}
+			flatDocs := make([]map[string]interface{}, len(resp.Documents))
+			for i, doc := range resp.Documents {
+				flatDocs[i] = flattenDocument(doc)
+			}
 
-		streamPayload := StreamEventPayload{
-			StreamID:   msg.ID,
-			Documents:  flatDocs,
-			Checkpoint: resp.Checkpoint,
-		}
+			snapshotPayload := SnapshotPayload{
+				SubID:     msg.ID,
+				Documents: flatDocs,
+			}
 
-		c.send <- BaseMessage{
-			ID:      msg.ID,
-			Type:    TypeStreamEvent,
-			Payload: mustMarshal(streamPayload),
+			c.send <- BaseMessage{
+				ID:      msg.ID,
+				Type:    TypeSnapshot,
+				Payload: mustMarshal(snapshotPayload),
+			}
 		}
 	case TypeUnsubscribe:
 		var payload UnsubscribePayload
@@ -204,7 +202,7 @@ func ServeWs(hub *Hub, qs query.Service, w http.ResponseWriter, r *http.Request)
 		log.Println(err)
 		return
 	}
-	client := &Client{hub: hub, queryService: qs, conn: conn, send: make(chan BaseMessage, 256), subscriptions: make(map[string]storage.Query)}
+	client := &Client{hub: hub, queryService: qs, conn: conn, send: make(chan BaseMessage, 256), subscriptions: make(map[string]Subscription)}
 	client.hub.register <- client
 
 	// Allow collection of memory referenced by the caller by doing all work in
@@ -232,7 +230,7 @@ func ServeSSE(hub *Hub, qs query.Service, w http.ResponseWriter, r *http.Request
 		queryService:  qs,
 		conn:          nil,
 		send:          make(chan BaseMessage, 256),
-		subscriptions: make(map[string]storage.Query),
+		subscriptions: make(map[string]Subscription),
 	}
 
 	// Handle initial subscription from query params
@@ -240,7 +238,10 @@ func ServeSSE(hub *Hub, qs query.Service, w http.ResponseWriter, r *http.Request
 	// If collection is provided, subscribe to it.
 	// If not provided, we subscribe to everything (empty string matches all in Hub).
 	// We use "default" as the subscription ID.
-	client.subscriptions["default"] = storage.Query{Collection: collection}
+	client.subscriptions["default"] = Subscription{
+		Query:       storage.Query{Collection: collection},
+		IncludeData: true, // SSE clients typically expect data
+	}
 	log.Printf("[Info][SSE] connection established. Subscribed to collection=%s", collection)
 
 	client.hub.register <- client

@@ -1,0 +1,53 @@
+[
+  {
+    "triggerId": "on-user-message",
+    "version": "1.0",
+    "tenant": "default",
+    "collection": "users/*/chats/*/messages",
+    "events": ["create"],
+    "condition": "event.document.data.role == 'user'",
+    "url": "http://localhost:8000/webhook/llm",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "retryPolicy": {
+      "maxAttempts": 3,
+      "initialBackoff": "1s",
+      "maxBackoff": "5s"
+    }
+  },
+  {
+    "triggerId": "on-tool-pending",
+    "version": "1.0",
+    "tenant": "default",
+    "collection": "users/*/chats/*/toolcall",
+    "events": ["create"],
+    "condition": "event.document.data.status == 'pending'",
+    "url": "http://localhost:8000/webhook/tool",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "retryPolicy": {
+      "maxAttempts": 3,
+      "initialBackoff": "1s",
+      "maxBackoff": "5s"
+    }
+  },
+  {
+    "triggerId": "on-tool-success",
+    "version": "1.0",
+    "tenant": "default",
+    "collection": "users/*/chats/*/toolcall",
+    "events": ["update"],
+    "condition": "event.document.data.status == 'success' && event.before.data.status != 'success'",
+    "url": "http://localhost:8000/webhook/llm",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "retryPolicy": {
+      "maxAttempts": 3,
+      "initialBackoff": "1s",
+      "maxBackoff": "5s"
+    }
+  }
+]

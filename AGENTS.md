@@ -10,7 +10,13 @@ applyTo: "**"
 - always document the "Why" (reasoning/analysis) alongside the "How" (decision/implementation) in design discussion documents
 - all documentation and code must be written in English
 
-## 🚨 STOP CONDITIONS
+## � DOCUMENTATION STRUCTURE
+When creating design or implementation documentation, follow this structure:
+- `000_requirements.md`: Describe specific requirements and constraints.
+- `001_architecture.md`: Record the overall architecture, including module diagrams (ASCII art) and UI layout diagrams (ASCII art).
+- `002_xxx.md`: Specific module details, numbered sequentially.
+
+## �🚨 STOP CONDITIONS
 IMMEDIATELY STOP and ask user when:
 - Authentication/permission errors
 - Need to add new dependencies

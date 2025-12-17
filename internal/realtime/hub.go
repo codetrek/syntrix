@@ -58,7 +58,7 @@ func (h *Hub) Run() {
 
 				// Let's iterate and check subscriptions
 				client.mu.Lock()
-				for subID, query := range client.subscriptions {
+				for subID, sub := range client.subscriptions {
 					// Determine collection from event
 					eventCollection := ""
 					if message.Document != nil {
@@ -72,13 +72,18 @@ func (h *Hub) Run() {
 					}
 
 					// Simple filter: Collection match
-					if query.Collection == "" || eventCollection == query.Collection {
+					if sub.Query.Collection == "" || eventCollection == sub.Query.Collection {
 						// Send event
+						var doc map[string]interface{}
+						if sub.IncludeData {
+							doc = flattenDocument(message.Document)
+						}
+
 						payload := EventPayload{
 							SubID: subID,
 							Delta: PublicEvent{
 								Type:      message.Type,
-								Document:  flattenDocument(message.Document),
+								Document:  doc,
 								Path:      message.Path,
 								Timestamp: message.Timestamp,
 							},

@@ -20,8 +20,12 @@ vendor/
 # IDE
 .idea/
 
+# Environment files
+.env
+
 # Config
 config.yml.local
+config.local.yml
 .vscode/
 *.swp
 *.swo

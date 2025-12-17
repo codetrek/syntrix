@@ -58,6 +58,7 @@ func TestRealtime_FullFlow(t *testing.T) {
 			Query: storage.Query{
 				Collection: collectionName,
 			},
+			IncludeData: true,
 		}),
 	}
 	err = ws.WriteJSON(subMsg)
@@ -233,39 +234,40 @@ func TestRealtime_Stream(t *testing.T) {
 	require.NoError(t, err, "Failed to connect to websocket")
 	defer ws.Close()
 
-	// 2. Send Stream Request
+	// 2. Send Subscribe Request with Snapshot
 	streamID := "stream-1"
-	streamPayload := realtime.StreamPayload{
-		Collection: collectionName,
-		Checkpoint: 0,
+	subPayload := realtime.SubscribePayload{
+		Query:        storage.Query{Collection: collectionName},
+		IncludeData:  true,
+		SendSnapshot: true,
 	}
-	streamMsg := realtime.BaseMessage{
+	subMsg := realtime.BaseMessage{
 		ID:      streamID,
-		Type:    realtime.TypeStream,
-		Payload: mustMarshal(streamPayload),
+		Type:    realtime.TypeSubscribe,
+		Payload: mustMarshal(subPayload),
 	}
-	err = ws.WriteJSON(streamMsg)
+	err = ws.WriteJSON(subMsg)
 	require.NoError(t, err)
 
-	// 3. Expect StreamEvent with existing document
-	var receivedStreamEvent bool
+	// 3. Expect Snapshot with existing document
+	var receivedSnapshot bool
 	for i := 0; i < 5; i++ {
 		var msg realtime.BaseMessage
 		err := ws.ReadJSON(&msg)
 		require.NoError(t, err)
 
-		if msg.Type == realtime.TypeStreamEvent && msg.ID == streamID {
-			var payload realtime.StreamEventPayload
+		if msg.Type == realtime.TypeSnapshot && msg.ID == streamID {
+			var payload realtime.SnapshotPayload
 			err := json.Unmarshal(msg.Payload, &payload)
 			require.NoError(t, err)
 
 			if len(payload.Documents) > 0 && payload.Documents[0]["msg"] == "existing doc" {
-				receivedStreamEvent = true
+				receivedSnapshot = true
 				break
 			}
 		}
 	}
-	assert.True(t, receivedStreamEvent, "Should receive StreamEvent with existing document")
+	assert.True(t, receivedSnapshot, "Should receive Snapshot with existing document")
 
 	// 4. Trigger new event
 	docData2 := map[string]interface{}{

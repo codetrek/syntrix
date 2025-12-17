@@ -18,11 +18,14 @@ func TestHub_Broadcast(t *testing.T) {
 	client := &Client{
 		hub:           hub,
 		send:          make(chan BaseMessage, 10),
-		subscriptions: make(map[string]storage.Query),
+		subscriptions: make(map[string]Subscription),
 	}
 
 	// Add a subscription
-	client.subscriptions["sub1"] = storage.Query{Collection: "users"}
+	client.subscriptions["sub1"] = Subscription{
+		Query:       storage.Query{Collection: "users"},
+		IncludeData: true,
+	}
 
 	// Register client
 	hub.register <- client

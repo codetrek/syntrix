@@ -51,7 +51,7 @@ type StorageConfig struct {
 }
 
 // LoadConfig loads configuration from files and environment variables
-// Order: defaults -> config.yml -> config.yml.local -> env vars
+// Order: defaults -> config.yml -> config.local.yml -> env vars
 func LoadConfig() *Config {
 	// 1. Defaults
 	cfg := &Config{
@@ -85,8 +85,8 @@ func LoadConfig() *Config {
 	// 2. Load config.yml
 	loadFile("config.yml", cfg)
 
-	// 3. Load config.yml.local
-	loadFile("config.yml.local", cfg)
+	// 3. Load config.local.yml
+	loadFile("config.local.yml", cfg)
 
 	// 4. Override with Env Vars
 	if val := os.Getenv("API_PORT"); val != "" {

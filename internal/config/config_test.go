@@ -70,13 +70,13 @@ api:
 	require.NoError(t, err)
 	defer os.Remove("config.yml")
 
-	// Create config.yml.local
-	err = os.WriteFile("config.yml.local", []byte(`
+	// Create config.local.yml
+	err = os.WriteFile("config.local.yml", []byte(`
 storage:
   mongo_uri: "mongodb://local:27017"
 `), 0644)
 	require.NoError(t, err)
-	defer os.Remove("config.yml.local")
+	defer os.Remove("config.local.yml")
 
 	cfg := LoadConfig()
 

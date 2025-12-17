@@ -87,7 +87,7 @@ The Change Stream Processor service listens on port 8083 by default. It handles 
 Configuration is loaded in the following order:
 1. Defaults
 2. `config.yml`
-3. `config.yml.local` (gitignored)
+3. `config.local.yml` (gitignored)
 4. Environment Variables (`MONGO_URI`, `DB_NAME`, `API_PORT`, `REALTIME_PORT`, `QUERY_PORT`, `CSP_PORT`)
 
 ### Testing

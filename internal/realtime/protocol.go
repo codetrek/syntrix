@@ -12,9 +12,7 @@ const (
 	TypeSubscribe      = "subscribe"
 	TypeUnsubscribe    = "unsubscribe"
 	TypeUnsubscribeAck = "unsubscribe_ack"
-	TypeStream         = "stream"
 	TypeEvent          = "event"
-	TypeStreamEvent    = "stream-event"
 	TypeSnapshot       = "snapshot"
 	TypeError          = "error"
 )
@@ -33,13 +31,9 @@ type AuthPayload struct {
 
 // SubscribePayload
 type SubscribePayload struct {
-	Query storage.Query `json:"query"`
-}
-
-// StreamPayload (RxDB Replication)
-type StreamPayload struct {
-	Collection string `json:"collection"`
-	Checkpoint int64  `json:"checkpoint"` // Simplified for now, doc says object
+	Query        storage.Query `json:"query"`
+	IncludeData  bool          `json:"includeData"`  // If true, events will include the full document
+	SendSnapshot bool          `json:"sendSnapshot"` // If true, sends current state immediately
 }
 
 // UnsubscribePayload
@@ -60,11 +54,10 @@ type PublicEvent struct {
 	Timestamp int64                  `json:"timestamp"`
 }
 
-// StreamEventPayload (Server -> Client)
-type StreamEventPayload struct {
-	StreamID   string                   `json:"streamId"`
-	Documents  []map[string]interface{} `json:"documents"`
-	Checkpoint int64                    `json:"checkpoint"`
+// SnapshotPayload (Server -> Client)
+type SnapshotPayload struct {
+	SubID     string                   `json:"subId"`
+	Documents []map[string]interface{} `json:"documents"`
 }
 
 // ErrorPayload
