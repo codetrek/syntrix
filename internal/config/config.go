@@ -10,6 +10,8 @@ import (
 
 // Config holds the application configuration
 type Config struct {
+	Storage StorageConfig `yaml:"storage"`
+
 	API      APIConfig      `yaml:"api"`
 	Realtime RealtimeConfig `yaml:"realtime"`
 	Query    QueryConfig    `yaml:"query"`
@@ -28,23 +30,24 @@ type RealtimeConfig struct {
 }
 
 type QueryConfig struct {
-	Port          int           `yaml:"port"`
-	CSPServiceURL string        `yaml:"csp_service_url"`
-	Storage       StorageConfig `yaml:"storage"`
+	Port          int    `yaml:"port"`
+	CSPServiceURL string `yaml:"csp_service_url"`
 }
 
 type CSPConfig struct {
-	Port    int           `yaml:"port"`
-	Storage StorageConfig `yaml:"storage"`
+	Port int `yaml:"port"`
 }
 
 type TriggerConfig struct {
-	NatsURL string `yaml:"nats_url"`
+	NatsURL   string `yaml:"nats_url"`
+	RulesFile string `yaml:"rules_file"`
 }
 
 type StorageConfig struct {
-	MongoURI     string `yaml:"mongo_uri"`
-	DatabaseName string `yaml:"database_name"`
+	MongoURI       string `yaml:"mongo_uri"`
+	DatabaseName   string `yaml:"database_name"`
+	DataCollection string `yaml:"data_collection"`
+	SysCollection  string `yaml:"sys_collection"`
 }
 
 // LoadConfig loads configuration from files and environment variables
@@ -52,6 +55,12 @@ type StorageConfig struct {
 func LoadConfig() *Config {
 	// 1. Defaults
 	cfg := &Config{
+		Storage: StorageConfig{
+			MongoURI:       "mongodb://localhost:27017",
+			DatabaseName:   "syntrix",
+			DataCollection: "documents",
+			SysCollection:  "sys",
+		},
 		API: APIConfig{
 			Port:            8080,
 			QueryServiceURL: "http://localhost:8082",
@@ -63,20 +72,13 @@ func LoadConfig() *Config {
 		Query: QueryConfig{
 			Port:          8082,
 			CSPServiceURL: "http://localhost:8083",
-			Storage: StorageConfig{
-				MongoURI:     "mongodb://localhost:27017",
-				DatabaseName: "syntrix",
-			},
 		},
 		CSP: CSPConfig{
 			Port: 8083,
-			Storage: StorageConfig{
-				MongoURI:     "mongodb://localhost:27017",
-				DatabaseName: "syntrix",
-			},
 		},
 		Trigger: TriggerConfig{
-			NatsURL: "nats://localhost:4222",
+			NatsURL:   "nats://localhost:4222",
+			RulesFile: "triggers.json",
 		},
 	}
 
@@ -113,11 +115,12 @@ func LoadConfig() *Config {
 	if val := os.Getenv("QUERY_CSP_SERVICE_URL"); val != "" {
 		cfg.Query.CSPServiceURL = val
 	}
+
 	if val := os.Getenv("MONGO_URI"); val != "" {
-		cfg.Query.Storage.MongoURI = val
+		cfg.Storage.MongoURI = val
 	}
 	if val := os.Getenv("DB_NAME"); val != "" {
-		cfg.Query.Storage.DatabaseName = val
+		cfg.Storage.DatabaseName = val
 	}
 
 	if val := os.Getenv("CSP_PORT"); val != "" {
@@ -125,16 +128,12 @@ func LoadConfig() *Config {
 			cfg.CSP.Port = port
 		}
 	}
-	// Allow overriding CSP storage via env vars if needed, though usually shared
-	if val := os.Getenv("CSP_MONGO_URI"); val != "" {
-		cfg.CSP.Storage.MongoURI = val
-	}
-	if val := os.Getenv("CSP_DB_NAME"); val != "" {
-		cfg.CSP.Storage.DatabaseName = val
-	}
 
 	if val := os.Getenv("TRIGGER_NATS_URL"); val != "" {
 		cfg.Trigger.NatsURL = val
+	}
+	if val := os.Getenv("TRIGGER_RULES_FILE"); val != "" {
+		cfg.Trigger.RulesFile = val
 	}
 
 	return cfg

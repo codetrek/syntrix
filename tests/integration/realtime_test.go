@@ -23,7 +23,7 @@ func TestRealtime_FullFlow(t *testing.T) {
 	defer env.Cancel()
 
 	// Convert http URL to ws URL
-	wsURL := "ws" + strings.TrimPrefix(env.RealtimeServer.URL, "http") + "/v1/realtime"
+	wsURL := "ws" + strings.TrimPrefix(env.RealtimeURL, "http") + "/v1/realtime"
 
 	// Connect to Websocket
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -71,7 +71,7 @@ func TestRealtime_FullFlow(t *testing.T) {
 		"msg": "hello realtime",
 	}
 	body, _ := json.Marshal(docData)
-	resp, err := env.APIServer.Client().Post(fmt.Sprintf("%s/v1/%s", env.APIServer.URL, collectionName), "application/json", bytes.NewBuffer(body))
+	resp, err := http.Post(fmt.Sprintf("%s/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(body))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	resp.Body.Close()
@@ -120,7 +120,7 @@ func TestRealtime_FullFlow(t *testing.T) {
 		"msg": "should not receive",
 	}
 	body2, _ := json.Marshal(map[string]interface{}{"data": docData2})
-	resp, err = env.APIServer.Client().Post(fmt.Sprintf("%s/v1/%s", env.APIServer.URL, collectionName), "application/json", bytes.NewBuffer(body2))
+	resp, err = http.Post(fmt.Sprintf("%s/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(body2))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	resp.Body.Close()
@@ -136,7 +136,7 @@ func TestRealtime_SSE(t *testing.T) {
 	defer env.Cancel()
 
 	collectionName := "sse_test_col"
-	sseURL := fmt.Sprintf("%s/v1/realtime?collection=%s", env.RealtimeServer.URL, collectionName)
+	sseURL := fmt.Sprintf("%s/v1/realtime?collection=%s", env.RealtimeURL, collectionName)
 
 	req, err := http.NewRequest("GET", sseURL, nil)
 	require.NoError(t, err)
@@ -170,7 +170,7 @@ func TestRealtime_SSE(t *testing.T) {
 		"msg": "hello sse",
 	}
 	body, _ := json.Marshal(docData)
-	apiResp, err := env.APIServer.Client().Post(fmt.Sprintf("%s/v1/%s", env.APIServer.URL, collectionName), "application/json", bytes.NewBuffer(body))
+	apiResp, err := http.Post(fmt.Sprintf("%s/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(body))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, apiResp.StatusCode)
 	apiResp.Body.Close()
@@ -216,14 +216,14 @@ func TestRealtime_Stream(t *testing.T) {
 	defer env.Cancel()
 
 	collectionName := "stream_test_col"
-	wsURL := "ws" + strings.TrimPrefix(env.RealtimeServer.URL, "http") + "/v1/realtime"
+	wsURL := "ws" + strings.TrimPrefix(env.RealtimeURL, "http") + "/v1/realtime"
 
 	// 1. Create a document beforehand
 	docData := map[string]interface{}{
 		"msg": "existing doc",
 	}
 	body, _ := json.Marshal(docData)
-	resp, err := env.APIServer.Client().Post(fmt.Sprintf("%s/v1/%s", env.APIServer.URL, collectionName), "application/json", bytes.NewBuffer(body))
+	resp, err := http.Post(fmt.Sprintf("%s/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(body))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	resp.Body.Close()
@@ -272,7 +272,7 @@ func TestRealtime_Stream(t *testing.T) {
 		"msg": "new doc",
 	}
 	body2, _ := json.Marshal(docData2)
-	resp2, err := env.APIServer.Client().Post(fmt.Sprintf("%s/v1/%s", env.APIServer.URL, collectionName), "application/json", bytes.NewBuffer(body2))
+	resp2, err := http.Post(fmt.Sprintf("%s/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(body2))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp2.StatusCode)
 	resp2.Body.Close()

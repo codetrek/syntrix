@@ -87,6 +87,38 @@ func TestCELEvaluator(t *testing.T) {
 			wantErr:   false,
 		},
 		{
+			name: "Collection wildcard match",
+			trigger: &Trigger{
+				Events:     []string{"create"},
+				Collection: "chats/*/members",
+				Condition:  "true",
+			},
+			event: &storage.Event{
+				Type: storage.EventCreate,
+				Document: &storage.Document{
+					Collection: "chats/123/members",
+				},
+			},
+			wantMatch: true,
+			wantErr:   false,
+		},
+		{
+			name: "Collection wildcard no match",
+			trigger: &Trigger{
+				Events:     []string{"create"},
+				Collection: "chats/*/members",
+				Condition:  "true",
+			},
+			event: &storage.Event{
+				Type: storage.EventCreate,
+				Document: &storage.Document{
+					Collection: "chats/123/messages",
+				},
+			},
+			wantMatch: false,
+			wantErr:   false,
+		},
+		{
 			name: "Complex condition",
 			trigger: &Trigger{
 				Events:     []string{"update"},

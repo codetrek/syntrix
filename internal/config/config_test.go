@@ -16,8 +16,8 @@ func TestLoadConfig_Defaults(t *testing.T) {
 
 	cfg := LoadConfig()
 
-	assert.Equal(t, "mongodb://localhost:27017", cfg.Query.Storage.MongoURI)
-	assert.Equal(t, "syntrix", cfg.Query.Storage.DatabaseName)
+	assert.Equal(t, "mongodb://localhost:27017", cfg.Storage.MongoURI)
+	assert.Equal(t, "syntrix", cfg.Storage.DatabaseName)
 	assert.Equal(t, 8080, cfg.API.Port)
 }
 
@@ -33,18 +33,17 @@ func TestLoadConfig_EnvVars(t *testing.T) {
 
 	cfg := LoadConfig()
 
-	assert.Equal(t, "mongodb://test:27017", cfg.Query.Storage.MongoURI)
-	assert.Equal(t, "testdb", cfg.Query.Storage.DatabaseName)
+	assert.Equal(t, "mongodb://test:27017", cfg.Storage.MongoURI)
+	assert.Equal(t, "testdb", cfg.Storage.DatabaseName)
 	assert.Equal(t, 9090, cfg.API.Port)
 }
 
 func TestLoadConfig_FileOverride(t *testing.T) {
 	// Create a temporary config.yml in the package directory
 	configContent := []byte(`
-query:
-  storage:
-    mongo_uri: "mongodb://file:27017"
-    database_name: "filedb"
+storage:
+  mongo_uri: "mongodb://file:27017"
+  database_name: "filedb"
 api:
   port: 7070
 `)
@@ -54,18 +53,17 @@ api:
 
 	cfg := LoadConfig()
 
-	assert.Equal(t, "mongodb://file:27017", cfg.Query.Storage.MongoURI)
-	assert.Equal(t, "filedb", cfg.Query.Storage.DatabaseName)
+	assert.Equal(t, "mongodb://file:27017", cfg.Storage.MongoURI)
+	assert.Equal(t, "filedb", cfg.Storage.DatabaseName)
 	assert.Equal(t, 7070, cfg.API.Port)
 }
 
 func TestLoadConfig_LocalFileOverride(t *testing.T) {
 	// Create config.yml
 	err := os.WriteFile("config.yml", []byte(`
-query:
-  storage:
-    mongo_uri: "mongodb://file:27017"
-    database_name: "filedb"
+storage:
+  mongo_uri: "mongodb://file:27017"
+  database_name: "filedb"
 api:
   port: 7070
 `), 0644)
@@ -74,26 +72,24 @@ api:
 
 	// Create config.yml.local
 	err = os.WriteFile("config.yml.local", []byte(`
-query:
-  storage:
-    mongo_uri: "mongodb://local:27017"
+storage:
+  mongo_uri: "mongodb://local:27017"
 `), 0644)
 	require.NoError(t, err)
 	defer os.Remove("config.yml.local")
 
 	cfg := LoadConfig()
 
-	assert.Equal(t, "mongodb://local:27017", cfg.Query.Storage.MongoURI) // Overridden
-	assert.Equal(t, "filedb", cfg.Query.Storage.DatabaseName)            // Inherited from config.yml
-	assert.Equal(t, 7070, cfg.API.Port)                                  // Inherited from config.yml
+	assert.Equal(t, "mongodb://local:27017", cfg.Storage.MongoURI) // Overridden
+	assert.Equal(t, "filedb", cfg.Storage.DatabaseName)            // Inherited from config.yml
+	assert.Equal(t, 7070, cfg.API.Port)                            // Inherited from config.yml
 }
 
 func TestLoadConfig_EnvOverrideFile(t *testing.T) {
 	// Create config.yml
 	err := os.WriteFile("config.yml", []byte(`
-query:
-  storage:
-    mongo_uri: "mongodb://file:27017"
+storage:
+  mongo_uri: "mongodb://file:27017"
 `), 0644)
 	require.NoError(t, err)
 	defer os.Remove("config.yml")
@@ -103,5 +99,5 @@ query:
 
 	cfg := LoadConfig()
 
-	assert.Equal(t, "mongodb://env:27017", cfg.Query.Storage.MongoURI)
+	assert.Equal(t, "mongodb://env:27017", cfg.Storage.MongoURI)
 }

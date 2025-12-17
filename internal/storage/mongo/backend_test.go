@@ -20,7 +20,7 @@ func setupTestBackend(t *testing.T) *MongoBackend {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	backend, err := NewMongoBackend(ctx, testMongoURI, testDBName)
+	backend, err := NewMongoBackend(ctx, testMongoURI, testDBName, "documents", "sys")
 	require.NoError(t, err)
 
 	// Clean up test database before starting

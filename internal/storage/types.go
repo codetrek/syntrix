@@ -49,8 +49,9 @@ type StorageBackend interface {
 	// Query executes a complex query
 	Query(ctx context.Context, q Query) ([]*Document, error)
 
-	// Watch returns a channel of events for a given collection (or all if empty)
-	Watch(ctx context.Context, collection string) (<-chan Event, error)
+	// Watch returns a channel of events for a given collection (or all if empty).
+	// resumeToken can be nil to start from now.
+	Watch(ctx context.Context, collection string, resumeToken interface{}) (<-chan Event, error)
 
 	// Close closes the connection to the backend
 	Close(ctx context.Context) error
@@ -67,10 +68,11 @@ const (
 
 // Event represents a database change event
 type Event struct {
-	Type      EventType `json:"type"`
-	Document  *Document `json:"document,omitempty"` // Nil for delete
-	Path      string    `json:"path"`
-	Timestamp int64     `json:"timestamp"`
+	Type        EventType   `json:"type"`
+	Document    *Document   `json:"document,omitempty"` // Nil for delete
+	Path        string      `json:"path"`
+	Timestamp   int64       `json:"timestamp"`
+	ResumeToken interface{} `json:"-"` // Opaque token for resuming watch
 }
 
 // Query represents a database query

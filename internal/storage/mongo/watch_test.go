@@ -18,7 +18,7 @@ func TestMongoBackend_Watch(t *testing.T) {
 	defer cancel()
 
 	// Start Watching
-	stream, err := backend.Watch(ctx, "users")
+	stream, err := backend.Watch(ctx, "users", nil)
 	if err != nil {
 		t.Skipf("Skipping Watch test (likely no replica set): %v", err)
 		return

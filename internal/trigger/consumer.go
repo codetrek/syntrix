@@ -14,12 +14,12 @@ import (
 // Consumer consumes delivery tasks from NATS and dispatches them to the worker.
 type Consumer struct {
 	js     jetstream.JetStream
-	worker *DeliveryWorker
+	worker Worker
 	stream string
 }
 
 // NewConsumer creates a new Consumer.
-func NewConsumer(nc *nats.Conn, worker *DeliveryWorker) (*Consumer, error) {
+func NewConsumer(nc *nats.Conn, worker Worker) (*Consumer, error) {
 	js, err := jetstream.New(nc)
 	if err != nil {
 		return nil, err

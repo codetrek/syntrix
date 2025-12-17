@@ -1,4 +1,10 @@
 
+storage:
+  mongo_uri: "mongodb://localhost:27017"
+  database_name: "syntrix"
+  data_collection: "documents"
+  sys_collection: "sys"
+
 api:
   port: 8080
   query_service_url: "http://localhost:8082"
@@ -10,12 +16,10 @@ realtime:
 query:
   port: 8082
   csp_service_url: "http://localhost:8083"
-  storage:
-    mongo_uri: "mongodb://localhost:27017"
-    database_name: "syntrix"
 
 csp:
   port: 8083
-  storage:
-    mongo_uri: "mongodb://localhost:27017"
-    database_name: "syntrix"
+
+trigger:
+  nats_url: "nats://localhost:4222"
+  rules_file: "triggers.example.json"

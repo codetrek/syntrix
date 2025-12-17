@@ -36,6 +36,9 @@ type Manager struct {
 	storageBackend  *mongo.MongoBackend
 	rtServer        *realtime.Server
 	triggerConsumer *trigger.Consumer
+	triggerService  *trigger.TriggerService
+	natsConn        *nats.Conn
+	wg              sync.WaitGroup
 }
 
 func NewManager(cfg *config.Config, opts Options) *Manager {
@@ -47,17 +50,17 @@ func NewManager(cfg *config.Config, opts Options) *Manager {
 
 func (m *Manager) Init(ctx context.Context) error {
 	// 1. Initialize Storage Backend (if needed)
-	if m.opts.RunQuery || m.opts.RunCSP {
+	if m.opts.RunQuery || m.opts.RunCSP || m.opts.RunTriggerEvaluator {
 		// Use Query storage config as default, or CSP if Query is not running
-		mongoURI := m.cfg.Query.Storage.MongoURI
-		dbName := m.cfg.Query.Storage.DatabaseName
-		if !m.opts.RunQuery && m.opts.RunCSP {
-			mongoURI = m.cfg.CSP.Storage.MongoURI
-			dbName = m.cfg.CSP.Storage.DatabaseName
-		}
+		mongoURI := m.cfg.Storage.MongoURI
+		dbName := m.cfg.Storage.DatabaseName
+		dataColl := m.cfg.Storage.DataCollection
+		sysColl := m.cfg.Storage.SysCollection
+		// If only Trigger Evaluator is running, we might want to use CSP config or Query config.
+		// For simplicity, let's default to Query config (which is usually the main DB config).
 
 		var err error
-		m.storageBackend, err = mongo.NewMongoBackend(ctx, mongoURI, dbName)
+		m.storageBackend, err = mongo.NewMongoBackend(ctx, mongoURI, dbName, dataColl, sysColl)
 		if err != nil {
 			return fmt.Errorf("failed to connect to storage backend: %w", err)
 		}
@@ -134,6 +137,7 @@ func (m *Manager) Init(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to connect to NATS: %w", err)
 		}
+		m.natsConn = nc
 
 		// Initialize Evaluator Service
 		if m.opts.RunTriggerEvaluator {
@@ -147,13 +151,21 @@ func (m *Manager) Init(ctx context.Context) error {
 				return fmt.Errorf("failed to create NATS publisher: %w", err)
 			}
 
-			triggerService := trigger.NewTriggerService(evaluator, publisher)
+			m.triggerService = trigger.NewTriggerService(evaluator, publisher)
 
-			// TODO: Load triggers from storage
-			// triggerService.LoadTriggers(...)
+			// Load triggers from file
+			rulesFile := m.cfg.Trigger.RulesFile
+			if rulesFile != "" {
+				triggers, err := trigger.LoadTriggersFromFile(rulesFile)
+				if err != nil {
+					log.Printf("[Warning] Failed to load trigger rules from %s: %v", rulesFile, err)
+				} else {
+					m.triggerService.LoadTriggers(triggers)
+					log.Printf("Loaded %d triggers from %s", len(triggers), rulesFile)
+				}
+			}
 
-			// TODO: Hook up triggerService to Change Stream
-			log.Println("Initialized Trigger Evaluator Service", triggerService)
+			log.Println("Initialized Trigger Evaluator Service")
 		}
 
 		// Initialize Worker Service
@@ -204,9 +216,22 @@ func (m *Manager) Start(bgCtx context.Context) {
 		}()
 	}
 
+	// Start Trigger Evaluator (Change Stream Watcher)
+	if m.opts.RunTriggerEvaluator && m.triggerService != nil {
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			if err := m.triggerService.Watch(bgCtx, m.storageBackend); err != nil {
+				log.Printf("Failed to start trigger watcher: %v", err)
+			}
+		}()
+	}
+
 	// Start Trigger Consumer
 	if m.opts.RunTriggerWorker && m.triggerConsumer != nil {
+		m.wg.Add(1)
 		go func() {
+			defer m.wg.Done()
 			log.Println("Starting Trigger Consumer...")
 			if err := m.triggerConsumer.Start(bgCtx); err != nil {
 				log.Printf("Trigger Consumer stopped with error: %v", err)
@@ -230,5 +255,26 @@ func (m *Manager) Shutdown(ctx context.Context) {
 		if err := srv.Shutdown(ctx); err != nil {
 			log.Printf("Error shutting down %s: %v", m.serverNames[i], err)
 		}
+	}
+
+	// Wait for background tasks (Trigger Watcher, Consumer)
+	log.Println("Waiting for background tasks to finish...")
+	done := make(chan struct{})
+	go func() {
+		m.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Println("Background tasks finished.")
+	case <-ctx.Done():
+		log.Println("Timeout waiting for background tasks.")
+	}
+
+	// Close NATS connection
+	if m.natsConn != nil {
+		log.Println("Closing NATS connection...")
+		m.natsConn.Close()
 	}
 }

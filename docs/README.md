@@ -15,6 +15,10 @@ Welcome to the Syntrix developer documentation.
 -   [Trigger Service](modules/triggers.md) - Server-side event reactions (Webhooks).
 -   [Storage Layer](modules/storage.md) - Data model and database integration.
 
+## Guides
+
+-   [Writing Trigger Rules](guides/trigger_rules.md) - How to configure triggers and write CEL conditions.
+
 ## Getting Started
 
 See the root [README.md](../README.md) for build and run instructions.

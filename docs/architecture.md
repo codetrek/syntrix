@@ -12,6 +12,11 @@ The system consists of the following core services:
 4.  **CSP (Change Stream Processor)**: A specialized service that connects to the database's change stream (e.g., MongoDB Change Streams) and fans out events to other services.
 5.  **Trigger Service**: A server-side event reaction system. It evaluates database changes against user-defined rules (CEL) and executes Webhooks via a durable queue (NATS).
 
+## Arch Overview
+```mermaid
+
+```
+
 ## Data Flow
 
 ### 1. Request Path (CRUD)

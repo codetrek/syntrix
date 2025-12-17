@@ -62,7 +62,7 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	// Start watching via Storage Backend (Mongo)
-	stream, err := s.storage.Watch(r.Context(), req.Collection)
+	stream, err := s.storage.Watch(r.Context(), req.Collection, nil)
 	if err != nil {
 		// Headers already sent, can't send error status now.
 		log.Println("[Error][Watch] failed to start watch:", err)
@@ -76,7 +76,7 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
-				log.Println("[Info][Watch] context cancelled, stopping watch")
+			log.Println("[Info][Watch] context cancelled, stopping watch")
 			return
 		case evt, ok := <-stream:
 			if !ok {

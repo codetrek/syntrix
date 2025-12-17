@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+// Worker defines the interface for processing delivery tasks.
+type Worker interface {
+	ProcessTask(ctx context.Context, task *DeliveryTask) error
+}
+
 // DeliveryWorker handles the execution of delivery tasks.
 type DeliveryWorker struct {
 	client *http.Client

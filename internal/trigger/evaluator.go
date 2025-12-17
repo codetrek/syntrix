@@ -3,6 +3,7 @@ package trigger
 import (
 	"context"
 	"fmt"
+	"path"
 	"sync"
 	"syntrix/internal/storage"
 
@@ -56,8 +57,14 @@ func (e *CELEvaluator) Evaluate(ctx context.Context, trigger *Trigger, event *st
 	// Handle case where event.Document might be nil (e.g. delete event might only have ID/Path)
 	// But for now assuming Document is present or we check Path/Collection from somewhere else.
 	// The storage.Event struct has Document *Document.
-	if event.Document != nil && trigger.Collection != event.Document.Collection {
-		return false, nil
+	if event.Document != nil {
+		matched, err := path.Match(trigger.Collection, event.Document.Collection)
+		if err != nil {
+			return false, fmt.Errorf("invalid collection pattern: %w", err)
+		}
+		if !matched {
+			return false, nil
+		}
 	}
 
 	// 3. Evaluate CEL condition

@@ -24,7 +24,7 @@ func TestReplication_FullFlow(t *testing.T) {
 	collectionName := "replication_test_col"
 
 	// 1. Setup Realtime (SSE) Connection
-	sseURL := fmt.Sprintf("%s/v1/realtime?collection=%s", env.RealtimeServer.URL, collectionName)
+	sseURL := fmt.Sprintf("%s/v1/realtime?collection=%s", env.RealtimeURL, collectionName)
 	req, err := http.NewRequest("GET", sseURL, nil)
 	require.NoError(t, err)
 	req.Header.Set("Accept", "text/event-stream")
@@ -63,9 +63,9 @@ func TestReplication_FullFlow(t *testing.T) {
 	}
 
 	bodyBytes, _ := json.Marshal(pushBody)
-	pushURL := fmt.Sprintf("%s/v1/replication/push?collection=%s", env.APIServer.URL, collectionName)
+	pushURL := fmt.Sprintf("%s/v1/replication/push?collection=%s", env.APIURL, collectionName)
 
-	pushResp, err := env.APIServer.Client().Post(pushURL, "application/json", bytes.NewBuffer(bodyBytes))
+	pushResp, err := client.Post(pushURL, "application/json", bytes.NewBuffer(bodyBytes))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, pushResp.StatusCode)
 
@@ -113,8 +113,8 @@ func TestReplication_FullFlow(t *testing.T) {
 	}
 
 	// 4. Pull to verify storage
-	pullURL := fmt.Sprintf("%s/v1/replication/pull?collection=%s&checkpoint=0", env.APIServer.URL, collectionName)
-	pullResp, err := env.APIServer.Client().Get(pullURL)
+	pullURL := fmt.Sprintf("%s/v1/replication/pull?collection=%s&checkpoint=0", env.APIURL, collectionName)
+	pullResp, err := http.Get(pullURL)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, pullResp.StatusCode)
 

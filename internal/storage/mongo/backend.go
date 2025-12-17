@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"syntrix/internal/storage"
@@ -14,12 +15,21 @@ import (
 )
 
 type MongoBackend struct {
-	client *mongo.Client
-	db     *mongo.Database
+	client         *mongo.Client
+	db             *mongo.Database
+	dataCollection string
+	sysCollection  string
+}
+
+func (m *MongoBackend) getCollection(nameOrPath string) *mongo.Collection {
+	if nameOrPath == "sys" || strings.HasPrefix(nameOrPath, "sys/") {
+		return m.db.Collection(m.sysCollection)
+	}
+	return m.db.Collection(m.dataCollection)
 }
 
 // NewMongoBackend initializes a new MongoDB storage backend
-func NewMongoBackend(ctx context.Context, uri string, dbName string) (*MongoBackend, error) {
+func NewMongoBackend(ctx context.Context, uri string, dbName string, dataColl string, sysColl string) (*MongoBackend, error) {
 	clientOpts := options.Client().ApplyURI(uri)
 	client, err := mongo.Connect(ctx, clientOpts)
 	if err != nil {
@@ -32,13 +42,15 @@ func NewMongoBackend(ctx context.Context, uri string, dbName string) (*MongoBack
 	}
 
 	return &MongoBackend{
-		client: client,
-		db:     client.Database(dbName),
+		client:         client,
+		db:             client.Database(dbName),
+		dataCollection: dataColl,
+		sysCollection:  sysColl,
 	}, nil
 }
 
 func (m *MongoBackend) Get(ctx context.Context, path string) (*storage.Document, error) {
-	collection := m.db.Collection("documents")
+	collection := m.getCollection(path)
 
 	var doc storage.Document
 	err := collection.FindOne(ctx, bson.M{"_id": path}).Decode(&doc)
@@ -53,7 +65,7 @@ func (m *MongoBackend) Get(ctx context.Context, path string) (*storage.Document,
 }
 
 func (m *MongoBackend) Create(ctx context.Context, doc *storage.Document) error {
-	collection := m.db.Collection("documents")
+	collection := m.getCollection(doc.Collection)
 
 	_, err := collection.InsertOne(ctx, doc)
 	if mongo.IsDuplicateKeyError(err) {
@@ -63,7 +75,7 @@ func (m *MongoBackend) Create(ctx context.Context, doc *storage.Document) error 
 }
 
 func (m *MongoBackend) Update(ctx context.Context, path string, data map[string]interface{}, version int64) error {
-	collection := m.db.Collection("documents")
+	collection := m.getCollection(path)
 
 	filter := bson.M{"_id": path}
 	if version > 0 {
@@ -97,13 +109,13 @@ func (m *MongoBackend) Update(ctx context.Context, path string, data map[string]
 }
 
 func (m *MongoBackend) Delete(ctx context.Context, path string) error {
-	collection := m.db.Collection("documents")
+	collection := m.getCollection(path)
 	_, err := collection.DeleteOne(ctx, bson.M{"_id": path})
 	return err
 }
 
 func (m *MongoBackend) Query(ctx context.Context, q storage.Query) ([]*storage.Document, error) {
-	collection := m.db.Collection("documents")
+	collection := m.getCollection(q.Collection)
 
 	filter := bson.M{"collection": q.Collection}
 
@@ -149,7 +161,7 @@ func (m *MongoBackend) Query(ctx context.Context, q storage.Query) ([]*storage.D
 	return docs, nil
 }
 
-func (m *MongoBackend) Watch(ctx context.Context, collectionName string) (<-chan storage.Event, error) {
+func (m *MongoBackend) Watch(ctx context.Context, collectionName string, resumeToken interface{}) (<-chan storage.Event, error) {
 	pipeline := mongo.Pipeline{}
 	if collectionName != "" {
 		// Filter by documentKey._id starting with "collectionName/"
@@ -160,8 +172,11 @@ func (m *MongoBackend) Watch(ctx context.Context, collectionName string) (<-chan
 
 	// We need 'updateLookup' to get the full document after an update
 	opts := options.ChangeStream().SetFullDocument(options.UpdateLookup)
+	if resumeToken != nil {
+		opts.SetResumeAfter(resumeToken)
+	}
 
-	stream, err := m.db.Collection("documents").Watch(ctx, pipeline, opts)
+	stream, err := m.getCollection(collectionName).Watch(ctx, pipeline, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -174,6 +189,7 @@ func (m *MongoBackend) Watch(ctx context.Context, collectionName string) (<-chan
 
 		for stream.Next(ctx) {
 			var changeEvent struct {
+				ID            interface{}       `bson:"_id"`
 				OperationType string            `bson:"operationType"`
 				FullDocument  *storage.Document `bson:"fullDocument"`
 				DocumentKey   struct {
@@ -188,7 +204,8 @@ func (m *MongoBackend) Watch(ctx context.Context, collectionName string) (<-chan
 			}
 
 			evt := storage.Event{
-				Path: changeEvent.DocumentKey.ID,
+				Path:        changeEvent.DocumentKey.ID,
+				ResumeToken: changeEvent.ID,
 				// Timestamp: ... (ClusterTime is complex, let's use current time or parse it if needed)
 				Timestamp: time.Now().UnixNano(),
 			}

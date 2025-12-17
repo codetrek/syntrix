@@ -6,26 +6,26 @@ import (
 
 // Trigger represents the configuration for a server-side trigger.
 type Trigger struct {
-	ID          string            `json:"triggerId"`
-	Version     string            `json:"version"`
-	Tenant      string            `json:"tenant"`
-	Collection  string            `json:"collection"`
-	Events      []string          `json:"events"` // create, update, delete
-	Condition   string            `json:"condition"`
-	URL         string            `json:"url"`
-	Headers     map[string]string `json:"headers"`
-	SecretsRef  string            `json:"secretsRef"`
-	Concurrency int               `json:"concurrency"`
-	RateLimit   int               `json:"rateLimit"`
-	RetryPolicy RetryPolicy       `json:"retryPolicy"`
-	Filters     []string          `json:"filters"`
+	ID          string            `json:"triggerId" yaml:"triggerId"`
+	Version     string            `json:"version" yaml:"version"`
+	Tenant      string            `json:"tenant" yaml:"tenant"`
+	Collection  string            `json:"collection" yaml:"collection"`
+	Events      []string          `json:"events" yaml:"events"` // create, update, delete
+	Condition   string            `json:"condition" yaml:"condition"`
+	URL         string            `json:"url" yaml:"url"`
+	Headers     map[string]string `json:"headers" yaml:"headers"`
+	SecretsRef  string            `json:"secretsRef" yaml:"secretsRef"`
+	Concurrency int               `json:"concurrency" yaml:"concurrency"`
+	RateLimit   int               `json:"rateLimit" yaml:"rateLimit"`
+	RetryPolicy RetryPolicy       `json:"retryPolicy" yaml:"retryPolicy"`
+	Filters     []string          `json:"filters" yaml:"filters"`
 }
 
 // RetryPolicy defines how to handle delivery failures.
 type RetryPolicy struct {
-	MaxAttempts    int           `json:"maxAttempts"`
-	InitialBackoff time.Duration `json:"initialBackoff"`
-	MaxBackoff     time.Duration `json:"maxBackoff"`
+	MaxAttempts    int           `json:"maxAttempts" yaml:"maxAttempts"`
+	InitialBackoff time.Duration `json:"initialBackoff" yaml:"initialBackoff"`
+	MaxBackoff     time.Duration `json:"maxBackoff" yaml:"maxBackoff"`
 }
 
 // DeliveryTask represents the payload sent to the delivery worker via NATS.
