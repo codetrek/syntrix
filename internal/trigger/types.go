@@ -71,6 +71,7 @@ type Trigger struct {
 	IncludeBefore bool              `json:"includeBefore" yaml:"includeBefore"`
 	RetryPolicy   RetryPolicy       `json:"retryPolicy" yaml:"retryPolicy"`
 	Filters       []string          `json:"filters" yaml:"filters"`
+	Timeout       Duration          `json:"timeout" yaml:"timeout"`
 }
 
 // RetryPolicy defines how to handle delivery failures.
@@ -96,4 +97,5 @@ type DeliveryTask struct {
 	Headers     map[string]string      `json:"headers"`
 	SecretsRef  string                 `json:"secretsRef"`
 	RetryPolicy RetryPolicy            `json:"retryPolicy"`
+	Timeout     Duration               `json:"timeout"`
 }

@@ -166,7 +166,7 @@ func waitForPort(t *testing.T, port int) {
 			conn.Close()
 			return
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("Timeout waiting for port %d to be ready", port)
 }

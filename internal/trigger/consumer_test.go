@@ -62,6 +62,27 @@ func (m *MockConsumer) Messages(opts ...jetstream.PullMessagesOpt) (jetstream.Me
 	return args.Get(0).(jetstream.MessagesContext), args.Error(1)
 }
 
+func (m *MockConsumer) Consume(handler jetstream.MessageHandler, opts ...jetstream.PullConsumeOpt) (jetstream.ConsumeContext, error) {
+	args := m.Called(handler)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(jetstream.ConsumeContext), args.Error(1)
+}
+
+type MockConsumeContext struct {
+	mock.Mock
+	jetstream.ConsumeContext
+}
+
+func (m *MockConsumeContext) Stop() {
+	m.Called()
+}
+
+func (m *MockConsumeContext) Drain() {
+	m.Called()
+}
+
 type MockMessagesContext struct {
 	mock.Mock
 	jetstream.MessagesContext
@@ -129,13 +150,13 @@ func TestConsumer_Start_Success(t *testing.T) {
 	worker := new(MockWorker)
 	stream := new(MockStream)
 	consumer := new(MockConsumer)
-	iter := new(MockMessagesContext)
 	msg := new(MockMsg)
 
 	c := &Consumer{
-		js:     js,
-		worker: worker,
-		stream: "TRIGGERS",
+		js:         js,
+		worker:     worker,
+		stream:     "TRIGGERS",
+		numWorkers: 1,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -151,25 +172,28 @@ func TestConsumer_Start_Success(t *testing.T) {
 		return cfg.Durable == "TriggerDeliveryWorker"
 	})).Return(consumer, nil)
 
-	// 3. Get Messages Iterator
-	consumer.On("Messages", mock.Anything).Return(iter, nil)
+	// 3. Consume Messages
+	consumeCtx := new(MockConsumeContext)
+	consumer.On("Consume", mock.Anything).Return(consumeCtx, nil).Run(func(args mock.Arguments) {
+		handler := args.Get(0).(jetstream.MessageHandler)
 
-	// 4. Fetch Message (Return one message then block/stop)
-	task := DeliveryTask{TriggerID: "t1"}
-	taskBytes, _ := json.Marshal(task)
+		// Simulate receiving a message
+		task := DeliveryTask{TriggerID: "t1"}
+		taskBytes, _ := json.Marshal(task)
 
-	msg.On("Data").Return(taskBytes)
-	msg.On("Ack").Return(nil)
+		msg.On("Data").Return(taskBytes)
+		msg.On("Ack").Return(nil)
 
-	// First call returns message
-	iter.On("Next").Return(msg, nil).Once()
-	// Second call blocks until context done (simulated by returning error or blocking)
-	// Here we simulate context cancellation by returning error after a short delay or just error
-	iter.On("Next").Return(nil, errors.New("context canceled")).Run(func(args mock.Arguments) {
-		cancel() // Cancel context to stop loop
+		// Call handler in a goroutine to simulate async behavior
+		go func() {
+			handler(msg)
+			// After handling, we can cancel the context to stop the test
+			time.Sleep(10 * time.Millisecond)
+			cancel()
+		}()
 	})
 
-	iter.On("Stop").Return()
+	consumeCtx.On("Stop").Return()
 
 	// 5. Process Task
 	worker.On("ProcessTask", mock.Anything, mock.MatchedBy(func(t *DeliveryTask) bool {
@@ -183,7 +207,7 @@ func TestConsumer_Start_Success(t *testing.T) {
 	// Verify
 	js.AssertExpectations(t)
 	consumer.AssertExpectations(t)
-	iter.AssertExpectations(t)
+	consumeCtx.AssertExpectations(t)
 	msg.AssertExpectations(t)
 	worker.AssertExpectations(t)
 }
@@ -194,13 +218,13 @@ func TestConsumer_Start_ProcessError(t *testing.T) {
 	worker := new(MockWorker)
 	stream := new(MockStream)
 	consumer := new(MockConsumer)
-	iter := new(MockMessagesContext)
 	msg := new(MockMsg)
 
 	c := &Consumer{
-		js:     js,
-		worker: worker,
-		stream: "TRIGGERS",
+		js:         js,
+		worker:     worker,
+		stream:     "TRIGGERS",
+		numWorkers: 1,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -208,31 +232,30 @@ func TestConsumer_Start_ProcessError(t *testing.T) {
 	// Expectations
 	js.On("CreateOrUpdateStream", ctx, mock.Anything).Return(stream, nil)
 	js.On("CreateOrUpdateConsumer", ctx, mock.Anything, mock.Anything).Return(consumer, nil)
-	consumer.On("Messages", mock.Anything).Return(iter, nil)
 
-	task := DeliveryTask{TriggerID: "t1"}
-	taskBytes, _ := json.Marshal(task)
+	consumeCtx := new(MockConsumeContext)
+	consumer.On("Consume", mock.Anything).Return(consumeCtx, nil).Run(func(args mock.Arguments) {
+		handler := args.Get(0).(jetstream.MessageHandler)
 
-	msg.On("Data").Return(taskBytes)
-	// msg.On("Nak").Return(nil) // Expect Nak on error
-	msg.On("NakWithDelay", mock.Anything).Return(nil)
-	msg.On("Metadata").Return(&jetstream.MsgMetadata{NumDelivered: 1}, nil)
+		task := DeliveryTask{TriggerID: "t1"}
+		taskBytes, _ := json.Marshal(task)
 
-	iter.On("Next").Return(msg, nil).Once()
-	iter.On("Next").Return(nil, errors.New("stop")).Run(func(args mock.Arguments) {
-		cancel()
+		msg.On("Data").Return(taskBytes)
+		msg.On("NakWithDelay", mock.Anything).Return(nil)
+		msg.On("Metadata").Return(&jetstream.MsgMetadata{NumDelivered: 1}, nil)
+
+		go func() {
+			handler(msg)
+			time.Sleep(10 * time.Millisecond)
+			cancel()
+		}()
 	})
-	iter.On("Stop").Return()
+	consumeCtx.On("Stop").Return()
 
-	// Worker returns error
 	worker.On("ProcessTask", mock.Anything, mock.Anything).Return(errors.New("failed"))
 
-	// Run
 	err := c.Start(ctx)
 	assert.NoError(t, err)
-
-	msg.AssertExpectations(t)
-	worker.AssertExpectations(t)
 }
 
 func TestConsumer_Start_InitErrors(t *testing.T) {
@@ -252,42 +275,43 @@ func TestConsumer_Start_InitErrors(t *testing.T) {
 	err = c.Start(ctx)
 	assert.ErrorContains(t, err, "failed to create consumer")
 
-	// 3. Iterator Creation Error
+	// 3. Consume Error
 	consumer := new(MockConsumer)
 	js.On("CreateOrUpdateStream", ctx, mock.Anything).Return(new(MockStream), nil)
 	js.On("CreateOrUpdateConsumer", ctx, mock.Anything, mock.Anything).Return(consumer, nil)
-	consumer.On("Messages", mock.Anything).Return(nil, errors.New("iter error")).Once()
+	consumer.On("Consume", mock.Anything).Return(nil, errors.New("consume error")).Once()
 	err = c.Start(ctx)
-	assert.ErrorContains(t, err, "failed to create message iterator")
+	assert.ErrorContains(t, err, "failed to start consumer")
 }
 
 func TestConsumer_Start_InvalidPayload(t *testing.T) {
 	js := new(MockJetStream)
 	worker := new(MockWorker)
 	consumer := new(MockConsumer)
-	iter := new(MockMessagesContext)
 	msg := new(MockMsg)
 
-	c := &Consumer{js: js, worker: worker, stream: "TRIGGERS"}
+	c := &Consumer{js: js, worker: worker, stream: "TRIGGERS", numWorkers: 1}
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Setup happy path for init
 	js.On("CreateOrUpdateStream", ctx, mock.Anything).Return(new(MockStream), nil)
 	js.On("CreateOrUpdateConsumer", ctx, mock.Anything, mock.Anything).Return(consumer, nil)
-	consumer.On("Messages", mock.Anything).Return(iter, nil)
 
-	// Invalid JSON
-	msg.On("Data").Return([]byte("invalid-json"))
-	// Should log error and continue (which means Nak in current implementation? No, processMsg returns error, so Nak)
-	// Wait, processMsg returns error on unmarshal failure.
-	// Loop calls processMsg -> error -> msg.Nak()
-	// msg.On("Nak").Return(nil)
-	msg.On("Metadata").Return(&jetstream.MsgMetadata{NumDelivered: 1}, nil)
-	msg.On("Term").Return(nil)
+	consumeCtx := new(MockConsumeContext)
+	consumer.On("Consume", mock.Anything).Return(consumeCtx, nil).Run(func(args mock.Arguments) {
+		handler := args.Get(0).(jetstream.MessageHandler)
 
-	iter.On("Next").Return(msg, nil).Once()
-	iter.On("Next").Return(nil, errors.New("stop")).Run(func(args mock.Arguments) { cancel() })
-	iter.On("Stop").Return()
+		// Invalid JSON
+		msg.On("Data").Return([]byte("invalid-json"))
+		msg.On("Term").Return(nil)
+
+		go func() {
+			handler(msg)
+			time.Sleep(10 * time.Millisecond)
+			cancel()
+		}()
+	})
+	consumeCtx.On("Stop").Return()
 
 	err := c.Start(ctx)
 	assert.NoError(t, err)

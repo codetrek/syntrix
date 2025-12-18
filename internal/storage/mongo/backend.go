@@ -69,7 +69,7 @@ func (m *MongoBackend) Create(ctx context.Context, doc *storage.Document) error 
 
 	_, err := collection.InsertOne(ctx, doc)
 	if mongo.IsDuplicateKeyError(err) {
-		return errors.New("document already exists")
+		return storage.ErrExists
 	}
 	return err
 }

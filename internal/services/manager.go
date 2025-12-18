@@ -171,7 +171,7 @@ func (m *Manager) Init(ctx context.Context) error {
 		// Initialize Worker Service
 		if m.opts.RunTriggerWorker {
 			worker := trigger.NewDeliveryWorker()
-			m.triggerConsumer, err = trigger.NewConsumer(nc, worker)
+			m.triggerConsumer, err = trigger.NewConsumer(nc, worker, m.cfg.Trigger.WorkerCount)
 			if err != nil {
 				return fmt.Errorf("failed to create trigger consumer: %w", err)
 			}
@@ -204,10 +204,23 @@ func (m *Manager) Start(bgCtx context.Context) {
 
 			maxRetries := 10
 			for i := 0; i < maxRetries; i++ {
+				// Check context before trying
+				select {
+				case <-bgCtx.Done():
+					return
+				default:
+				}
+
 				if err := m.rtServer.StartBackgroundTasks(bgCtx); err != nil {
 					log.Printf("Attempt %d/%d: Failed to start realtime background tasks: %v", i+1, maxRetries, err)
-					time.Sleep(1 * time.Second)
-					continue
+
+					// Wait with context check
+					select {
+					case <-bgCtx.Done():
+						return
+					case <-time.After(1 * time.Second):
+						continue
+					}
 				}
 				log.Println("Realtime background tasks started successfully")
 				return

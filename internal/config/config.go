@@ -39,8 +39,9 @@ type CSPConfig struct {
 }
 
 type TriggerConfig struct {
-	NatsURL   string `yaml:"nats_url"`
-	RulesFile string `yaml:"rules_file"`
+	NatsURL     string `yaml:"nats_url"`
+	RulesFile   string `yaml:"rules_file"`
+	WorkerCount int    `yaml:"worker_count"`
 }
 
 type StorageConfig struct {
@@ -77,8 +78,9 @@ func LoadConfig() *Config {
 			Port: 8083,
 		},
 		Trigger: TriggerConfig{
-			NatsURL:   "nats://localhost:4222",
-			RulesFile: "triggers.json",
+			NatsURL:     "nats://localhost:4222",
+			RulesFile:   "triggers.json",
+			WorkerCount: 16,
 		},
 	}
 

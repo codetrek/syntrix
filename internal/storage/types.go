@@ -9,6 +9,8 @@ import (
 var (
 	// ErrNotFound is returned when a document is not found
 	ErrNotFound = errors.New("document not found")
+	// ErrExists is returned when trying to create a document that already exists
+	ErrExists = errors.New("document already exists")
 	// ErrVersionConflict is returned when a CAS operation fails due to version mismatch
 	ErrVersionConflict = errors.New("version conflict")
 )

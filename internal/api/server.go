@@ -123,7 +123,11 @@ func (s *Server) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
 	doc := storage.NewDocument(path, collection, stripSystemFields(data))
 
 	if err := s.engine.CreateDocument(r.Context(), doc); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if errors.Is(err, storage.ErrExists) {
+			http.Error(w, "Document already exists", http.StatusConflict)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 

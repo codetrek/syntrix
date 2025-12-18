@@ -141,5 +141,6 @@ func (s *TriggerService) createDeliveryTask(t *Trigger, event *storage.Event) *D
 		Headers:     t.Headers,
 		SecretsRef:  t.SecretsRef,
 		RetryPolicy: t.RetryPolicy,
+		Timeout:     t.Timeout,
 	}
 }

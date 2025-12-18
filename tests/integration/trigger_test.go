@@ -113,8 +113,9 @@ func TestTriggerIntegration(t *testing.T) {
 			SysCollection:  "sys",
 		},
 		Trigger: config.TriggerConfig{
-			NatsURL:   natsURL,
-			RulesFile: rulesFile,
+			NatsURL:     natsURL,
+			RulesFile:   rulesFile,
+			WorkerCount: 4,
 		},
 	}
 

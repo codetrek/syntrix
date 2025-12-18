@@ -23,3 +23,4 @@ csp:
 trigger:
   nats_url: "nats://localhost:4222"
   rules_file: "triggers.example.json"
+  worker_count: 32

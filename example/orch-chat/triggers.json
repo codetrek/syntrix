@@ -1,0 +1,124 @@
+[
+  {
+    "triggerId": "on-user-message",
+    "version": "1.0",
+    "tenant": "default",
+    "collection": "users/*/orch-chats/*/messages",
+    "events": ["create"],
+    "condition": "event.document.data.role == 'user'",
+    "url": "http://localhost:8000/webhook/orchestrator",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "retryPolicy": {
+      "maxAttempts": 3,
+      "initialBackoff": "1s",
+      "maxBackoff": "5s"
+    }
+  },
+  {
+    "triggerId": "on-new-task",
+    "version": "1.0",
+    "tenant": "default",
+    "collection": "users/*/orch-chats/*/tasks",
+    "events": ["create"],
+    "condition": "event.document.data.type == 'agent'",
+    "url": "http://localhost:8000/webhook/agent-init",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "retryPolicy": {
+      "maxAttempts": 3,
+      "initialBackoff": "1s",
+      "maxBackoff": "5s"
+    },
+    "timeout": "60s"
+  },
+  {
+    "triggerId": "on-sub-agent-message",
+    "version": "1.0",
+    "tenant": "default",
+    "collection": "users/*/orch-chats/*/sub-agents/*/messages",
+    "events": ["create"],
+    "condition": "event.document.data.role == 'user' || event.document.data.role == 'tool'",
+    "url": "http://localhost:8000/webhook/agent-loop",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "retryPolicy": {
+      "maxAttempts": 3,
+      "initialBackoff": "1s",
+      "maxBackoff": "5s"
+    },
+    "timeout": "120s"
+  },
+  {
+    "triggerId": "on-sub-agent-tool",
+    "version": "1.0",
+    "tenant": "default",
+    "collection": "users/*/orch-chats/*/sub-agents/*/tool-calls",
+    "events": ["create"],
+    "condition": "event.document.data.status == 'pending'",
+    "url": "http://localhost:8000/webhook/tool-runner",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "retryPolicy": {
+      "maxAttempts": 3,
+      "initialBackoff": "1s",
+      "maxBackoff": "5s"
+    }
+  },
+  {
+    "triggerId": "on-task-completed",
+    "version": "1.0",
+    "tenant": "default",
+    "collection": "users/*/orch-chats/*/tasks",
+    "events": ["update"],
+    "condition": "event.document.data.status == 'success'",
+    "url": "http://localhost:8000/webhook/orchestrator-finalize",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "retryPolicy": {
+      "maxAttempts": 3,
+      "initialBackoff": "1s",
+      "maxBackoff": "5s"
+    },
+    "timeout": "30s"
+  },
+  {
+    "triggerId": "on-task-waiting",
+    "version": "1.0",
+    "tenant": "default",
+    "collection": "users/*/orch-chats/*/tasks",
+    "events": ["update"],
+    "condition": "event.document.data.status == 'waiting'",
+    "url": "http://localhost:8000/webhook/orchestrator-notify",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "retryPolicy": {
+      "maxAttempts": 3,
+      "initialBackoff": "1s",
+      "maxBackoff": "5s"
+    }
+  },
+  {
+    "triggerId": "on-first-message-title",
+    "version": "1.0",
+    "tenant": "default",
+    "collection": "users/*/orch-chats/*/messages",
+    "events": ["create"],
+    "condition": "event.document.data.role == 'user'",
+    "url": "http://localhost:8000/webhook/title",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "retryPolicy": {
+      "maxAttempts": 3,
+      "initialBackoff": "1s",
+      "maxBackoff": "5s"
+    }
+  }
+]
