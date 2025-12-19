@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { SyntrixClient } from '../syntrix-client';
 import { WebhookPayload, AgentTask, SubAgent } from '../types';
-import { v4 as uuidv4 } from 'uuid';
+import { generateShortId } from '../utils';
 
 const syntrix = new SyntrixClient(process.env.SYNTRIX_API_URL);
 
@@ -23,7 +23,7 @@ export const agentInitHandler = async (req: Request, res: Response) => {
 
     console.log(`[AgentInit] ChatID: ${chatId}, TaskID: ${task.id}`);
 
-    const subAgentId = uuidv4();
+    const subAgentId = generateShortId();
     const subAgent: SubAgent = {
         id: subAgentId,
         userId,
@@ -54,7 +54,7 @@ export const agentInitHandler = async (req: Request, res: Response) => {
 
     // System Message
     await syntrix.createDocument(`users/${userId}/orch-chats/${chatId}/sub-agents/${subAgentId}/messages`, {
-        id: uuidv4(),
+        id: generateShortId(),
         userId,
         subAgentId,
         role: 'system',
@@ -64,7 +64,7 @@ export const agentInitHandler = async (req: Request, res: Response) => {
 
     // User Message (Instruction)
     await syntrix.createDocument(`users/${userId}/orch-chats/${chatId}/sub-agents/${subAgentId}/messages`, {
-        id: uuidv4(),
+        id: generateShortId(),
         userId,
         subAgentId,
         role: 'user',

@@ -108,7 +108,7 @@ type Query struct {
 
 type Filter struct {
 	Field string      // e.g., "status"
-	Op    string      // "==", ">", "<", "in", "array-contains"
+	Op    string      // "==", ">", ">=", "<", "<=", "in", "array-contains"
 	Value interface{} // "active"
 }
 

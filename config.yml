@@ -5,6 +5,11 @@ storage:
   data_collection: "documents"
   sys_collection: "sys"
 
+auth:
+  access_token_ttl: 15m
+  refresh_token_ttl: 168h # 7 days
+  auth_code_ttl: 2m
+
 api:
   port: 8080
   query_service_url: "http://localhost:8082"

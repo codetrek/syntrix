@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { SyntrixClient } from '../syntrix-client';
 import { TavilyClient } from '../tools/tavily';
 import { WebhookPayload } from '../types';
-import { v4 as uuidv4 } from 'uuid';
+import { generateShortId } from '../utils';
 
 const syntrix = new SyntrixClient(process.env.SYNTRIX_API_URL);
 const tavily = new TavilyClient(process.env.TAVILY_API_KEY || '');
@@ -61,7 +61,7 @@ export const toolRunnerHandler = async (req: Request, res: Response) => {
 
         // 2. Insert Tool Message (Triggers Agent Loop)
         await syntrix.createDocument(`${subAgentPath}/messages`, {
-            id: uuidv4(),
+            id: generateShortId(),
             userId,
             subAgentId,
             role: 'tool',

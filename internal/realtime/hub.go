@@ -73,6 +73,23 @@ func (h *Hub) Run() {
 
 					// Simple filter: Collection match
 					if sub.Query.Collection == "" || eventCollection == sub.Query.Collection {
+						// Check filters
+						if sub.CelProgram != nil {
+							if message.Document == nil {
+								continue
+							}
+							out, _, err := sub.CelProgram.Eval(map[string]interface{}{
+								"doc": message.Document.Data,
+							})
+							if err != nil {
+								// Evaluation error (e.g. field missing) -> treat as no match
+								continue
+							}
+							if val, ok := out.Value().(bool); !ok || !val {
+								continue
+							}
+						}
+
 						// Send event
 						var doc map[string]interface{}
 						if sub.IncludeData {

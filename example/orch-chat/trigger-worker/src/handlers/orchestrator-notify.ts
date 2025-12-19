@@ -106,9 +106,9 @@ export const orchestratorNotifyHandler = async (req: Request, res: Response) => 
             });
 
             // 2. Inject User Message (Auto-Answer)
-            const { v4: uuidv4 } = await import('uuid');
+            const { generateShortId } = await import('../utils');
             await syntrix.createDocument(`users/${userId}/orch-chats/${chatId}/sub-agents/${task.subAgentId}/messages`, {
-                id: uuidv4(),
+                id: generateShortId(),
                 userId,
                 subAgentId: task.subAgentId,
                 role: 'user',

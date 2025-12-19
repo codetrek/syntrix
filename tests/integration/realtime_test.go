@@ -315,3 +315,148 @@ func mustMarshal(v interface{}) []byte {
 	}
 	return b
 }
+
+func TestRealtime_Filtering(t *testing.T) {
+	env := setupMicroservices(t)
+	defer env.Cancel()
+
+	// Convert http URL to ws URL
+	wsURL := "ws" + strings.TrimPrefix(env.RealtimeURL, "http") + "/v1/realtime"
+
+	// Connect to Websocket
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err, "Failed to connect to websocket")
+	defer ws.Close()
+
+	// 1. Authenticate
+	authMsg := realtime.BaseMessage{
+		ID:   "auth-1",
+		Type: realtime.TypeAuth,
+		Payload: mustMarshal(realtime.AuthPayload{
+			Token: "dummy-token",
+		}),
+	}
+	err = ws.WriteJSON(authMsg)
+	require.NoError(t, err)
+
+	// Read Auth Ack
+	var ackMsg realtime.BaseMessage
+	err = ws.ReadJSON(&ackMsg)
+	require.NoError(t, err)
+	assert.Equal(t, realtime.TypeAuthAck, ackMsg.Type)
+
+	// 2. Subscribe with Filter (age > 20)
+	collectionName := "realtime_filter_test"
+	subID := "sub-filter"
+	subMsg := realtime.BaseMessage{
+		ID:   subID,
+		Type: realtime.TypeSubscribe,
+		Payload: mustMarshal(realtime.SubscribePayload{
+			Query: storage.Query{
+				Collection: collectionName,
+				Filters: []storage.Filter{
+					{Field: "age", Op: ">", Value: 20},
+				},
+			},
+			IncludeData: true,
+		}),
+	}
+	err = ws.WriteJSON(subMsg)
+	require.NoError(t, err)
+
+	// Read Subscribe Ack
+	var subAckMsg realtime.BaseMessage
+	err = ws.ReadJSON(&subAckMsg)
+	require.NoError(t, err)
+	assert.Equal(t, realtime.TypeSubscribeAck, subAckMsg.Type)
+
+	// 3. Create Non-Matching Document (age = 18)
+	docNoMatch := map[string]interface{}{
+		"name": "Young Bob",
+		"age":  18,
+	}
+	bodyNoMatch, _ := json.Marshal(docNoMatch)
+	resp, err := http.Post(fmt.Sprintf("%s/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(bodyNoMatch))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	resp.Body.Close()
+
+	// Verify NO event received (wait a bit)
+	ws.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	var unexpectedMsg realtime.BaseMessage
+	err = ws.ReadJSON(&unexpectedMsg)
+	if err == nil {
+		// If we received a message, check if it's an event for our subscription
+		if unexpectedMsg.Type == realtime.TypeEvent {
+			var payload realtime.EventPayload
+			json.Unmarshal(unexpectedMsg.Payload, &payload)
+			if payload.SubID == subID {
+				t.Fatalf("Received event that should have been filtered out: %+v", payload)
+			}
+		}
+	} else {
+		// Expected timeout or error
+		assert.Contains(t, err.Error(), "i/o timeout")
+	}
+
+	// Reconnect to ensure clean state after timeout
+	ws.Close()
+	ws, _, err = websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer ws.Close()
+
+	// Auth again
+	authMsg2 := realtime.BaseMessage{
+		Type:    realtime.TypeAuth,
+		ID:      "auth-2",
+		Payload: mustMarshal(map[string]string{"token": "dummy-token"}),
+	}
+	err = ws.WriteJSON(authMsg2)
+	require.NoError(t, err)
+	// Read auth ack
+	ws.ReadJSON(&realtime.BaseMessage{})
+
+	// Subscribe again
+	subMsg2 := realtime.BaseMessage{
+		ID:   "sub-filter-2",
+		Type: realtime.TypeSubscribe,
+		Payload: mustMarshal(realtime.SubscribePayload{
+			Query: storage.Query{
+				Collection: collectionName,
+				Filters: []storage.Filter{
+					{Field: "age", Op: ">", Value: 20},
+				},
+			},
+			IncludeData: true,
+		}),
+	}
+	err = ws.WriteJSON(subMsg2)
+	require.NoError(t, err)
+	// Read sub ack
+	ws.ReadJSON(&realtime.BaseMessage{})
+
+	// 4. Create Matching Document (age = 25)
+	docMatch := map[string]interface{}{
+		"name": "Adult Alice",
+		"age":  25,
+	}
+	bodyMatch, _ := json.Marshal(docMatch)
+	resp, err = http.Post(fmt.Sprintf("%s/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(bodyMatch))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	resp.Body.Close()
+
+	// Verify Event Received
+	fmt.Println("Test: Waiting for matching event...")
+	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+	var eventMsg realtime.BaseMessage
+	err = ws.ReadJSON(&eventMsg)
+	require.NoError(t, err, "Should receive matching event")
+	assert.Equal(t, realtime.TypeEvent, eventMsg.Type)
+
+	var eventPayload realtime.EventPayload
+	err = json.Unmarshal(eventMsg.Payload, &eventPayload)
+	require.NoError(t, err)
+	assert.Equal(t, "sub-filter-2", eventPayload.SubID)
+	assert.Equal(t, "Adult Alice", eventPayload.Delta.Document["name"])
+}

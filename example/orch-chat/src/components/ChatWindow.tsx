@@ -12,7 +12,7 @@ interface ChatWindowProps {
 type ChatItem =
   | (Message & { type: 'message' })
   | (ToolCall & { type: 'toolcall' })
-  | (AgentTask & { type: 'task' });
+  | (Omit<AgentTask, 'type'> & { type: 'task'; taskType: AgentTask['type'] });
 
 const ToolCallItem: React.FC<{ item: ToolCall }> = ({ item }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -83,7 +83,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chatId }) => {
         const combined: ChatItem[] = [
           ...currentMessages.map(m => ({ ...m, type: 'message' } as const)),
           ...currentTools.map(t => ({ ...t, type: 'toolcall' } as const)),
-          ...currentTasks.map(t => ({ ...t, type: 'task' } as const))
+          ...currentTasks.map(t => {
+            const { type, ...rest } = t;
+            return { ...rest, type: 'task', taskType: type } as const;
+          })
         ];
         combined.sort((a, b) => a.createdAt - b.createdAt);
         setItems(combined);
@@ -146,7 +149,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ chatId }) => {
               </div>
             );
           } else if (item.type === 'task') {
-              return <TaskBlock key={item.id} task={item} chatId={chatId} />;
+              const { type, taskType, ...rest } = item;
+              const originalTask: AgentTask = { ...rest, type: taskType };
+              return <TaskBlock key={item.id} task={originalTask} chatId={chatId} />;
           } else {
             return <ToolCallItem key={item.id} item={item} />;
           }

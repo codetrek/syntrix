@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { AzureOpenAI } from 'openai';
 import { SyntrixClient } from '../syntrix-client';
 import { WebhookPayload, SubAgentMessage, SubAgentToolCall, AgentTask, SubAgent } from '../types';
-import { v4 as uuidv4 } from 'uuid';
+import { generateShortId } from '../utils';
 
 const openai = new AzureOpenAI({
   endpoint: process.env.AZURE_OPENAI_ENDPOINT,
@@ -185,7 +185,7 @@ export const agentLoopHandler = async (req: Request, res: Response) => {
 
             // Create Assistant Message
             await syntrix.createDocument(`users/${userId}/orch-chats/${chatId}/sub-agents/${subAgentId}/messages`, {
-                id: uuidv4(),
+                id: generateShortId(),
                 userId,
                 subAgentId,
                 role: 'assistant',
@@ -216,7 +216,7 @@ export const agentLoopHandler = async (req: Request, res: Response) => {
 
             // Create Assistant Message
             await syntrix.createDocument(`users/${userId}/orch-chats/${chatId}/sub-agents/${subAgentId}/messages`, {
-                id: uuidv4(),
+                id: generateShortId(),
                 userId,
                 subAgentId,
                 role: 'assistant',
@@ -244,7 +244,7 @@ export const agentLoopHandler = async (req: Request, res: Response) => {
 
             // Create Assistant Message with tool_calls
             await syntrix.createDocument(`users/${userId}/orch-chats/${chatId}/sub-agents/${subAgentId}/messages`, {
-                id: uuidv4(),
+                id: generateShortId(),
                 userId,
                 subAgentId,
                 role: 'assistant',
@@ -270,7 +270,7 @@ export const agentLoopHandler = async (req: Request, res: Response) => {
     } else if (responseMsg.content) {
         // Just a thought or chat (should be avoided by system prompt, but handle it)
         await syntrix.createDocument(`users/${userId}/orch-chats/${chatId}/sub-agents/${subAgentId}/messages`, {
-            id: uuidv4(),
+            id: generateShortId(),
             userId,
             subAgentId,
             role: 'assistant',

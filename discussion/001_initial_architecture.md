@@ -194,3 +194,37 @@ We will adopt a **Splittable Monolith** strategy.
 1. Initialize Go module structure.
 2. Define the `StorageBackend` interface.
 3. Set up a local MongoDB for development.
+
+## 6. Document Shapes (Mongo Storage vs User-Facing)
+
+### 6.1 MongoDocument (persisted in MongoDB)
+```json
+{
+  "_id": "<blake3(fullpath)>",          // 128-bit BLAKE3 of fullpath, binary
+  "fullpath": "users/alice/posts/post1", // Full path, immutable
+  "collection": "users/alice/posts",     // Redundant for querying, immutable
+  "parent": "users/alice",               // Redundant for querying, immutable
+  "version": 0,                           // Auto-increment per update, client cannot set
+  "doc": { /* user Document */ },         // User payload (see 6.2)
+  "createdAt": "ISODate(...)" ,          // Set on create only
+  "updatedAt": "ISODate(...)"            // Updated on every write
+}
+```
+
+### 6.2 User-Facing Document (API shape)
+```json
+{
+  "id": "post1",               // Required; immutable once written; allowed charset: [A-Za-z0-9_.-]
+  "_collection": "posts",      // Shadow field, server-written; client input ignored
+  "_version": 0,                // Shadow field, server-written; client input ignored
+  "_updatedAt": 1700000000000,  // Shadow field, server-written; client input ignored
+  "_createdAt": 1700000000000,  // Shadow field, server-written; client input ignored
+  /* other user fields */
+}
+```
+
+**Rules & protections**
+- `id` is required and immutable after creation; server enforces charset `[A-Za-z0-9_.-]` and rejects mutations on update/patch.
+- Shadow fields (`_collection`, `_version`, `_updatedAt`, `_createdAt`) are server-owned; client-supplied values are ignored/overwritten.
+- `version` in MongoDocument is incremented automatically per write and not client-settable.
+- `createdAt` is set once on create; `updatedAt` updates on every write.

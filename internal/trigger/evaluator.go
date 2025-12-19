@@ -8,7 +8,6 @@ import (
 	"syntrix/internal/storage"
 
 	"github.com/google/cel-go/cel"
-	"github.com/google/cel-go/checker/decls"
 )
 
 // Evaluator is responsible for matching events against trigger conditions.
@@ -26,9 +25,7 @@ type CELEvaluator struct {
 func NewCELEvaluator() (*CELEvaluator, error) {
 	// Define the CEL environment with an 'event' variable
 	env, err := cel.NewEnv(
-		cel.Declarations(
-			decls.NewVar("event", decls.NewMapType(decls.String, decls.Dyn)),
-		),
+		cel.Variable("event", cel.MapType(cel.StringType, cel.DynType)),
 	)
 	if err != nil {
 		return nil, err

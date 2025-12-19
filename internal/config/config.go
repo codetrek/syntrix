@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -11,6 +12,7 @@ import (
 // Config holds the application configuration
 type Config struct {
 	Storage StorageConfig `yaml:"storage"`
+	Auth    AuthConfig    `yaml:"auth"`
 
 	API      APIConfig      `yaml:"api"`
 	Realtime RealtimeConfig `yaml:"realtime"`
@@ -51,6 +53,12 @@ type StorageConfig struct {
 	SysCollection  string `yaml:"sys_collection"`
 }
 
+type AuthConfig struct {
+	AccessTokenTTL  time.Duration `yaml:"access_token_ttl"`
+	RefreshTokenTTL time.Duration `yaml:"refresh_token_ttl"`
+	AuthCodeTTL     time.Duration `yaml:"auth_code_ttl"`
+}
+
 // LoadConfig loads configuration from files and environment variables
 // Order: defaults -> config.yml -> config.local.yml -> env vars
 func LoadConfig() *Config {
@@ -61,6 +69,11 @@ func LoadConfig() *Config {
 			DatabaseName:   "syntrix",
 			DataCollection: "documents",
 			SysCollection:  "sys",
+		},
+		Auth: AuthConfig{
+			AccessTokenTTL:  15 * time.Minute,
+			RefreshTokenTTL: 7 * 24 * time.Hour,
+			AuthCodeTTL:     2 * time.Minute,
 		},
 		API: APIConfig{
 			Port:            8080,

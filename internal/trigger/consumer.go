@@ -124,7 +124,6 @@ func (c *Consumer) dispatch(msg jetstream.Msg) {
 
 func (c *Consumer) workerLoop(ctx context.Context, id int) {
 	defer c.wg.Done()
-	log.Printf("Worker %d started", id)
 
 	for msg := range c.workerChans[id] {
 		// Process message

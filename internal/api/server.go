@@ -1,21 +1,21 @@
 package api
 
 import (
-	"encoding/json"
-	"errors"
 	"net/http"
+	"syntrix/internal/auth"
 	"syntrix/internal/query"
-	"syntrix/internal/storage"
 )
 
 type Server struct {
 	engine query.Service
+	auth   *auth.AuthService
 	mux    *http.ServeMux
 }
 
-func NewServer(engine query.Service) *Server {
+func NewServer(engine query.Service, auth *auth.AuthService) *Server {
 	s := &Server{
 		engine: engine,
+		auth:   auth,
 		mux:    http.NewServeMux(),
 	}
 	s.routes()
@@ -36,236 +36,37 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-func flattenDocument(doc *storage.Document) Document {
-	if doc == nil {
-		return nil
-	}
-	flat := make(Document)
-
-	// Copy data
-	for k, v := range doc.Data {
-		flat[k] = v
-	}
-	// Add system fields
-	flat["_version"] = doc.Version
-	flat["_updated_at"] = doc.UpdatedAt
-	return flat
-}
-
 func (s *Server) routes() {
 	// Document Operations
-	s.mux.HandleFunc("GET /v1/{path...}", s.handleGetDocument)
-	s.mux.HandleFunc("POST /v1/{path...}", s.handleCreateDocument)
-	s.mux.HandleFunc("PUT /v1/{path...}", s.handleReplaceDocument)
-	s.mux.HandleFunc("PATCH /v1/{path...}", s.handleUpdateDocument)
-	s.mux.HandleFunc("DELETE /v1/{path...}", s.handleDeleteDocument)
+	s.mux.HandleFunc("GET /v1/{path...}", s.protected(s.handleGetDocument))
+	s.mux.HandleFunc("POST /v1/{path...}", s.protected(s.handleCreateDocument))
+	s.mux.HandleFunc("PUT /v1/{path...}", s.protected(s.handleReplaceDocument))
+	s.mux.HandleFunc("PATCH /v1/{path...}", s.protected(s.handleUpdateDocument))
+	s.mux.HandleFunc("DELETE /v1/{path...}", s.protected(s.handleDeleteDocument))
 
 	// Query Operations
-	s.mux.HandleFunc("POST /v1/query", s.handleQuery)
+	s.mux.HandleFunc("POST /v1/query", s.protected(s.handleQuery))
 
 	// Replication Operations
-	s.mux.HandleFunc("GET /v1/replication/pull", s.handlePull)
-	s.mux.HandleFunc("POST /v1/replication/push", s.handlePush)
+	s.mux.HandleFunc("GET /v1/replication/pull", s.protected(s.handlePull))
+	s.mux.HandleFunc("POST /v1/replication/push", s.protected(s.handlePush))
+
+	// Auth Operations
+	if s.auth != nil {
+		s.mux.HandleFunc("POST /v1/auth/login", s.handleLogin)
+		s.mux.HandleFunc("POST /v1/auth/refresh", s.handleRefresh)
+		s.mux.HandleFunc("POST /v1/auth/logout", s.handleLogout)
+	}
 
 	// Health Check
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
-}
-
-func (s *Server) handleGetDocument(w http.ResponseWriter, r *http.Request) {
-	path := r.PathValue("path")
-
-	if err := validateDocumentPath(path); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+func (s *Server) protected(h http.HandlerFunc) http.HandlerFunc {
+	if s.auth == nil {
+		return h
 	}
-
-	doc, err := s.engine.GetDocument(r.Context(), path)
-	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			http.Error(w, "Document not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.auth.Middleware(h).ServeHTTP(w, r)
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(flattenDocument(doc))
-}
-
-func (s *Server) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
-	collection := r.PathValue("path")
-
-	if err := validateCollection(collection); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	var data Document
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if err := data.ValidateDocument(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	data.GenerateIDIfEmpty()
-
-	path := collection + "/" + data.GetID()
-	doc := storage.NewDocument(path, collection, stripSystemFields(data))
-
-	if err := s.engine.CreateDocument(r.Context(), doc); err != nil {
-		if errors.Is(err, storage.ErrExists) {
-			http.Error(w, "Document already exists", http.StatusConflict)
-		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(flattenDocument(doc))
-}
-
-func (s *Server) handleReplaceDocument(w http.ResponseWriter, r *http.Request) {
-	path := r.PathValue("path")
-
-	collection, docID, err := validateAndExplodeFullpath(path)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if docID == "" {
-		http.Error(w, "Invalid document path: missing document ID", http.StatusBadRequest)
-		return
-	}
-
-	var data Document
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	data.SetID(docID)
-	if err := data.ValidateDocument(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	doc, err := s.engine.ReplaceDocument(r.Context(), path, collection, stripSystemFields(data))
-	if err != nil {
-		if errors.Is(err, storage.ErrVersionConflict) {
-			http.Error(w, "Version conflict", http.StatusConflict)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(flattenDocument(doc))
-}
-
-func (s *Server) handleUpdateDocument(w http.ResponseWriter, r *http.Request) {
-	path := r.PathValue("path")
-
-	_, docID, err := validateAndExplodeFullpath(path)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if docID == "" {
-		http.Error(w, "Invalid document path: missing document ID", http.StatusBadRequest)
-		return
-	}
-
-	var data Document
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if err := data.ValidateDocument(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if data.IsEmpty() {
-		http.Error(w, "No data to update", http.StatusBadRequest)
-		return
-	}
-	data.SetID(docID)
-
-	doc, err := s.engine.PatchDocument(r.Context(), path, data)
-	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			http.Error(w, "Document not found", http.StatusNotFound)
-			return
-		}
-		if errors.Is(err, storage.ErrVersionConflict) {
-			http.Error(w, "Version conflict", http.StatusConflict)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(flattenDocument(doc))
-}
-
-func (s *Server) handleDeleteDocument(w http.ResponseWriter, r *http.Request) {
-	path := r.PathValue("path")
-
-	if err := validateDocumentPath(path); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if err := s.engine.DeleteDocument(r.Context(), path); err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			http.Error(w, "Document not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
-	var q storage.Query
-	if err := json.NewDecoder(r.Body).Decode(&q); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if err := validateQuery(q); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	docs, err := s.engine.ExecuteQuery(r.Context(), q)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	flatDocs := make([]map[string]interface{}, len(docs))
-	for i, doc := range docs {
-		flatDocs[i] = flattenDocument(doc)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(flatDocs)
 }

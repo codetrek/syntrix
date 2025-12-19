@@ -119,6 +119,12 @@ func validateQuery(q storage.Query) error {
 		if f.Op == "" {
 			return errors.New("filter op cannot be empty")
 		}
+		switch f.Op {
+		case "==", ">", ">=", "<", "<=", "in", "array-contains":
+			// Valid
+		default:
+			return fmt.Errorf("unsupported filter operator: %s", f.Op)
+		}
 	}
 	for _, o := range q.OrderBy {
 		if o.Field == "" {

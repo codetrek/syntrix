@@ -28,6 +28,10 @@ func (m *MongoBackend) getCollection(nameOrPath string) *mongo.Collection {
 	return m.db.Collection(m.dataCollection)
 }
 
+func (m *MongoBackend) DB() *mongo.Database {
+	return m.db
+}
+
 // NewMongoBackend initializes a new MongoDB storage backend
 func NewMongoBackend(ctx context.Context, uri string, dbName string, dataColl string, sysColl string) (*MongoBackend, error) {
 	clientOpts := options.Client().ApplyURI(uri)
@@ -203,7 +207,6 @@ func (m *MongoBackend) Watch(ctx context.Context, collectionName string, resumeT
 			}
 
 			if err := stream.Decode(&changeEvent); err != nil {
-				// Log error?
 				continue
 			}
 

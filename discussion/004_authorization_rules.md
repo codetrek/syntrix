@@ -34,7 +34,13 @@ match:
       match: /messages/{messageId}:
         allow: read: if get(/databases/$(database)/documents/rooms/$(roomId)).data.members.has(request.auth.uid)
         allow: create: if get(/databases/$(database)/documents/rooms/$(roomId)).data.members.has(request.auth.uid)
+
 ```
+
+### 2.2 Path precedence & conflicts
+- The most specific match wins (longest concrete path, then fewer wildcards, then order of declaration as final tie-breaker).
+- Detect and reject overlapping ambiguous rules at publish time (e.g., `/rooms/{id}` alongside `/rooms/public` without explicit priority).
+- No implicit inheritance: parent blocks do not apply to children unless explicitly matched (see 8.4/8.5).
 
 ## 3. Evaluation Context
 
@@ -50,6 +56,12 @@ The rules engine will have access to the following objects:
 - `resource.data`: The *existing* document data (for `read`, `update`, `delete`).
 - `resource.id`: The document ID.
 
+### Data availability semantics
+- `create`: `resource.data` is empty; use `request.resource.data` for proposed content.
+- `update`: both `resource.data` (old) and `request.resource.data` (new) are available.
+- `delete`: only `resource.data` is available; `request.resource` is empty.
+- `read` when document is missing: treat `resource.data` as empty; if the rule needs existence, require explicit `exists()`.
+
 ### Helper Functions
 - `get(path)`: Fetches a document from the database (crucial for checking parent permissions, e.g., room membership).
 - `exists(path)`: Checks if a document exists.
@@ -58,6 +70,12 @@ The rules engine will have access to the following objects:
 
 ### 4.1 Language
 We will use **CEL (Common Expression Language)** by Google. It is fast, safe, and designed for this exact purpose. Go has excellent support for CEL (`github.com/google/cel-go`).
+
+### 4.1.1 Allowed CEL subset
+- Primitives: bool, int, uint, double, string, timestamp, list, map; no bytes.
+- Allowed ops: logical, comparison, arithmetic, list/map access; string ops limited to `size`, `contains`, `startsWith`, `endsWith`; time ops limited to comparisons and `duration` literals.
+- Forbidden: reflection, dynamic dispatch, regex, network/file I/O, randomness, custom functions except `get`, `exists`, and explicitly whitelisted helpers.
+- Execution guardrails: per-eval CPU/step limit (e.g., 5ms wall, 10k instructions) and memory cap; timeout yields `RULE_EVAL_ERROR`.
 
 ### 4.2 Execution Flow (API Gateway)
 
@@ -72,6 +90,16 @@ We will use **CEL (Common Expression Language)** by Google. It is fast, safe, an
     - `true`: Proceed to Query Engine.
     - `false`: Return `403 Forbidden`.
 
+### 4.3 Rule validation & limits (publish-time)
+- Enforce static checks before activating a rule set:
+  - Max file size: 256 KB; max AST depth: 20; forbid unbounded glob patterns beyond `**` at tail.
+  - Max `get()`/`exists()` invocations referenced per rule: 5; reject rules exceeding this.
+  - Forbid dangerous CEL functions: reflection, dynamic dispatch, non-deterministic time (only `request.time` allowed), I/O.
+  - Require path patterns to be prefix-bounded (no mid-segment `**`).
+  - Reject overlapping ambiguous matches (see 2.2).
+  - Validate all referenced paths in `get()`/`exists()` are absolute and stay within `/databases/{db}/documents/...`.
+  - Max ruleset cardinality: e.g., 1,000 `match` blocks and 5,000 `allow` statements to keep load/validation bounded.
+
 ## 5. Performance Considerations
 
 - **`get()` Cost**: Rules that require fetching other documents (e.g., checking room membership for every message read) are expensive.
@@ -80,7 +108,17 @@ We will use **CEL (Common Expression Language)** by Google. It is fast, safe, an
     - **Denormalization**: Duplicate `memberIds` array into the message document (trade-off: storage vs. compute).
     - **Caching**: Cache `get()` results within the scope of a request or short-term.
 
-## 6. Example Scenarios
+- **Per-request enforcement**: runtime cap of 5 `get()`/`exists()` evaluations per request (deny with `RESOURCE_EXHAUSTED` if exceeded); cache hits do not count toward the cap.
+- **Prefetch planning**: the gateway precomputes the set of `get()` targets from the rule AST to parallelize fetches; missing documents are treated as `exists() == false` with empty data.
+
+## 6. Query evaluation semantics
+- Queries are allowed only if **all** candidate documents satisfy the matched `allow read` rule; any denial rejects the entire query with `PERMISSION_DENIED` (no partial results) to avoid leakage.
+- Where possible, push rule predicates that are pure field comparisons into the query planner; otherwise fall back to per-document evaluation.
+- If rule evaluation needs the document body, the engine will fetch documents and may incur higher latency; surface metrics for “query with rule eval”.
+- Index-miss errors (`MISSING_INDEX`) are returned **before** rule evaluation to avoid wasted work.
+- Pagination/streaming: if a later page hits a deny, the request fails with `PERMISSION_DENIED` and no further data is streamed; clients must handle full failure on any page.
+
+## 7. Example Scenarios
 
 ### Scenario A: User Profile
 *Only the user can edit their own profile. Public can read.*
@@ -109,3 +147,71 @@ match /rooms/{roomId}/messages/{msgId} {
   allow read: if request.auth.uid in resource.data.members
 }
 ```
+
+## 8. Additional Rule Patterns
+
+### 8.1 Role-gated admin collection
+```cel
+match /admin/logs/{logId} {
+  allow read: if "admin" in request.auth.roles;
+  allow write, delete: if false; // read-only even for admins
+}
+```
+
+### 8.2 Denormalized membership on message
+```cel
+match /rooms/{roomId}/messages/{msgId} {
+  allow read: if request.auth.uid in resource.data.members;
+  allow write: if request.auth.uid in resource.data.members;
+}
+```
+
+### 8.3 Query restriction (only own docs)
+```cel
+match /users/{userId}/todos/{todoId} {
+  allow query: if request.auth.uid == userId;
+}
+```
+
+### 8.4 Explicit inheritance pattern (opt-in)
+Define a shared predicate and add a wildcard sub-match to “inherit” parent semantics:
+```cel
+function roomMember(roomId) {
+  request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.members
+}
+
+match /rooms/{roomId} {
+  allow read, write: if roomMember(roomId);
+
+  // Inherit to all sub-collections unless overridden
+  match /{sub=**} {
+    allow read, write: if roomMember(roomId);
+  }
+}
+```
+Override by adding a more specific `match` below this block; the most specific match wins.
+
+### 8.5 Sub-collection inheritance rule
+There is **no implicit inheritance**. If a sub-collection has no matching rule, access is denied. Use explicit patterns (e.g., 8.4) when inheritance is desired.
+
+## 9. Performance & Safety
+
+- Cache `get()` results per request; limit max `get()` calls (e.g., 5) and deny if exceeded.
+- Forbid unbounded path patterns in rules; validate at publish time.
+- If `resource.data` missing due to not-found on read: treat as empty and apply rule; if rule requires existence, use `exists()` explicitly.
+- Sub-collection inheritance: no implicit inheritance; parent rules do not automatically apply downward.
+- Ordering: ensure specific paths (e.g., `/users/{userId}`) are defined before any catch-all `{sub=**}` blocks to prevent unintended allows.
+
+## 10. Error Shape
+- On deny: `403` with `code: PERMISSION_DENIED` and minimal message; do not leak rule internals.
+- On rule evaluation error: also `403` with reason `RULE_EVAL_ERROR`.
+
+- On exceeding runtime limits (e.g., `get()` cap): `403` with `code: RESOURCE_EXHAUSTED`.
+
+## 11. Observability
+- Metrics: allow/deny counts by collection prefix, rule evaluation latency, `get()` cache hit/miss; include tags for `rules_version` and `action` (read/write/query).
+- Logs: sampled denies with path, action, reason (no sensitive data). Trace tag `authz.result`.
+
+## 12. Future
+- Field-level masks (read filters) not in scope now.
+- Pre-compute rule AST per version; consider JIT-compiled CEL for hot rules.

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { getDatabase, Chat } from '../db';
-import { v4 as uuidv4 } from 'uuid';
+import { generateShortId } from '../utils';
 
 interface SidebarProps {
   activeChatId: string | null;
@@ -20,7 +20,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeChatId, onSelectChat }) 
 
   const createNewChat = async () => {
     const db = await getDatabase();
-    const id = uuidv4();
+    const id = generateShortId();
     await db.chats.insert({
       id,
       title: 'New Chat',

@@ -1,6 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { Message, SyntrixQuery, ToolCall } from './types';
-import { v4 as uuidv4 } from 'uuid';
+import { generateShortId } from './utils';
 
 export class SyntrixClient {
   private client: AxiosInstance;
@@ -124,7 +124,7 @@ export class SyntrixClient {
   }
 
   async postMessage(chatPath: string, content: string) {
-    const id = uuidv4();
+    const id = generateShortId();
     // POST to the collection, not the document path
     await this.createDocument(`${chatPath}/messages`, {
       id,
@@ -136,7 +136,7 @@ export class SyntrixClient {
 
   async postToolCall(chatPath: string, toolName: string, args: any, toolCallId: string) {
     // Use the ID from OpenAI if provided, otherwise generate one
-    const id = toolCallId || uuidv4();
+    const id = toolCallId || generateShortId();
     // POST to the collection
     await this.createDocument(`${chatPath}/toolcall`, {
       id,

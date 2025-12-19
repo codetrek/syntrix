@@ -12,6 +12,7 @@ import (
 	"syntrix/internal/query"
 	"syntrix/internal/storage"
 
+	"github.com/google/cel-go/cel"
 	"github.com/gorilla/websocket"
 )
 
@@ -56,6 +57,7 @@ type Client struct {
 type Subscription struct {
 	Query       storage.Query
 	IncludeData bool
+	CelProgram  cel.Program
 }
 
 // readPump pumps messages from the websocket connection to the hub.
@@ -106,10 +108,25 @@ func (c *Client) handleMessage(msg BaseMessage) {
 			log.Printf("[Error][WS] unmarshalling subscribe payload: %v", err)
 			return
 		}
+
+		// Compile CEL filters
+		prg, err := compileFiltersToCEL(payload.Query.Filters)
+		if err != nil {
+			log.Printf("[Error][WS] Failed to compile filters: %v", err)
+			errPayload, _ := json.Marshal(map[string]string{"message": "Invalid filter expression: " + err.Error()})
+			c.send <- BaseMessage{
+				ID:      msg.ID,
+				Type:    TypeError,
+				Payload: errPayload,
+			}
+			return
+		}
+
 		c.mu.Lock()
 		c.subscriptions[msg.ID] = Subscription{
 			Query:       payload.Query,
 			IncludeData: payload.IncludeData,
+			CelProgram:  prg,
 		}
 		c.mu.Unlock()
 		log.Printf("[Info][WS] Subscribed to collection=%s id=%s includeData=%v", payload.Query.Collection, msg.ID, payload.IncludeData)

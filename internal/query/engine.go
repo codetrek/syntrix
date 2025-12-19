@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"syntrix/internal/storage"
 )
@@ -147,6 +148,7 @@ func (e *Engine) WatchCollection(ctx context.Context, collection string) (<-chan
 		for {
 			var evt storage.Event
 			if err := decoder.Decode(&evt); err != nil {
+				log.Printf("[Error][Engine] Watch decode event failed: %v\n", err)
 				return
 			}
 			select {

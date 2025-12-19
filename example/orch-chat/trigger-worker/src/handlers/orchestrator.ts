@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { AzureOpenAI } from 'openai';
 import { SyntrixClient } from '../syntrix-client';
 import { WebhookPayload, AgentTask, SubAgent, SubAgentMessage } from '../types';
-import { v4 as uuidv4 } from 'uuid';
+import { generateShortId } from '../utils';
 
 const openai = new AzureOpenAI({
   endpoint: process.env.AZURE_OPENAI_ENDPOINT,
@@ -189,7 +189,7 @@ export const orchestratorHandler = async (req: Request, res: Response) => {
 
         if (toolCall.function.name === 'create_agent') {
             // Create Task
-            const taskId = uuidv4();
+            const taskId = generateShortId();
             const task: AgentTask = {
                 id: taskId,
                 userId,
@@ -214,7 +214,7 @@ export const orchestratorHandler = async (req: Request, res: Response) => {
 
             // 2. Inject User Message into SubAgent
             await syntrix.createDocument(`users/${userId}/orch-chats/${chatId}/sub-agents/${subAgentId}/messages`, {
-                id: uuidv4(),
+                id: generateShortId(),
                 userId,
                 subAgentId,
                 role: 'user',
@@ -246,7 +246,7 @@ export const orchestratorHandler = async (req: Request, res: Response) => {
 
             // 2. Inject User Message (from Orchestrator) into SubAgent
             await syntrix.createDocument(`users/${userId}/orch-chats/${chatId}/sub-agents/${subAgentId}/messages`, {
-                id: uuidv4(),
+                id: generateShortId(),
                 userId,
                 subAgentId,
                 role: 'user',

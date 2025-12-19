@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"syntrix/internal/api"
+	"syntrix/internal/auth"
 	"syntrix/internal/config"
 	"syntrix/internal/csp"
 	"syntrix/internal/query"
@@ -21,6 +22,7 @@ import (
 
 type Options struct {
 	RunAPI              bool
+	RunAuth             bool
 	RunCSP              bool
 	RunQuery            bool
 	RunRealtime         bool
@@ -34,6 +36,7 @@ type Manager struct {
 	servers         []*http.Server
 	serverNames     []string
 	storageBackend  *mongo.MongoBackend
+	authService     *auth.AuthService
 	rtServer        *realtime.Server
 	triggerConsumer *trigger.Consumer
 	triggerService  *trigger.TriggerService
@@ -50,7 +53,7 @@ func NewManager(cfg *config.Config, opts Options) *Manager {
 
 func (m *Manager) Init(ctx context.Context) error {
 	// 1. Initialize Storage Backend (if needed)
-	if m.opts.RunQuery || m.opts.RunCSP || m.opts.RunTriggerEvaluator {
+	if m.opts.RunQuery || m.opts.RunCSP || m.opts.RunTriggerEvaluator || m.opts.RunAuth {
 		// Use Query storage config as default, or CSP if Query is not running
 		mongoURI := m.cfg.Storage.MongoURI
 		dbName := m.cfg.Storage.DatabaseName
@@ -65,6 +68,27 @@ func (m *Manager) Init(ctx context.Context) error {
 			return fmt.Errorf("failed to connect to storage backend: %w", err)
 		}
 		log.Println("Connected to MongoDB successfully.")
+	}
+
+	// Initialize Auth Service
+	if m.opts.RunAuth {
+		authStorage := auth.NewStorage(m.storageBackend.DB())
+
+		tokenService, err := auth.NewTokenService(
+			m.cfg.Auth.AccessTokenTTL,
+			m.cfg.Auth.RefreshTokenTTL,
+			m.cfg.Auth.AuthCodeTTL,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to create token service: %w", err)
+		}
+		m.authService = auth.NewAuthService(authStorage, tokenService)
+
+		// Ensure indexes
+		if err := authStorage.EnsureIndexes(ctx); err != nil {
+			log.Printf("Warning: failed to ensure auth indexes: %v", err)
+		}
+		log.Println("Initialized Auth Service")
 	}
 
 	// 2. Initialize Query Service (Local Engine or Remote Client)
@@ -94,7 +118,7 @@ func (m *Manager) Init(ctx context.Context) error {
 			queryService = query.NewClient(m.cfg.API.QueryServiceURL)
 		}
 
-		apiServer := api.NewServer(queryService)
+		apiServer := api.NewServer(queryService, m.authService)
 		m.servers = append(m.servers, &http.Server{
 			Addr:    fmt.Sprintf(":%d", m.cfg.API.Port),
 			Handler: apiServer,

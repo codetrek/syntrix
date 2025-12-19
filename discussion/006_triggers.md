@@ -84,3 +84,103 @@ Header: `X-Syntrix-Signature: t=1697041234,v1=hex(hmac_sha256(secret, t + "." + 
 - Reserved path for sandboxed functions (JS/Go) running out-of-process with CPU/mem/time limits, reusing the same event model and delivery semantics.
 - Transform hooks (Why: adapt payloads without webhook churn; How):
   - Allow lightweight, bounded transformations (e.g., field masks, templating) executed in the sandboxed function path with strict limits; keep default path passthrough for latency-sensitive triggers.
+
+## 7) Trigger-Internal Read/Write Interface & Auth (Draft)
+**Why**: Triggers may need to read or write documents as part of their processing pipeline. We want a minimal, safe, and auditable path distinct from public APIs while still enforcing CEL rules by default.
+
+**Endpoints (internal-only)**
+- `POST /v1/trigger/get`: batch document reads by concrete paths.
+- `POST /v1/trigger/query`: single query (same shape as public query API).
+- `POST /v1/trigger/write`: one or more write ops in a single request.
+
+**Parameters & Response**
+- Common: Auth via TET (tenant inferred), JSON body; errors use standard codes listed below.
+- `/trigger/get`
+  - Request: `{ "paths": ["/rooms/room-123/messages/msg-9", ...] }` (paths required, non-empty)
+  - Response: `{ "documents": [{"id": "...", "_collection": "...", "_version": 7, "_updated_at": 123, "<user_fields>": "..."}, ...] }`
+    - Order matches input `paths`.
+    - Missing doc returns a placeholder `{ "path": "<input>", "missing": true }` (HTTP 200 overall); if caller prefers hard fail, use `/trigger/query` with filters.
+- `/trigger/query`
+  - Request: `{ "query": { "collection": "rooms/room-123/messages", "filters": [...], "orderBy": [...], "limit": 20, "startAfter": "cursor" } }`
+  - Response: `{ "documents": [{"id": "...", "_collection": "...", "_version": 7, "_updated_at": 123, "<user_fields>": "..."}, ...], "nextCursor": "..." }` (identical to public query API)
+ - `/trigger/write`
+   - Request: `{ "ops": [{ "type": "create|set|update|patch|delete", "path": "...", "data": {...}, "precondition": [{"field": "_version", "op": "==", "value": 7}] } , ...], "idempotencyKey": "..." }` (one or many ops)
+  - Response (transactional, all-or-nothing):
+    - Success: `{ "results": [{ "status": "ok", "version": 8, "updated_at": 1234567891 }, ...], "idempotencyKey": "..." }`
+    - Failure (any op fails → none applied, including precondition mismatch): `{ "error": { "code": "...", "message": "...", "details": [{"opIndex": 0, "code": "PRECONDITION_FAILED", "message": "_version mismatch"}, ...] }, "idempotencyKey": "..." }`
+
+**Request shape (examples)**
+- Get: `{ "paths": ["/rooms/room-123/messages/msg-9"] }`
+- Query: `{ "query": { "collection": "rooms/room-123/messages", "filters": [...], "orderBy": [...], "limit": 20, "startAfter": "cursor" } }` (structure identical to `POST /v1/query`)
+- Write: `{ "ops": [ { "type": "create|set|update|patch|delete", "path": "/rooms/room-123/messages/msg-9", "data": {...}, "precondition": [{"field": "_version", "op": "==", "value": 7}] }, { "type": "delete", "path": "/rooms/room-123/messages/msg-10" } ], "idempotencyKey": "..." }`
+
+Notes:
+- `tenant` is derived from the TET; it is not a request field.
+- Consistency level follows service defaults (strong for single-doc, eventual/strong as implemented by query engine); no caller flag.
+
+**Response shape alignment**
+- `/trigger/get`: array of documents mirroring `GET /v1/{path}` shape per item.
+- `/trigger/query`: same as `POST /v1/query` (`documents`, `nextCursor`).
+- `/trigger/write`: transactional; either all ops succeed with per-op results, or none are applied and an error with per-op details is returned.
+- Document payloads use the same flattened shape as public API (i.e., `flattenDocument`: user fields plus `id`, `_collection`, `_version`, `_updated_at`).
+
+**Token issuance (TET)**
+- Issued by control plane for a specific trigger execution window (short TTL, e.g., minutes).
+- Contains claims listed below; signed with service key (RS256/EdDSA). Issuance resolves all placeholders into concrete prefixes for `allow_paths`.
+- Delivery: passed to the trigger executor (internal worker or trusted runtime) and attached as Authorization bearer in each call.
+
+**Auth model: Trigger Execution Token (TET)**
+- Short-TTL JWT/EdDSA issued by control plane; every trigger read/write call must present this temporary token.
+- Claims: `sub` (triggerId), `tenant`, `scopes` (`trigger.read`, `trigger.write`), `allow_paths` (concrete prefixes), optional `max_ops`, `max_payload_kb`.
+- Placeholder values must be resolved at issuance time: `allow_paths` contains concrete prefixes (e.g., `/rooms/room-123/messages/`), no templates remain.
+- Validation pipeline: verify signature/expiry → tenant match → scope check → path/prefix enforcement → rate limiting by `(tenant, triggerId)`.
+  - Document reads/writes: every `path` must start with one of `allow_paths`.
+  - Query reads: `collection` must start with one of `allow_paths`; cross-collection/join not allowed via this endpoint.
+  - Limit checks: enforce `max_ops`, `max_payload_kb` (if present) and return `429 RESOURCE_EXHAUSTED` when exceeded.
+
+**Authorization (rules)**
+- CEL rules are enforced by default for trigger read/write; no bypass unless explicitly configured in control plane (not default). If bypass is ever enabled, it must be coupled with strict `allow_paths` narrowing and audited.
+
+**Idempotency & preconditions**
+- `Idempotency-Key` is **required** for write/batch. Dedup key space: `(tenant, triggerId, key)`; repeat returns `409 IDEMPOTENCY_REPLAY` or the first result.
+- CAS/preconditions (optional): `ifMatchVersion`, `ifModifiedSince` guard against blind overwrites; failures return `412 PRECONDITION_FAILED`.
+
+**Additional semantics & defaults**
+- Preconditions/filters: same operator set and semantics as public query filters; any field is allowed (including user fields), e.g., `_version == 7`.
+- Precondition operators: `==, !=, >, >=, <, <=, in, not-in, array-contains` (align with public query); multiple preconditions in an op are ANDed.
+- Patch semantics: identical to public PATCH (partial update; preserves unspecified fields; supports nested field paths as in public API; no special restrictions beyond existing reserved fields).
+- Field restrictions: `set/patch/update` cannot write reserved fields (`_id`, `_path`, `_parent`, `_collection`, `_updated_at`, `_version`, system-only keys); attempts return 400 INVALID_ARGUMENT.
+- Op order & duplicates: in a single `/trigger/write` transaction, multiple ops on the same path are allowed and executed in request order; later ops see effects of earlier ones (no dedup to reduce overhead).
+- Limits: `max_ops`, `max_payload_kb`, default op count/size/limit/timeout are provided via config (not in token unless overridden).
+- Error codes: HTTP status codes are reused; application codes align to the following mapping (stable set):
+  - 400 `INVALID_ARGUMENT`
+  - 401 `UNAUTHENTICATED`
+  - 403 `PERMISSION_DENIED` (includes `RULE_DENY`, `PATH_NOT_ALLOWED`, `INVALID_SCOPE`)
+  - 404 `NOT_FOUND`
+  - 409 `IDEMPOTENCY_REPLAY`
+  - 412 `PRECONDITION_FAILED`
+  - 429 `RESOURCE_EXHAUSTED` (limits, rate, size, ops)
+  - 500 `INTERNAL`
+- Idempotency behavior: replaying the same `Idempotency-Key` returns only the stored outcome (success/failed) without per-op details to minimize storage overhead.
+- Idempotency replay status: a replay returns the same HTTP status and top-level outcome as the first execution (success or failure), but omits per-op detail. If the record expired (TTL), the request is treated as new.
+- Query constraints: `/trigger/query` does not allow cross-collection/collection-group queries; `limit` default and max via config; missing required index returns `MISSING_INDEX` (HTTP 400).
+- Delete preconditions: `delete` supports preconditions; deleting a non-existent doc returns `404 NOT_FOUND`.
+- Idempotency cache: stored in Redis (or equivalent); TTL configured via config (default 8h); stores only outcome (success/failure), not per-op details.
+- Transaction timeout: configurable, default 5s; on timeout the transaction is rolled back and returns timeout error (HTTP 500/408 per implementation).
+- Missing index: `MISSING_INDEX` (HTTP 400) placeholder until index creation flow exists.
+- Array/nested writes: follows public PATCH/UPDATE semantics—nested fields supported; arrays are replaced as whole values (no push/pull/inc operators supported); use full value replacement for array changes. No server-side partial array mutations.
+- Concurrency conflicts: on storage conflict (e.g., CAS/version mismatch without matching precondition), apply a short delay and retry once; if still failing, return `412 PRECONDITION_FAILED` (or storage-specific conflict code).
+- Concurrency retry backoff: default 25ms (configurable) before the single retry.
+- Transaction timeout code: use 408 `REQUEST_TIMEOUT` (preferred) on timeout/rollback; 500 reserved for unexpected server errors.
+- Missing index error shape: `{ "code": "MISSING_INDEX", "message": "Query requires index", "suggestedIndex": { "collection": "...", "fields": [{"path": "data.status", "direction": "asc"}, ...] } }`.
+
+**Error semantics (draft)**
+- `403 PERMISSION_DENIED`: auth failed (`INVALID_SCOPE`, `PATH_NOT_ALLOWED`, token expired).
+- `403 RULE_DENY`: CEL rule denied access.
+- `409 IDEMPOTENCY_REPLAY`: duplicate `Idempotency-Key`.
+- `412 PRECONDITION_FAILED`: CAS/precondition not met.
+- `429 RESOURCE_EXHAUSTED`: rate/size/ops limits exceeded.
+
+**Observability & audit**
+- Metrics tagged by `tenant`, `triggerId`, `scope` (read/write), `result`.
+- Audit log fields: `triggerId`, `tenant`, `paths`, `scopes`, `idempotencyKey`, `result`, `errorCode`.

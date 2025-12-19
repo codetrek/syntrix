@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { getDatabase, startSubAgentSync, SubAgentMessage, SubAgentToolCall, SubAgent } from '../db';
+import { getDatabase, startSubAgentSync, SubAgentMessage, SubAgentToolCall } from '../db';
 
 interface SubAgentInspectorProps {
   chatId: string;

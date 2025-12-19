@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { syncMessages } from '../db';
-import { v4 as uuidv4 } from 'uuid';
+import { generateShortId } from '../utils';
 
 interface MessageInputProps {
   chatId: string;
@@ -18,7 +18,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({ chatId, customSubmit
     } else {
         const collection = await syncMessages(chatId);
         await collection.insert({
-          id: uuidv4(),
+          id: generateShortId(),
           role: 'user',
           content: text,
           createdAt: Date.now()

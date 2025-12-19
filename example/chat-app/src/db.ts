@@ -4,14 +4,21 @@ import { RxDBDevModePlugin } from 'rxdb/plugins/dev-mode';
 import { RxDBUpdatePlugin } from 'rxdb/plugins/update';
 import { RxDBQueryBuilderPlugin } from 'rxdb/plugins/query-builder';
 import { replicateRxCollection } from 'rxdb/plugins/replication';
+import { API_URL, RT_URL } from './constants';
+import { getAuthToken, getUserId, onLogout, fetchWithAuth } from './auth';
 
 addRxPlugin(RxDBDevModePlugin);
 addRxPlugin(RxDBUpdatePlugin);
 addRxPlugin(RxDBQueryBuilderPlugin);
 
-export const API_URL = 'http://localhost:8080';
-export const RT_URL = 'http://localhost:8081';
-export const USER_ID = 'demo-user';
+// Register logout handler
+onLogout(async () => {
+    if (dbPromise) {
+        const db = await dbPromise;
+        await db.destroy();
+        dbPromise = null;
+    }
+});
 
 // --- Schemas ---
 
@@ -181,7 +188,7 @@ const setupReplication = async (collection: RxCollection, remoteCollectionPath: 
         pull: {
             handler: async (checkpoint: any, batchSize: number) => {
                 const updatedAt = checkpoint ? checkpoint.updatedAt : 0;
-                const response = await fetch(`${API_URL}/v1/replication/pull?collection=${encodeURIComponent(remoteCollectionPath)}&checkpoint=${updatedAt}&limit=${batchSize}`);
+                const response = await fetchWithAuth(`${API_URL}/v1/replication/pull?collection=${encodeURIComponent(remoteCollectionPath)}&checkpoint=${updatedAt}&limit=${batchSize}`);
                 const data = await response.json();
                 return {
                     documents: data.documents.map((doc: any) => ({
@@ -213,7 +220,7 @@ const setupReplication = async (collection: RxCollection, remoteCollectionPath: 
                     };
                 });
 
-                const response = await fetch(`${API_URL}/v1/replication/push`, {
+                const response = await fetchWithAuth(`${API_URL}/v1/replication/push`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -255,12 +262,17 @@ const setupReplication = async (collection: RxCollection, remoteCollectionPath: 
 let dbPromise: Promise<MyDatabase> | null = null;
 
 export const getDatabase = async (): Promise<MyDatabase> => {
+    const currentUserId = getUserId();
+    if (!currentUserId) {
+        throw new Error("User not logged in");
+    }
+
     if (dbPromise) {
         return dbPromise;
     }
 
     dbPromise = createRxDatabase<MyDatabaseCollections>({
-        name: 'chatdb_v2', // New DB name to avoid conflicts
+        name: `chatdb_${currentUserId}`, // New DB name to avoid conflicts
         storage: getRxStorageDexie(),
         ignoreDuplicate: true
     }).then(async (db) => {
@@ -270,7 +282,7 @@ export const getDatabase = async (): Promise<MyDatabase> => {
         });
 
         // 2. Start Sync for Chats
-        await setupReplication(db.chats, `users/${USER_ID}/chats`);
+        await setupReplication(db.chats, `users/${currentUserId}/chats`);
 
         return db;
     });
@@ -312,21 +324,27 @@ export const getToolCallsCollection = async (chatId: string): Promise<RxCollecti
 };
 
 export const startChatSync = async (chatId: string) => {
+    const currentUserId = getUserId();
+    if (!currentUserId) throw new Error("Not logged in");
     const collection = await getMessagesCollection(chatId);
-    const remotePath = `users/${USER_ID}/chats/${chatId}/messages`;
+    const remotePath = `users/${currentUserId}/chats/${chatId}/messages`;
     return setupReplication(collection, remotePath);
 };
 
 export const startToolCallSync = async (chatId: string) => {
+    const currentUserId = getUserId();
+    if (!currentUserId) throw new Error("Not logged in");
     const collection = await getToolCallsCollection(chatId);
-    const remotePath = `users/${USER_ID}/chats/${chatId}/toolcall`;
+    const remotePath = `users/${currentUserId}/chats/${chatId}/toolcall`;
     return setupReplication(collection, remotePath);
 };
 
 // Deprecated: Use getMessagesCollection + startChatSync
 export const syncMessages = async (chatId: string): Promise<RxCollection<Message>> => {
+    const currentUserId = getUserId();
+    if (!currentUserId) throw new Error("Not logged in");
     const collection = await getMessagesCollection(chatId);
-    const remotePath = `users/${USER_ID}/chats/${chatId}/messages`;
+    const remotePath = `users/${currentUserId}/chats/${chatId}/messages`;
     // Note: This starts sync but doesn't return the cancel function, so it leaks if used repeatedly.
     // Kept for backward compatibility if needed, but ChatWindow should be updated.
     await setupReplication(collection, remotePath);
