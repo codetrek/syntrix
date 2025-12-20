@@ -168,6 +168,39 @@ func TestAPIIntegration(t *testing.T) {
 	}
 	assert.True(t, found, "Created document should be found in query")
 
+	// 5.5 Scenario: Conditional Update (IfMatch)
+	// Success case
+	ifMatchData := map[string]interface{}{
+		"doc": map[string]interface{}{
+			"age": 44,
+		},
+		"ifMatch": []map[string]interface{}{
+			{"field": "age", "op": "==", "value": 43},
+		},
+	}
+	ifMatchBody, _ := json.Marshal(ifMatchData)
+	req, _ = http.NewRequest("PATCH", fmt.Sprintf("%s/v1/%s/%s", apiURL, collection, docID), bytes.NewBuffer(ifMatchBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = client.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Failure case (Condition not met)
+	ifMatchFailData := map[string]interface{}{
+		"doc": map[string]interface{}{
+			"age": 45,
+		},
+		"ifMatch": []map[string]interface{}{
+			{"field": "age", "op": "==", "value": 999}, // Wrong age
+		},
+	}
+	ifMatchFailBody, _ := json.Marshal(ifMatchFailData)
+	req, _ = http.NewRequest("PATCH", fmt.Sprintf("%s/v1/%s/%s", apiURL, collection, docID), bytes.NewBuffer(ifMatchFailBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = client.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+
 	// 6. Scenario: Delete Document
 	delReq, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/v1/%s/%s", apiURL, collection, docID), nil)
 	resp, err = client.Do(delReq)

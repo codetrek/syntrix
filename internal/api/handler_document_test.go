@@ -136,3 +136,62 @@ func TestHandleDeleteDocument(t *testing.T) {
 
 	assert.Equal(t, http.StatusNoContent, rr.Code)
 }
+
+func TestHandleReplaceDocument_IfMatch(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil)
+
+	doc := &storage.Document{
+		Id:         "hash-1",
+		Fullpath:   "rooms/room-1/messages/msg-1",
+		Collection: "rooms/room-1/messages",
+		Data:       map[string]interface{}{"name": "Bob", "id": "msg-1"},
+		Version:    2,
+	}
+
+	filters := storage.Filters{
+		{Field: "version", Op: "==", Value: float64(1)},
+	}
+
+	mockService.On("ReplaceDocument", mock.Anything, "rooms/room-1/messages/msg-1", "rooms/room-1/messages", mock.Anything, filters).Return(doc, nil)
+
+	body := []byte(`{"doc":{"name": "Bob"}, "ifMatch": [{"field": "version", "op": "==", "value": 1}]}`)
+	req, _ := http.NewRequest("PUT", "/v1/rooms/room-1/messages/msg-1", bytes.NewBuffer(body))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	var resp map[string]interface{}
+	json.Unmarshal(rr.Body.Bytes(), &resp)
+	assert.Equal(t, "Bob", resp["name"])
+}
+
+func TestHandlePatchDocument_IfMatch(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil)
+
+	doc := &storage.Document{
+		Id:         "rooms/room-1/messages/msg-1",
+		Collection: "rooms/room-1/messages",
+		Data:       map[string]interface{}{"name": "Alice", "status": "read", "id": "msg-1"},
+		Version:    2,
+	}
+
+	filters := storage.Filters{
+		{Field: "status", Op: "==", Value: "unread"},
+	}
+
+	mockService.On("PatchDocument", mock.Anything, "rooms/room-1/messages/msg-1", mock.Anything, filters).Return(doc, nil)
+
+	body := []byte(`{"doc":{"status": "read"}, "ifMatch": [{"field": "status", "op": "==", "value": "unread"}]}`)
+	req, _ := http.NewRequest("PATCH", "/v1/rooms/room-1/messages/msg-1", bytes.NewBuffer(body))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	var resp map[string]interface{}
+	json.Unmarshal(rr.Body.Bytes(), &resp)
+	assert.Equal(t, "read", resp["status"])
+}

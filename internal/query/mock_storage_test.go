@@ -30,6 +30,11 @@ func (m *MockStorageBackend) Update(ctx context.Context, path string, data map[s
 	return args.Error(0)
 }
 
+func (m *MockStorageBackend) Patch(ctx context.Context, path string, data map[string]interface{}, pred storage.Filters) error {
+	args := m.Called(ctx, path, data, pred)
+	return args.Error(0)
+}
+
 func (m *MockStorageBackend) Delete(ctx context.Context, path string) error {
 	args := m.Called(ctx, path)
 	return args.Error(0)

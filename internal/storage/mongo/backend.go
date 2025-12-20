@@ -111,6 +111,43 @@ func (m *MongoBackend) Update(ctx context.Context, path string, data map[string]
 	return nil
 }
 
+func (m *MongoBackend) Patch(ctx context.Context, path string, data map[string]interface{}, precond storage.Filters) error {
+	collection := m.getCollection(path)
+	id := storage.CalculateID(path)
+
+	filter := makeFilterBSON(precond)
+	filter["_id"] = id
+
+	updates := bson.M{
+		"updated_at": time.Now().UnixMilli(),
+	}
+	for k, v := range data {
+		updates["data."+k] = v
+	}
+
+	update := bson.M{
+		"$set": updates,
+		"$inc": bson.M{
+			"version": 1,
+		},
+	}
+
+	result, err := collection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return err
+	}
+
+	if result.MatchedCount == 0 {
+		count, _ := collection.CountDocuments(ctx, bson.M{"_id": id})
+		if count == 0 {
+			return storage.ErrNotFound
+		}
+		return storage.ErrVersionConflict
+	}
+
+	return nil
+}
+
 func (m *MongoBackend) Delete(ctx context.Context, path string) error {
 	collection := m.getCollection(path)
 	id := storage.CalculateID(path)

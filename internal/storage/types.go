@@ -63,6 +63,10 @@ type StorageBackend interface {
 	// If pred is provided, it performs a CAS (Compare-And-Swap) operation.
 	Update(ctx context.Context, path string, data map[string]interface{}, pred Filters) error
 
+	// Patch updates specific fields of an existing document.
+	// If pred is provided, it performs a CAS (Compare-And-Swap) operation.
+	Patch(ctx context.Context, path string, data map[string]interface{}, pred Filters) error
+
 	// Delete removes a document by its path
 	Delete(ctx context.Context, path string) error
 

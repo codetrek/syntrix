@@ -67,33 +67,10 @@ func (e *Engine) ReplaceDocument(
 
 // PatchDocument updates specific fields of a document (Merge + CAS).
 func (e *Engine) PatchDocument(ctx context.Context, fullpath string, data map[string]interface{}, pred storage.Filters) (*storage.Document, error) {
-	for {
-		existing, err := e.storage.Get(ctx, fullpath)
-		if err != nil {
-			return nil, err
-		}
-
-		// Merge data
-		mergedData := existing.Data
-		if mergedData == nil {
-			mergedData = make(map[string]interface{})
-		}
-		for k, v := range data {
-			mergedData[k] = v
-		}
-
-		// Try Update with CAS
-		err = e.storage.Update(ctx, fullpath, mergedData, pred)
-		if err == nil {
-			// Success, fetch latest to return
-			return e.storage.Get(ctx, fullpath)
-		}
-
-		if err != storage.ErrVersionConflict {
-			return nil, err
-		}
-		// If VersionConflict, retry loop
+	if err := e.storage.Patch(ctx, fullpath, data, pred); err != nil {
+		return nil, err
 	}
+	return e.storage.Get(ctx, fullpath)
 }
 
 // DeleteDocument deletes a document.

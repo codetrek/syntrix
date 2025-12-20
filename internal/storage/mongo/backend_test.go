@@ -89,6 +89,54 @@ func TestMongoBackend_CRUD(t *testing.T) {
 	assert.ErrorIs(t, err, storage.ErrNotFound)
 }
 
+func TestMongoBackend_Update_IfMatch(t *testing.T) {
+	backend := setupTestBackend(t)
+	defer backend.Close(context.Background())
+
+	ctx := context.Background()
+	docPath := "users/ifmatch"
+
+	// 1. Create
+	doc := storage.NewDocument(docPath, "users", map[string]interface{}{
+		"status": "active",
+		"score":  100,
+	})
+	err := backend.Create(ctx, doc)
+	require.NoError(t, err)
+
+	// 2. Update with matching filter (status == active)
+	newData := map[string]interface{}{
+		"status": "inactive",
+		"score":  100,
+	}
+	filters := storage.Filters{
+		{Field: "status", Op: "==", Value: "active"},
+	}
+	err = backend.Update(ctx, docPath, newData, filters)
+	require.NoError(t, err)
+
+	// Verify Update
+	fetchedDoc, err := backend.Get(ctx, docPath)
+	require.NoError(t, err)
+	assert.Equal(t, "inactive", fetchedDoc.Data["status"])
+
+	// 3. Update with non-matching filter (score > 200)
+	newData2 := map[string]interface{}{
+		"status": "banned",
+		"score":  100,
+	}
+	filters2 := storage.Filters{
+		{Field: "score", Op: ">", Value: 200},
+	}
+	err = backend.Update(ctx, docPath, newData2, filters2)
+	assert.ErrorIs(t, err, storage.ErrVersionConflict)
+
+	// Verify No Update
+	fetchedDoc, err = backend.Get(ctx, docPath)
+	require.NoError(t, err)
+	assert.Equal(t, "inactive", fetchedDoc.Data["status"])
+}
+
 func TestMongoBackend_CreateDuplicate(t *testing.T) {
 	backend := setupTestBackend(t)
 	defer backend.Close(context.Background())
@@ -111,4 +159,53 @@ func TestMongoBackend_GetNotFound(t *testing.T) {
 	ctx := context.Background()
 	_, err := backend.Get(ctx, "non/existent")
 	assert.ErrorIs(t, err, storage.ErrNotFound)
+}
+
+func TestMongoBackend_Patch(t *testing.T) {
+	backend := setupTestBackend(t)
+	defer backend.Close(context.Background())
+
+	ctx := context.Background()
+	docPath := "users/patchuser"
+
+	// Create initial document
+	doc := storage.NewDocument(docPath, "users", map[string]interface{}{
+		"name": "Original Name",
+		"info": map[string]interface{}{
+			"age":  30,
+			"city": "New York",
+		},
+	})
+	err := backend.Create(ctx, doc)
+	require.NoError(t, err)
+
+	// Patch top-level field
+	patchData := map[string]interface{}{
+		"name": "Patched Name",
+	}
+	err = backend.Patch(ctx, docPath, patchData, storage.Filters{})
+	require.NoError(t, err)
+
+	fetched, err := backend.Get(ctx, docPath)
+	require.NoError(t, err)
+	assert.Equal(t, "Patched Name", fetched.Data["name"])
+
+	// Ensure other fields are preserved
+	info, ok := fetched.Data["info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.EqualValues(t, 30, info["age"])
+
+	// Patch nested field using dot notation in key
+	patchData2 := map[string]interface{}{
+		"info.age": 31,
+	}
+	err = backend.Patch(ctx, docPath, patchData2, storage.Filters{})
+	require.NoError(t, err)
+
+	fetched2, err := backend.Get(ctx, docPath)
+	require.NoError(t, err)
+	info2, ok := fetched2.Data["info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.EqualValues(t, 31, info2["age"])
+	assert.Equal(t, "New York", info2["city"])
 }
