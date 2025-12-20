@@ -18,4 +18,5 @@ type Service interface {
 	WatchCollection(ctx context.Context, collection string) (<-chan storage.Event, error)
 	Pull(ctx context.Context, req storage.ReplicationPullRequest) (*storage.ReplicationPullResponse, error)
 	Push(ctx context.Context, req storage.ReplicationPushRequest) (*storage.ReplicationPushResponse, error)
+	RunTransaction(ctx context.Context, fn func(ctx context.Context, tx Service) error) error
 }

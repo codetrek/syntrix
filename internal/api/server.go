@@ -51,6 +51,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/replication/pull", s.protected(s.handlePull))
 	s.mux.HandleFunc("POST /v1/replication/push", s.protected(s.handlePush))
 
+	// Trigger Internal Operations
+	s.mux.HandleFunc("POST /v1/trigger/get", s.protected(s.handleTriggerGet))
+	s.mux.HandleFunc("POST /v1/trigger/query", s.protected(s.handleQuery))
+	s.mux.HandleFunc("POST /v1/trigger/write", s.protected(s.handleTriggerWrite))
+
 	// Auth Operations
 	if s.auth != nil {
 		s.mux.HandleFunc("POST /v1/auth/login", s.handleLogin)

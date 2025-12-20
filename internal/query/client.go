@@ -231,6 +231,10 @@ func (c *Client) Push(ctx context.Context, req storage.ReplicationPushRequest) (
 	return &result, nil
 }
 
+func (c *Client) RunTransaction(ctx context.Context, fn func(ctx context.Context, tx Service) error) error {
+	return fmt.Errorf("remote transactions not supported")
+}
+
 func (c *Client) post(ctx context.Context, endpoint string, body interface{}) (*http.Response, error) {
 	jsonData, err := json.Marshal(body)
 	if err != nil {

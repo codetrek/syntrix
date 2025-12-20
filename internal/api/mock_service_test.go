@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"syntrix/internal/common"
+	"syntrix/internal/query"
 	"syntrix/internal/storage"
 
 	"github.com/stretchr/testify/mock"
@@ -77,4 +78,11 @@ func (m *MockQueryService) Push(ctx context.Context, req storage.ReplicationPush
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*storage.ReplicationPushResponse), args.Error(1)
+}
+
+func (m *MockQueryService) RunTransaction(ctx context.Context, fn func(ctx context.Context, tx query.Service) error) error {
+	// For mocks, we can just execute the function immediately with the mock itself (m)
+	// or a new mock if we want to verify transaction isolation.
+	// For simplicity, let's just run it with 'm'.
+	return fn(ctx, m)
 }

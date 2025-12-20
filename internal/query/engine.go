@@ -249,3 +249,15 @@ func (e *Engine) Push(ctx context.Context, req storage.ReplicationPushRequest) (
 		Conflicts: conflicts,
 	}, nil
 }
+
+// RunTransaction executes a function within a transaction.
+func (e *Engine) RunTransaction(ctx context.Context, fn func(ctx context.Context, tx Service) error) error {
+	return e.storage.Transaction(ctx, func(txCtx context.Context, txStorage storage.StorageBackend) error {
+		txEngine := &Engine{
+			storage: txStorage,
+			cspURL:  e.cspURL,
+			client:  e.client,
+		}
+		return fn(txCtx, txEngine)
+	})
+}

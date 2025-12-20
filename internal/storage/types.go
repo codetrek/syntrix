@@ -77,6 +77,10 @@ type StorageBackend interface {
 	// resumeToken can be nil to start from now.
 	Watch(ctx context.Context, collection string, resumeToken interface{}, opts WatchOptions) (<-chan Event, error)
 
+	// Transaction executes a function within a transaction.
+	// The function receives a StorageBackend that is bound to the transaction.
+	Transaction(ctx context.Context, fn func(ctx context.Context, tx StorageBackend) error) error
+
 	// Close closes the connection to the backend
 	Close(ctx context.Context) error
 }

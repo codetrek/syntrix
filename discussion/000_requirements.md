@@ -18,7 +18,9 @@
 - **CRUD**: Create, Read, Update, Delete documents.
 - **Complex Queries**: Support filtering, sorting, and pagination (e.g., "Get last 50 messages in collection `rooms/room-X/messages` where timestamp < Y").
 - **Batch Operations**: Bulk insert/update/delete (e.g., "Mark all messages as read").
-- **No Transactions**: Single-document atomicity is sufficient; multi-document transactions are **NOT** required.
+- **Transactions**:
+  - **Public API**: Multi-document transactions are **NOT** required. Single-document atomicity is sufficient.
+  - **Internal Trigger API**: Multi-document transactions **ARE** required for the `/v1/trigger/write` endpoint to ensure atomic side-effects.
 
 ### 2.2 Realtime
 - **Latency**: Target **< 200ms** for message delivery (server processing time).
@@ -56,7 +58,9 @@
   - **Prod**: Kubernetes (K8s).
 
 ## 5. Implications on Design
-1.  **No Transactions**: Simplifies the storage layer significantly. We don't need complex 2PC or Saga patterns.
+1.  **Limited Transactions**:
+    - Public API remains non-transactional to simplify scaling.
+    - Internal Trigger API requires a transactional storage interface (e.g., MongoDB Transactions) to support atomic side-effects.
 2.  **Chat Scenario**:
     - **Write Heavy**: Storage engine must handle high write throughput.
     - **Append Only**: Messages are mostly immutable (except edits/deletes).

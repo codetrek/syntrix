@@ -40,6 +40,9 @@ func (m *MockQueryService) Pull(ctx context.Context, req storage.ReplicationPull
 func (m *MockQueryService) Push(ctx context.Context, req storage.ReplicationPushRequest) (*storage.ReplicationPushResponse, error) {
 	return nil, nil
 }
+func (m *MockQueryService) RunTransaction(ctx context.Context, fn func(ctx context.Context, tx query.Service) error) error {
+	return fn(ctx, m)
+}
 
 func TestServer_Routing(t *testing.T) {
 	qs := &MockQueryService{}

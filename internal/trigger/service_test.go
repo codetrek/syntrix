@@ -135,6 +135,10 @@ func (m *MockStorageBackend) Watch(ctx context.Context, collection string, resum
 	return args.Get(0).(<-chan storage.Event), args.Error(1)
 }
 
+func (m *MockStorageBackend) Transaction(ctx context.Context, fn func(ctx context.Context, tx storage.StorageBackend) error) error {
+	return fn(ctx, m)
+}
+
 func (m *MockStorageBackend) Close(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)

@@ -286,3 +286,18 @@ func (m *MongoBackend) Watch(ctx context.Context, collectionName string, resumeT
 func (m *MongoBackend) Close(ctx context.Context) error {
 	return m.client.Disconnect(ctx)
 }
+
+func (m *MongoBackend) Transaction(ctx context.Context, fn func(ctx context.Context, tx storage.StorageBackend) error) error {
+	session, err := m.client.StartSession()
+	if err != nil {
+		return err
+	}
+	defer session.EndSession(ctx)
+
+	callback := func(sessCtx mongo.SessionContext) (interface{}, error) {
+		return nil, fn(sessCtx, m)
+	}
+
+	_, err = session.WithTransaction(ctx, callback)
+	return err
+}
