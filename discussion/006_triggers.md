@@ -98,6 +98,17 @@ Header: `X-Syntrix-Signature: t=1697041234,v1=hex(hmac_sha256(secret, t + "." + 
 - `/trigger/get`
   - Request: `{ "paths": ["/rooms/room-123/messages/msg-9", ...] }` (paths required, non-empty)
   - Response: `{ "documents": [{"id": "...", "collection": "...", "version": 7, "updated_at": 123, "<user_fields>": "..."}, ...] }`
+
+## 8) Trigger Authentication Implementation
+**Mechanism**: System Tokens (JWT)
+- The Trigger Worker authenticates using a "System Token" signed by the same private key as user tokens.
+- **Claims**:
+  - `sub`: `system:trigger-worker`
+  - `roles`: `["system", "service:trigger-worker"]`
+- **Validation**:
+  - Standard JWT signature validation.
+  - Middleware checks for `system` role for `/v1/trigger/*` endpoints.
+  - Regular user tokens (without `system` role) are rejected with 403 Forbidden.
     - Order matches input `paths`.
     - Missing doc returns a placeholder `{ "path": "<input>", "missing": true }` (HTTP 200 overall); if caller prefers hard fail, use `/trigger/query` with filters.
 - `/trigger/query`

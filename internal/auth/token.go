@@ -85,6 +85,26 @@ func (s *TokenService) GenerateTokenPair(user *User) (*TokenPair, error) {
 	}, nil
 }
 
+func (s *TokenService) GenerateSystemToken(serviceName string) (string, error) {
+	now := time.Now()
+	jti := uuid.New().String()
+
+	claims := Claims{
+		Username: "system:" + serviceName,
+		Roles:    []string{"system", "service:" + serviceName},
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   "system:" + serviceName,
+			ExpiresAt: jwt.NewNumericDate(now.Add(s.accessTTL)),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+			ID:        jti,
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	return token.SignedString(s.privateKey)
+}
+
 func (s *TokenService) ValidateToken(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {

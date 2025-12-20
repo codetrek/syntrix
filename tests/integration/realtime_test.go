@@ -10,12 +10,70 @@ import (
 	"testing"
 	"time"
 
-	"syntrix/internal/realtime"
-	"syntrix/internal/storage"
-
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+)
+
+// Define local types to avoid importing internal packages (Black Box Testing)
+type BaseMessage struct {
+	ID      string          `json:"id,omitempty"`
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+type AuthPayload struct {
+	Token string `json:"token"`
+}
+
+type SubscribePayload struct {
+	Query        Query `json:"query"`
+	IncludeData  bool  `json:"includeData"`
+	SendSnapshot bool  `json:"sendSnapshot"`
+}
+
+type Query struct {
+	Collection string   `json:"collection"`
+	Filters    []Filter `json:"filters,omitempty"`
+}
+
+type Filter struct {
+	Field string      `json:"field"`
+	Op    string      `json:"op"`
+	Value interface{} `json:"value"`
+}
+
+type UnsubscribePayload struct {
+	ID string `json:"id"`
+}
+
+type EventPayload struct {
+	SubID string      `json:"subId"`
+	Delta PublicEvent `json:"delta"`
+}
+
+type PublicEvent struct {
+	Type     string                 `json:"type"` // "create", "update", "delete"
+	Document map[string]interface{} `json:"document,omitempty"`
+	Path     string                 `json:"path"`
+}
+
+type SnapshotPayload struct {
+	Documents []map[string]interface{} `json:"documents"`
+}
+
+const (
+	TypeAuth           = "auth"
+	TypeAuthAck        = "auth_ack"
+	TypeSubscribe      = "subscribe"
+	TypeSubscribeAck   = "subscribe_ack"
+	TypeUnsubscribe    = "unsubscribe"
+	TypeUnsubscribeAck = "unsubscribe_ack"
+	TypeEvent          = "event"
+	TypeSnapshot       = "snapshot"
+	TypeError          = "error"
+
+	EventCreate = "create"
 )
 
 func TestRealtime_FullFlow(t *testing.T) {
@@ -31,10 +89,10 @@ func TestRealtime_FullFlow(t *testing.T) {
 	defer ws.Close()
 
 	// 1. Authenticate
-	authMsg := realtime.BaseMessage{
+	authMsg := BaseMessage{
 		ID:   "auth-1",
-		Type: realtime.TypeAuth,
-		Payload: mustMarshal(realtime.AuthPayload{
+		Type: TypeAuth,
+		Payload: mustMarshal(AuthPayload{
 			Token: "dummy-token",
 		}),
 	}
@@ -42,20 +100,20 @@ func TestRealtime_FullFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read Auth Ack
-	var ackMsg realtime.BaseMessage
+	var ackMsg BaseMessage
 	err = ws.ReadJSON(&ackMsg)
 	require.NoError(t, err)
-	assert.Equal(t, realtime.TypeAuthAck, ackMsg.Type)
+	assert.Equal(t, TypeAuthAck, ackMsg.Type)
 	assert.Equal(t, "auth-1", ackMsg.ID)
 
 	// 2. Subscribe
 	collectionName := "realtime_test_col"
 	subID := "sub-1"
-	subMsg := realtime.BaseMessage{
+	subMsg := BaseMessage{
 		ID:   subID,
-		Type: realtime.TypeSubscribe,
-		Payload: mustMarshal(realtime.SubscribePayload{
-			Query: storage.Query{
+		Type: TypeSubscribe,
+		Payload: mustMarshal(SubscribePayload{
+			Query: Query{
 				Collection: collectionName,
 			},
 			IncludeData: true,
@@ -69,10 +127,10 @@ func TestRealtime_FullFlow(t *testing.T) {
 
 	// 2.5 Receive Subscribe Ack
 	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
-	var subAckMsg realtime.BaseMessage
+	var subAckMsg BaseMessage
 	err = ws.ReadJSON(&subAckMsg)
 	require.NoError(t, err, "Should receive subscribe ack")
-	assert.Equal(t, realtime.TypeSubscribeAck, subAckMsg.Type)
+	assert.Equal(t, TypeSubscribeAck, subAckMsg.Type)
 	assert.Equal(t, subID, subAckMsg.ID)
 
 	// 3. Trigger Event (Create Document via API Gateway)
@@ -87,27 +145,27 @@ func TestRealtime_FullFlow(t *testing.T) {
 
 	// 4. Receive Event
 	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
-	var eventMsg realtime.BaseMessage
+	var eventMsg BaseMessage
 	err = ws.ReadJSON(&eventMsg)
 	require.NoError(t, err, "Should receive event message")
 
-	assert.Equal(t, realtime.TypeEvent, eventMsg.Type)
+	assert.Equal(t, TypeEvent, eventMsg.Type)
 
-	var eventPayload realtime.EventPayload
+	var eventPayload EventPayload
 	err = json.Unmarshal(eventMsg.Payload, &eventPayload)
 	require.NoError(t, err)
 
 	assert.Equal(t, subID, eventPayload.SubID)
-	assert.Equal(t, storage.EventCreate, eventPayload.Delta.Type)
+	assert.Equal(t, EventCreate, eventPayload.Delta.Type)
 	// Path is not in flattened document, but it is in Delta.Path
 	// assert.Equal(t, collectionName, eventPayload.Delta.Document.Collection)
 	assert.Equal(t, "hello realtime", eventPayload.Delta.Document["msg"])
 
 	// 5. Unsubscribe
-	unsubMsg := realtime.BaseMessage{
+	unsubMsg := BaseMessage{
 		ID:   "unsub-1",
-		Type: realtime.TypeUnsubscribe,
-		Payload: mustMarshal(realtime.UnsubscribePayload{
+		Type: TypeUnsubscribe,
+		Payload: mustMarshal(UnsubscribePayload{
 			ID: subID,
 		}),
 	}
@@ -115,10 +173,10 @@ func TestRealtime_FullFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read Unsubscribe Ack
-	var unsubAckMsg realtime.BaseMessage
+	var unsubAckMsg BaseMessage
 	err = ws.ReadJSON(&unsubAckMsg)
 	require.NoError(t, err)
-	assert.Equal(t, realtime.TypeUnsubscribeAck, unsubAckMsg.Type)
+	assert.Equal(t, TypeUnsubscribeAck, unsubAckMsg.Type)
 	assert.Equal(t, "unsub-1", unsubAckMsg.ID)
 
 	// Wait a bit
@@ -197,10 +255,10 @@ func TestRealtime_SSE(t *testing.T) {
 				dataStr := strings.TrimPrefix(line, "data: ")
 				dataStr = strings.TrimSpace(dataStr)
 
-				var msg realtime.BaseMessage
+				var msg BaseMessage
 				err = json.Unmarshal([]byte(dataStr), &msg)
-				if err == nil && msg.Type == realtime.TypeEvent {
-					var eventPayload realtime.EventPayload
+				if err == nil && msg.Type == TypeEvent {
+					var eventPayload EventPayload
 					if err := json.Unmarshal(msg.Payload, &eventPayload); err == nil {
 						if val, ok := eventPayload.Delta.Document["msg"]; ok && val == "hello sse" {
 							done <- true
@@ -244,14 +302,14 @@ func TestRealtime_Stream(t *testing.T) {
 
 	// 2. Send Subscribe Request with Snapshot
 	streamID := "stream-1"
-	subPayload := realtime.SubscribePayload{
-		Query:        storage.Query{Collection: collectionName},
+	subPayload := SubscribePayload{
+		Query:        Query{Collection: collectionName},
 		IncludeData:  true,
 		SendSnapshot: true,
 	}
-	subMsg := realtime.BaseMessage{
+	subMsg := BaseMessage{
 		ID:      streamID,
-		Type:    realtime.TypeSubscribe,
+		Type:    TypeSubscribe,
 		Payload: mustMarshal(subPayload),
 	}
 	err = ws.WriteJSON(subMsg)
@@ -260,12 +318,12 @@ func TestRealtime_Stream(t *testing.T) {
 	// 3. Expect Snapshot with existing document
 	var receivedSnapshot bool
 	for i := 0; i < 5; i++ {
-		var msg realtime.BaseMessage
+		var msg BaseMessage
 		err := ws.ReadJSON(&msg)
 		require.NoError(t, err)
 
-		if msg.Type == realtime.TypeSnapshot && msg.ID == streamID {
-			var payload realtime.SnapshotPayload
+		if msg.Type == TypeSnapshot && msg.ID == streamID {
+			var payload SnapshotPayload
 			err := json.Unmarshal(msg.Payload, &payload)
 			require.NoError(t, err)
 
@@ -290,12 +348,12 @@ func TestRealtime_Stream(t *testing.T) {
 	// 5. Expect Event
 	var receivedEvent bool
 	for i := 0; i < 5; i++ {
-		var msg realtime.BaseMessage
+		var msg BaseMessage
 		err := ws.ReadJSON(&msg)
 		require.NoError(t, err)
 
-		if msg.Type == realtime.TypeEvent {
-			var payload realtime.EventPayload
+		if msg.Type == TypeEvent {
+			var payload EventPayload
 			err := json.Unmarshal(msg.Payload, &payload)
 			require.NoError(t, err)
 
@@ -329,10 +387,10 @@ func TestRealtime_Filtering(t *testing.T) {
 	defer ws.Close()
 
 	// 1. Authenticate
-	authMsg := realtime.BaseMessage{
+	authMsg := BaseMessage{
 		ID:   "auth-1",
-		Type: realtime.TypeAuth,
-		Payload: mustMarshal(realtime.AuthPayload{
+		Type: TypeAuth,
+		Payload: mustMarshal(AuthPayload{
 			Token: "dummy-token",
 		}),
 	}
@@ -340,21 +398,21 @@ func TestRealtime_Filtering(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read Auth Ack
-	var ackMsg realtime.BaseMessage
+	var ackMsg BaseMessage
 	err = ws.ReadJSON(&ackMsg)
 	require.NoError(t, err)
-	assert.Equal(t, realtime.TypeAuthAck, ackMsg.Type)
+	assert.Equal(t, TypeAuthAck, ackMsg.Type)
 
 	// 2. Subscribe with Filter (age > 20)
 	collectionName := "realtime_filter_test"
 	subID := "sub-filter"
-	subMsg := realtime.BaseMessage{
+	subMsg := BaseMessage{
 		ID:   subID,
-		Type: realtime.TypeSubscribe,
-		Payload: mustMarshal(realtime.SubscribePayload{
-			Query: storage.Query{
+		Type: TypeSubscribe,
+		Payload: mustMarshal(SubscribePayload{
+			Query: Query{
 				Collection: collectionName,
-				Filters: []storage.Filter{
+				Filters: []Filter{
 					{Field: "age", Op: ">", Value: 20},
 				},
 			},
@@ -365,10 +423,10 @@ func TestRealtime_Filtering(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read Subscribe Ack
-	var subAckMsg realtime.BaseMessage
+	var subAckMsg BaseMessage
 	err = ws.ReadJSON(&subAckMsg)
 	require.NoError(t, err)
-	assert.Equal(t, realtime.TypeSubscribeAck, subAckMsg.Type)
+	assert.Equal(t, TypeSubscribeAck, subAckMsg.Type)
 
 	// 3. Create Non-Matching Document (age = 18)
 	docNoMatch := map[string]interface{}{
@@ -383,12 +441,12 @@ func TestRealtime_Filtering(t *testing.T) {
 
 	// Verify NO event received (wait a bit)
 	ws.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-	var unexpectedMsg realtime.BaseMessage
+	var unexpectedMsg BaseMessage
 	err = ws.ReadJSON(&unexpectedMsg)
 	if err == nil {
 		// If we received a message, check if it's an event for our subscription
-		if unexpectedMsg.Type == realtime.TypeEvent {
-			var payload realtime.EventPayload
+		if unexpectedMsg.Type == TypeEvent {
+			var payload EventPayload
 			json.Unmarshal(unexpectedMsg.Payload, &payload)
 			if payload.SubID == subID {
 				t.Fatalf("Received event that should have been filtered out: %+v", payload)
@@ -406,24 +464,24 @@ func TestRealtime_Filtering(t *testing.T) {
 	defer ws.Close()
 
 	// Auth again
-	authMsg2 := realtime.BaseMessage{
-		Type:    realtime.TypeAuth,
+	authMsg2 := BaseMessage{
+		Type:    TypeAuth,
 		ID:      "auth-2",
 		Payload: mustMarshal(map[string]string{"token": "dummy-token"}),
 	}
 	err = ws.WriteJSON(authMsg2)
 	require.NoError(t, err)
 	// Read auth ack
-	ws.ReadJSON(&realtime.BaseMessage{})
+	ws.ReadJSON(&BaseMessage{})
 
 	// Subscribe again
-	subMsg2 := realtime.BaseMessage{
+	subMsg2 := BaseMessage{
 		ID:   "sub-filter-2",
-		Type: realtime.TypeSubscribe,
-		Payload: mustMarshal(realtime.SubscribePayload{
-			Query: storage.Query{
+		Type: TypeSubscribe,
+		Payload: mustMarshal(SubscribePayload{
+			Query: Query{
 				Collection: collectionName,
-				Filters: []storage.Filter{
+				Filters: []Filter{
 					{Field: "age", Op: ">", Value: 20},
 				},
 			},
@@ -433,7 +491,7 @@ func TestRealtime_Filtering(t *testing.T) {
 	err = ws.WriteJSON(subMsg2)
 	require.NoError(t, err)
 	// Read sub ack
-	ws.ReadJSON(&realtime.BaseMessage{})
+	ws.ReadJSON(&BaseMessage{})
 
 	// 4. Create Matching Document (age = 25)
 	docMatch := map[string]interface{}{
@@ -449,12 +507,12 @@ func TestRealtime_Filtering(t *testing.T) {
 	// Verify Event Received
 	fmt.Println("Test: Waiting for matching event...")
 	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
-	var eventMsg realtime.BaseMessage
+	var eventMsg BaseMessage
 	err = ws.ReadJSON(&eventMsg)
 	require.NoError(t, err, "Should receive matching event")
-	assert.Equal(t, realtime.TypeEvent, eventMsg.Type)
+	assert.Equal(t, TypeEvent, eventMsg.Type)
 
-	var eventPayload realtime.EventPayload
+	var eventPayload EventPayload
 	err = json.Unmarshal(eventMsg.Payload, &eventPayload)
 	require.NoError(t, err)
 	assert.Equal(t, "sub-filter-2", eventPayload.SubID)

@@ -113,3 +113,28 @@ func TestHandleTriggerQuery(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	mockEngine.AssertExpectations(t)
 }
+
+func TestHandleTriggerWrite_TransactionFailure(t *testing.T) {
+	mockEngine := new(MockQueryService)
+	server := NewServer(mockEngine, nil)
+
+	// Mock RunTransaction to simulate failure
+	// The mock implementation executes the closure.
+	// We need the closure to return an error.
+	// The closure calls tx.CreateDocument. So if tx.CreateDocument returns error, the closure returns error.
+
+	mockEngine.On("CreateDocument", mock.Anything, mock.Anything).Return(assert.AnError)
+
+	reqBody := TriggerWriteRequest{
+		Writes: []TriggerWriteOp{
+			{Type: "create", Path: "users/fail", Data: map[string]interface{}{"name": "Fail"}},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest("POST", "/v1/trigger/write", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}

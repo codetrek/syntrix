@@ -1,4 +1,4 @@
-package integration
+package query_test
 
 import (
 	"context"

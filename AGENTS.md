@@ -24,6 +24,7 @@ IMMEDIATELY STOP and ask user when:
 
 ## 🚫 FORBIDDEN PATTERNS
 - Using unverified parameters from external interfaces (Strict validation required)
+- **Integration Tests**: Direct calls to internal service components (e.g., `query.Engine`, `storage.Backend`) are FORBIDDEN in `tests/integration`. Tests must treat the service as a black box and interact ONLY via public interfaces (HTTP API, etc.).
 
 ## 🔄 DECISION TREE
 Before ANY file creation:

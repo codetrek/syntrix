@@ -12,9 +12,7 @@ import (
 	"time"
 
 	"syntrix/internal/config"
-	"syntrix/internal/query"
 	"syntrix/internal/services"
-	"syntrix/internal/storage"
 	internalmongo "syntrix/internal/storage/mongo"
 
 	"go.mongodb.org/mongo-driver/mongo"
@@ -154,11 +152,20 @@ func TestMicroservices_FullFlow(t *testing.T) {
 	docPath := fmt.Sprintf("%s/%s", collection, docID)
 
 	// 2. Verify via Query Service directly (bypass API Gateway)
-	// We can use the internal client for this
-	qClient := query.NewClient(env.QueryURL)
-	fetchedDoc, err := qClient.GetDocument(context.Background(), docPath)
+	// Call /internal/v1/document/get
+	queryReqBody, _ := json.Marshal(map[string]string{"path": docPath})
+	queryResp, err := client.Post(fmt.Sprintf("%s/internal/v1/document/get", env.QueryURL), "application/json", bytes.NewBuffer(queryReqBody))
 	require.NoError(t, err)
-	assert.Equal(t, storage.CalculateID(docPath), fetchedDoc.Id)
+	require.Equal(t, http.StatusOK, queryResp.StatusCode)
+
+	var fetchedDoc map[string]interface{}
+	err = json.NewDecoder(queryResp.Body).Decode(&fetchedDoc)
+	require.NoError(t, err)
+	queryResp.Body.Close()
+
+	// Check content
+	data := fetchedDoc["data"].(map[string]interface{})
+	assert.Equal(t, "Hello Microservices", data["msg"])
 
 	// 3. Update Document via API Gateway
 	patchData := map[string]interface{}{

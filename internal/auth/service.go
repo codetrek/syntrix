@@ -154,6 +154,10 @@ func (s *AuthService) Logout(ctx context.Context, refreshToken string) error {
 	return s.storage.RevokeTokenImmediate(ctx, claims.ID, claims.ExpiresAt.Time)
 }
 
+func (s *AuthService) GenerateSystemToken(serviceName string) (string, error) {
+	return s.tokenService.GenerateSystemToken(serviceName)
+}
+
 func (s *AuthService) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
@@ -178,6 +182,7 @@ func (s *AuthService) Middleware(next http.Handler) http.Handler {
 		// Add user info to context
 		ctx := context.WithValue(r.Context(), "userID", claims.Subject)
 		ctx = context.WithValue(ctx, "username", claims.Username)
+		ctx = context.WithValue(ctx, "roles", claims.Roles)
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

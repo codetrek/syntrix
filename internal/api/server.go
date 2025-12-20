@@ -52,9 +52,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/replication/push", s.protected(s.handlePush))
 
 	// Trigger Internal Operations
-	s.mux.HandleFunc("POST /v1/trigger/get", s.protected(s.handleTriggerGet))
-	s.mux.HandleFunc("POST /v1/trigger/query", s.protected(s.handleQuery))
-	s.mux.HandleFunc("POST /v1/trigger/write", s.protected(s.handleTriggerWrite))
+	s.mux.HandleFunc("POST /v1/trigger/get", s.triggerProtected(s.handleTriggerGet))
+	s.mux.HandleFunc("POST /v1/trigger/query", s.triggerProtected(s.handleQuery))
+	s.mux.HandleFunc("POST /v1/trigger/write", s.triggerProtected(s.handleTriggerWrite))
 
 	// Auth Operations
 	if s.auth != nil {
@@ -73,5 +73,37 @@ func (s *Server) protected(h http.HandlerFunc) http.HandlerFunc {
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.auth.Middleware(h).ServeHTTP(w, r)
+	}
+}
+
+func (s *Server) triggerProtected(h http.HandlerFunc) http.HandlerFunc {
+	if s.auth == nil {
+		return h
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		// First, run standard auth middleware to validate token
+		s.auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Check roles
+			roles, ok := r.Context().Value("roles").([]string)
+			if !ok {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+
+			isSystem := false
+			for _, role := range roles {
+				if role == "system" {
+					isSystem = true
+					break
+				}
+			}
+
+			if !isSystem {
+				http.Error(w, "Forbidden: System access required", http.StatusForbidden)
+				return
+			}
+
+			h(w, r)
+		})).ServeHTTP(w, r)
 	}
 }
