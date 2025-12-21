@@ -42,7 +42,7 @@ func (w *DeliveryWorker) ProcessTask(ctx context.Context, task *DeliveryTask) er
 		if err != nil {
 			return fmt.Errorf("failed to generate system token: %w", err)
 		}
-		task.SystemToken = token
+		task.PreIssuedToken = token
 	}
 
 	payload, err := json.Marshal(task)
@@ -58,9 +58,6 @@ func (w *DeliveryWorker) ProcessTask(ctx context.Context, task *DeliveryTask) er
 	// Add Headers
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Syntrix-Trigger-Service/1.0")
-	if task.SystemToken != "" {
-		req.Header.Set("Authorization", "Bearer "+task.SystemToken)
-	}
 	for k, v := range task.Headers {
 		req.Header.Set(k, v)
 	}

@@ -83,20 +83,20 @@ type RetryPolicy struct {
 
 // DeliveryTask represents the payload sent to the delivery worker via NATS.
 type DeliveryTask struct {
-	TriggerID   string                 `json:"triggerId"`
-	Tenant      string                 `json:"tenant"`
-	Event       string                 `json:"event"`
-	Collection  string                 `json:"collection"`
-	DocKey      string                 `json:"docKey"`
-	LSN         string                 `json:"lsn"`
-	Seq         int64                  `json:"seq"`
-	Before      map[string]interface{} `json:"before,omitempty"`
-	After       map[string]interface{} `json:"after,omitempty"`
-	Timestamp   int64                  `json:"ts"`
-	URL         string                 `json:"url"`
-	Headers     map[string]string      `json:"headers"`
-	SecretsRef  string                 `json:"secretsRef"`
-	RetryPolicy RetryPolicy            `json:"retryPolicy"`
-	Timeout     Duration               `json:"timeout"`
-	SystemToken string                 `json:"systemToken,omitempty"`
+	TriggerID      string                 `json:"triggerId"`
+	Tenant         string                 `json:"tenant"`
+	Event          string                 `json:"event"`
+	Collection     string                 `json:"collection"`
+	DocKey         string                 `json:"docKey"`
+	LSN            string                 `json:"lsn"`
+	Seq            int64                  `json:"seq"`
+	Before         map[string]interface{} `json:"before,omitempty"`
+	After          map[string]interface{} `json:"after,omitempty"`
+	Timestamp      int64                  `json:"ts"`
+	URL            string                 `json:"url"`
+	Headers        map[string]string      `json:"headers"`
+	SecretsRef     string                 `json:"secretsRef"`
+	RetryPolicy    RetryPolicy            `json:"retryPolicy"`
+	Timeout        Duration               `json:"timeout"`
+	PreIssuedToken string                 `json:"preIssuedToken,omitempty"`
 }

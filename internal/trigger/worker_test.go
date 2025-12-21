@@ -83,10 +83,13 @@ func TestDeliveryWorker_ProcessTask_WithToken(t *testing.T) {
 
 	// 2. Setup Mock Server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify Authorization Header
-		authHeader := r.Header.Get("Authorization")
-		assert.NotEmpty(t, authHeader)
-		assert.True(t, strings.HasPrefix(authHeader, "Bearer "))
+
+		task := DeliveryTask{}
+		err := json.NewDecoder(r.Body).Decode(&task)
+		assert.NoError(t, err)
+
+		// Verify Pre-Issued Token
+		assert.NotEmpty(t, task.PreIssuedToken)
 
 		w.WriteHeader(http.StatusOK)
 	}))
