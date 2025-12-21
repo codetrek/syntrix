@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"syntrix/internal/auth"
 	"time"
 )
 
@@ -19,20 +20,31 @@ type Worker interface {
 
 // DeliveryWorker handles the execution of delivery tasks.
 type DeliveryWorker struct {
-	client *http.Client
+	client       *http.Client
+	tokenService *auth.TokenService
 }
 
 // NewDeliveryWorker creates a new DeliveryWorker.
-func NewDeliveryWorker() *DeliveryWorker {
+func NewDeliveryWorker(tokenService *auth.TokenService) *DeliveryWorker {
 	return &DeliveryWorker{
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
+		tokenService: tokenService,
 	}
 }
 
 // ProcessTask executes a single delivery task.
 func (w *DeliveryWorker) ProcessTask(ctx context.Context, task *DeliveryTask) error {
+	// Add System Token
+	if w.tokenService != nil {
+		token, err := w.tokenService.GenerateSystemToken("trigger-worker")
+		if err != nil {
+			return fmt.Errorf("failed to generate system token: %w", err)
+		}
+		task.SystemToken = token
+	}
+
 	payload, err := json.Marshal(task)
 	if err != nil {
 		return fmt.Errorf("failed to marshal task: %w", err)
@@ -46,6 +58,9 @@ func (w *DeliveryWorker) ProcessTask(ctx context.Context, task *DeliveryTask) er
 	// Add Headers
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Syntrix-Trigger-Service/1.0")
+	if task.SystemToken != "" {
+		req.Header.Set("Authorization", "Bearer "+task.SystemToken)
+	}
 	for k, v := range task.Headers {
 		req.Header.Set(k, v)
 	}

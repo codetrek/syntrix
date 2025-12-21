@@ -123,7 +123,7 @@ func TestRealtime_FullFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	// Give some time for subscription to register
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// 2.5 Receive Subscribe Ack
 	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -180,7 +180,7 @@ func TestRealtime_FullFlow(t *testing.T) {
 	assert.Equal(t, "unsub-1", unsubAckMsg.ID)
 
 	// Wait a bit
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// 6. Trigger another event
 	docData2 := map[string]interface{}{
@@ -230,7 +230,7 @@ func TestRealtime_SSE(t *testing.T) {
 	assert.Equal(t, "\n", line)
 
 	// Give some time for subscription to register
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// 2. Trigger Event
 	docData := map[string]interface{}{

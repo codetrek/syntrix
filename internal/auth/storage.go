@@ -167,3 +167,31 @@ func (s *Storage) EnsureIndexes(ctx context.Context) error {
 	})
 	return err
 }
+
+func (s *Storage) ListUsers(ctx context.Context, limit int, offset int) ([]*User, error) {
+	opts := options.Find().SetLimit(int64(limit)).SetSkip(int64(offset))
+	cursor, err := s.userColl.Find(ctx, bson.M{}, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var users []*User
+	if err := cursor.All(ctx, &users); err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+func (s *Storage) UpdateUser(ctx context.Context, user *User) error {
+	filter := bson.M{"_id": user.ID}
+	update := bson.M{
+		"$set": bson.M{
+			"roles":      user.Roles,
+			"disabled":   user.Disabled,
+			"updated_at": time.Now(),
+		},
+	}
+	_, err := s.userColl.UpdateOne(ctx, filter, update)
+	return err
+}

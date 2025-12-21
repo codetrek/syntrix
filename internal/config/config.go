@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -59,6 +60,7 @@ type AuthConfig struct {
 	RefreshTokenTTL time.Duration `yaml:"refresh_token_ttl"`
 	AuthCodeTTL     time.Duration `yaml:"auth_code_ttl"`
 	RulesFile       string        `yaml:"rules_file"`
+	PrivateKeyFile  string        `yaml:"private_key_file"`
 }
 
 // LoadConfig loads configuration from files and environment variables
@@ -78,6 +80,7 @@ func LoadConfig() *Config {
 			RefreshTokenTTL: 7 * 24 * time.Hour,
 			AuthCodeTTL:     2 * time.Minute,
 			RulesFile:       "security.yaml",
+			PrivateKeyFile:  "keys/auth_private.pem",
 		},
 		API: APIConfig{
 			Port:            8080,
@@ -102,10 +105,10 @@ func LoadConfig() *Config {
 	}
 
 	// 2. Load config.yml
-	loadFile("config.yml", cfg)
+	loadFile("config/config.yml", cfg)
 
 	// 3. Load config.local.yml
-	loadFile("config.local.yml", cfg)
+	loadFile("config/config.local.yml", cfg)
 
 	// 4. Override with Env Vars
 	if val := os.Getenv("API_PORT"); val != "" {
@@ -155,7 +158,27 @@ func LoadConfig() *Config {
 		cfg.Trigger.RulesFile = val
 	}
 
+	// 5. Resolve paths relative to config directory
+	cfg.resolvePaths()
+
 	return cfg
+}
+
+func (c *Config) resolvePaths() {
+	configDir := "config"
+	c.Auth.RulesFile = resolvePath(configDir, c.Auth.RulesFile)
+	c.Auth.PrivateKeyFile = resolvePath(configDir, c.Auth.PrivateKeyFile)
+	c.Trigger.RulesFile = resolvePath(configDir, c.Trigger.RulesFile)
+}
+
+func resolvePath(base, path string) string {
+	if path == "" {
+		return ""
+	}
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(base, path)
 }
 
 func loadFile(filename string, cfg *Config) {

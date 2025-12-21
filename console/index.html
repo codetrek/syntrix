@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Syntrix Console</title>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 0; background: #f4f4f4; }
+        header { background: #333; color: #fff; padding: 1rem; display: flex; justify-content: space-between; align-items: center; }
+        header h1 { margin: 0; font-size: 1.2rem; }
+        nav a { color: #ccc; text-decoration: none; margin-left: 1rem; cursor: pointer; }
+        nav a:hover, nav a.active { color: #fff; }
+        .container { padding: 2rem; max-width: 1200px; margin: 0 auto; }
+        .card { background: #fff; padding: 1.5rem; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 1rem; }
+        .form-group { margin-bottom: 1rem; }
+        label { display: block; margin-bottom: 0.5rem; font-weight: bold; }
+        input, textarea, select { width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+        button { background: #007bff; color: #fff; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        button.secondary { background: #6c757d; }
+        button.secondary:hover { background: #5a6268; }
+        .error { color: #dc3545; margin-top: 0.5rem; }
+        .hidden { display: none; }
+        table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+        th, td { text-align: left; padding: 0.75rem; border-bottom: 1px solid #ddd; }
+        th { background: #f8f9fa; }
+        pre { background: #f8f9fa; padding: 1rem; overflow-x: auto; }
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <!-- Login Screen -->
+    <div id="login-screen" class="container" style="max-width: 400px; margin-top: 5rem;">
+        <div class="card">
+            <h2 style="margin-top: 0;">Sign In</h2>
+            <form id="login-form">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" required>
+                </div>
+                <div id="login-error" class="error hidden"></div>
+                <button type="submit">Sign In</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="main-screen" class="hidden">
+        <header>
+            <h1>Syntrix Console</h1>
+            <nav>
+                <a onclick="app.navigate('dashboard')" id="nav-dashboard">Dashboard</a>
+                <a onclick="app.navigate('profile')" id="nav-profile">Profile</a>
+                <a onclick="app.navigate('admin')" id="nav-admin" class="hidden">Admin</a>
+                <a onclick="app.logout()">Sign Out</a>
+            </nav>
+        </header>
+
+        <div class="container">
+            <!-- Dashboard View -->
+            <div id="view-dashboard" class="view hidden">
+                <div class="card">
+                    <h2>My Data</h2>
+                    <p>Welcome, <span id="user-display-name"></span>!</p>
+                    <div class="form-group">
+                        <label>Collection</label>
+                        <input type="text" id="data-collection" placeholder="e.g. users/me/todos">
+                    </div>
+                    <button onclick="app.loadData()">Load Data</button>
+                    <div id="data-list"></div>
+                </div>
+            </div>
+
+            <!-- Profile View -->
+            <div id="view-profile" class="view hidden">
+                <div class="card">
+                    <h2>Profile</h2>
+                    <pre id="profile-data"></pre>
+                </div>
+            </div>
+
+            <!-- Admin View -->
+            <div id="view-admin" class="view hidden">
+                <div class="card">
+                    <h2>Admin Controls</h2>
+                    <div style="margin-bottom: 1rem;">
+                        <button onclick="app.adminShow('users')">Users</button>
+                        <button onclick="app.adminShow('rules')">Rules</button>
+                    </div>
+
+                    <div id="admin-users" class="hidden">
+                        <h3>Users</h3>
+                        <button onclick="app.loadUsers()">Refresh List</button>
+                        <table id="users-table">
+                            <thead><tr><th>ID</th><th>Username</th><th>Roles</th><th>Status</th><th>Actions</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+
+                    <div id="admin-rules" class="hidden">
+                        <h3>Rules</h3>
+                        <div class="form-group">
+                            <label>Push New Rules (CEL)</label>
+                            <textarea id="rules-content" rows="10"></textarea>
+                        </div>
+                        <button onclick="app.pushRules()">Push Rules</button>
+                        <div id="rules-status" style="margin-top: 1rem;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const API_BASE = '/v1';
+
+const app = {
+    token: null,
+    user: null,
+
+    init() {
+        const storedToken = localStorage.getItem('syntrix_token');
+        if (storedToken) {
+            this.token = storedToken;
+            this.user = JSON.parse(localStorage.getItem('syntrix_user') || '{}');
+            this.showMain();
+        }
+    },
+
+    async login(username, password) {
+        try {
+            const res = await fetch(`${API_BASE}/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+            if (!res.ok) throw new Error(await res.text());
+            const data = await res.json();
+
+            this.token = data.access_token;
+            // Decode token to get user info (simplified)
+            const payload = JSON.parse(atob(this.token.split('.')[1]));
+            this.user = { username: payload.username, roles: payload.roles || [] };
+
+            localStorage.setItem('syntrix_token', this.token);
+            localStorage.setItem('syntrix_user', JSON.stringify(this.user));
+
+            this.showMain();
+        } catch (e) {
+            document.getElementById('login-error').textContent = e.message;
+            document.getElementById('login-error').classList.remove('hidden');
+        }
+    },
+
+    logout() {
+        this.token = null;
+        this.user = null;
+        localStorage.removeItem('syntrix_token');
+        localStorage.removeItem('syntrix_user');
+        document.getElementById('main-screen').classList.add('hidden');
+        document.getElementById('login-screen').classList.remove('hidden');
+    },
+
+    showMain() {
+        document.getElementById('login-screen').classList.add('hidden');
+        document.getElementById('main-screen').classList.remove('hidden');
+        document.getElementById('user-display-name').textContent = this.user.username;
+
+        if (this.user.roles.includes('admin')) {
+            document.getElementById('nav-admin').classList.remove('hidden');
+        }
+
+        this.navigate('dashboard');
+    },
+
+    navigate(view) {
+        document.querySelectorAll('.view').forEach(el => el.classList.add('hidden'));
+        document.querySelectorAll('nav a').forEach(el => el.classList.remove('active'));
+
+        document.getElementById(`view-${view}`).classList.remove('hidden');
+        document.getElementById(`nav-${view}`).classList.add('active');
+
+        if (view === 'profile') this.loadProfile();
+    },
+
+    async request(url, options = {}) {
+        options.headers = options.headers || {};
+        options.headers['Authorization'] = `Bearer ${this.token}`;
+        const res = await fetch(url, options);
+        if (res.status === 401) {
+            this.logout();
+            throw new Error('Session expired');
+        }
+        return res;
+    },
+
+    async loadData() {
+        const collection = document.getElementById('data-collection').value;
+        if (!collection) return;
+
+        // This is a placeholder. Real implementation would query the engine.
+        // For now, let's try to fetch a document if it's a direct path, or query if it's a collection.
+        // Assuming simple GET for now.
+        try {
+            const res = await this.request(`${API_BASE}/${collection}`);
+            if (res.ok) {
+                const data = await res.json();
+                document.getElementById('data-list').innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+            } else {
+                document.getElementById('data-list').textContent = `Error: ${res.statusText}`;
+            }
+        } catch (e) {
+            document.getElementById('data-list').textContent = e.message;
+        }
+    },
+
+    loadProfile() {
+        document.getElementById('profile-data').textContent = JSON.stringify(this.user, null, 2);
+    },
+
+    adminShow(tab) {
+        document.getElementById('admin-users').classList.add('hidden');
+        document.getElementById('admin-rules').classList.add('hidden');
+        document.getElementById(`admin-${tab}`).classList.remove('hidden');
+        if (tab === 'users') this.loadUsers();
+    },
+
+    users: [],
+
+    async loadUsers() {
+        try {
+            const res = await this.request('/admin/users');
+            if (!res.ok) throw new Error(await res.text());
+            this.users = await res.json();
+
+            const tbody = document.querySelector('#users-table tbody');
+            tbody.innerHTML = this.users.map(u => `
+                <tr>
+                    <td>${u.id}</td>
+                    <td>${u.username}</td>
+                    <td>${u.roles.join(', ')}</td>
+                    <td>${u.disabled ? 'Disabled' : 'Active'}</td>
+                    <td>
+                        <button class="secondary" onclick="app.toggleUser('${u.id}', ${!u.disabled})">
+                            ${u.disabled ? 'Enable' : 'Disable'}
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+        } catch (e) {
+            const tbody = document.querySelector('#users-table tbody');
+            tbody.innerHTML = `<tr><td colspan="5" class="error">Error: ${e.message}</td></tr>`;
+        }
+    },
+
+    async toggleUser(id, disabled) {
+        try {
+            const user = this.users.find(u => u.id === id);
+            if (!user) return;
+
+            const res = await this.request(`/admin/users/${id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ disabled, roles: user.roles })
+            });
+            if (!res.ok) throw new Error(await res.text());
+            this.loadUsers();
+        } catch (e) {
+            alert(e.message);
+        }
+    },
+
+    async pushRules() {
+        const rules = document.getElementById('rules-content').value;
+        try {
+            const res = await this.request('/admin/rules/push', {
+                method: 'POST',
+                body: rules
+            });
+            if (!res.ok) throw new Error(await res.text());
+            document.getElementById('rules-status').textContent = 'Rules pushed successfully!';
+            document.getElementById('rules-status').style.color = 'green';
+        } catch (e) {
+            document.getElementById('rules-status').textContent = `Error: ${e.message}`;
+            document.getElementById('rules-status').style.color = 'red';
+        }
+    }
+};
+
+document.getElementById('login-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    app.login(document.getElementById('username').value, document.getElementById('password').value);
+});
+
+app.init();
+</script>
+</body>
+</html>

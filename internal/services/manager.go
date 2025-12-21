@@ -2,9 +2,12 @@ package services
 
 import (
 	"context"
+	"crypto/rsa"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -38,6 +41,7 @@ type Manager struct {
 	serverNames     []string
 	storageBackend  *mongo.MongoBackend
 	authService     *auth.AuthService
+	tokenService    *auth.TokenService
 	rtServer        *realtime.Server
 	triggerConsumer *trigger.Consumer
 	triggerService  *trigger.TriggerService
@@ -50,6 +54,10 @@ func NewManager(cfg *config.Config, opts Options) *Manager {
 		cfg:  cfg,
 		opts: opts,
 	}
+}
+
+func (m *Manager) TokenService() *auth.TokenService {
+	return m.tokenService
 }
 
 func (m *Manager) Init(ctx context.Context) error {
@@ -71,11 +79,41 @@ func (m *Manager) Init(ctx context.Context) error {
 		log.Println("Connected to MongoDB successfully.")
 	}
 
-	// Initialize Auth Service
-	if m.opts.RunAuth {
-		authStorage := auth.NewStorage(m.storageBackend.DB())
+	// Initialize Token Service if needed (Auth or Trigger Worker)
+	if m.opts.RunAuth || m.opts.RunTriggerWorker {
+		// Load or generate private key
+		keyFile := m.cfg.Auth.PrivateKeyFile
+		if keyFile == "" {
+			keyFile = "private.pem"
+		}
 
-		tokenService, err := auth.NewTokenService(
+		var privateKey *rsa.PrivateKey
+		if _, err := os.Stat(keyFile); os.IsNotExist(err) {
+			log.Printf("Generating new private key at %s", keyFile)
+			privateKey, err = auth.GeneratePrivateKey()
+			if err != nil {
+				return fmt.Errorf("failed to generate private key: %w", err)
+			}
+
+			// Ensure directory exists
+			if err := os.MkdirAll(filepath.Dir(keyFile), 0755); err != nil {
+				return fmt.Errorf("failed to create directory for private key: %w", err)
+			}
+
+			if err := auth.SavePrivateKey(keyFile, privateKey); err != nil {
+				return fmt.Errorf("failed to save private key: %w", err)
+			}
+		} else {
+			log.Printf("Loading private key from %s", keyFile)
+			privateKey, err = auth.LoadPrivateKey(keyFile)
+			if err != nil {
+				return fmt.Errorf("failed to load private key: %w", err)
+			}
+		}
+
+		var err error
+		m.tokenService, err = auth.NewTokenService(
+			privateKey,
 			m.cfg.Auth.AccessTokenTTL,
 			m.cfg.Auth.RefreshTokenTTL,
 			m.cfg.Auth.AuthCodeTTL,
@@ -83,7 +121,12 @@ func (m *Manager) Init(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to create token service: %w", err)
 		}
-		m.authService = auth.NewAuthService(authStorage, tokenService)
+	}
+
+	// Initialize Auth Service
+	if m.opts.RunAuth {
+		authStorage := auth.NewStorage(m.storageBackend.DB())
+		m.authService = auth.NewAuthService(authStorage, m.tokenService)
 
 		// Ensure indexes
 		if err := authStorage.EnsureIndexes(ctx); err != nil {
@@ -212,7 +255,7 @@ func (m *Manager) Init(ctx context.Context) error {
 
 		// Initialize Worker Service
 		if m.opts.RunTriggerWorker {
-			worker := trigger.NewDeliveryWorker()
+			worker := trigger.NewDeliveryWorker(m.tokenService)
 			m.triggerConsumer, err = trigger.NewConsumer(nc, worker, m.cfg.Trigger.WorkerCount)
 			if err != nil {
 				return fmt.Errorf("failed to create trigger consumer: %w", err)
@@ -240,7 +283,7 @@ func (m *Manager) Start(bgCtx context.Context) {
 	if m.opts.RunRealtime {
 		go func() {
 			// Give servers a moment to start
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(50 * time.Millisecond)
 
 			maxRetries := 100
 			for i := 0; i < maxRetries; i++ {
@@ -260,7 +303,7 @@ func (m *Manager) Start(bgCtx context.Context) {
 					select {
 					case <-bgCtx.Done():
 						return
-					case <-time.After(100 * time.Millisecond):
+					case <-time.After(50 * time.Millisecond):
 						continue
 					}
 				}

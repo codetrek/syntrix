@@ -46,13 +46,13 @@ func TestReplication_FullFlow(t *testing.T) {
 	assert.Equal(t, ": connected\n", line)
 
 	// Wait for subscription
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// 2. Push a Document
 	docID := "doc-1"
 	docData := map[string]interface{}{
-		"id":       docID,
-		"msg":      "hello replication",
+		"id":      docID,
+		"msg":     "hello replication",
 		"version": float64(0), // New document
 	}
 

@@ -50,11 +50,22 @@ func (m *MockAuthStorage) IsRevoked(ctx context.Context, jti string, gracePeriod
 	args := m.Called(ctx, jti, gracePeriod)
 	return args.Bool(0), args.Error(1)
 }
+func (m *MockAuthStorage) ListUsers(ctx context.Context, limit int, offset int) ([]*auth.User, error) {
+	args := m.Called(ctx, limit, offset)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*auth.User), args.Error(1)
+}
 
+func (m *MockAuthStorage) UpdateUser(ctx context.Context, user *auth.User) error {
+	return m.Called(ctx, user).Error(0)
+}
 func TestTriggerAuth(t *testing.T) {
 	// Setup Auth Service
 	mockStorage := new(MockAuthStorage)
-	tokenService, _ := auth.NewTokenService(time.Hour, time.Hour, time.Minute)
+	key, _ := auth.GeneratePrivateKey()
+	tokenService, _ := auth.NewTokenService(key, time.Hour, time.Hour, time.Minute)
 	authService := auth.NewAuthService(mockStorage, tokenService)
 
 	// Setup Server

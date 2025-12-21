@@ -24,8 +24,6 @@ vendor/
 .env
 
 # Config
-config.yml.local
-config.local.yml
 .vscode/
 *.swp
 *.swo

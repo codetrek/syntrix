@@ -195,3 +195,77 @@ Notes:
 **Observability & audit**
 - Metrics tagged by `tenant`, `triggerId`, `scope` (read/write), `result`.
 - Audit log fields: `triggerId`, `tenant`, `paths`, `scopes`, `idempotencyKey`, `result`, `errorCode`.
+
+## 8) Implementation Details (v1)
+
+### 8.1 Trigger Configuration
+The `Trigger` configuration struct includes the following fields:
+- `triggerId`: Unique identifier.
+- `version`: Config version.
+- `tenant`: Tenant identifier.
+- `collection`: Collection name or glob pattern (e.g., `users/*`).
+- `events`: List of events (`create`, `update`, `delete`).
+- `condition`: CEL expression string.
+- `url`: Webhook destination URL.
+- `headers`: Custom headers map.
+- `secretsRef`: Reference to a secret for signing.
+- `concurrency`: Max concurrent workers.
+- `rateLimit`: Rate limit per second.
+- `includeBefore`: Boolean to include the document state before the change.
+- `retryPolicy`: Struct with `maxAttempts`, `initialBackoff`, `maxBackoff`.
+- `filters`: List of path filters.
+- `timeout`: Request timeout duration (e.g., "5s").
+
+### 8.2 Webhook Payload
+The payload sent to the webhook is a JSON representation of the `DeliveryTask` struct.
+**Note:** Currently, this includes internal delivery details.
+```json
+{
+  "triggerId": "...",
+  "tenant": "...",
+  "event": "...",
+  "collection": "...",
+  "docKey": "...",
+  "lsn": "...",
+  "seq": 123,
+  "before": { ... },
+  "after": { ... },
+  "ts": 1234567890,
+  "url": "...",
+  "headers": { ... },
+  "secretsRef": "...",
+  "retryPolicy": { ... },
+  "timeout": "..."
+}
+```
+
+### 8.3 Headers
+The following headers are sent with the webhook request:
+- `Content-Type`: `application/json`
+- `User-Agent`: `Syntrix-Trigger-Service/1.0`
+- `X-Syntrix-Signature`: `t={timestamp},v1={hex(hmac_sha256(secret, t + "." + body))}`
+- `Authorization`: `Bearer <system-token>` (Internal system token, currently sent to all destinations)
+- Custom headers defined in the trigger configuration.
+
+### 8.4 CEL Evaluation Context
+The CEL environment provides an `event` variable with the following structure:
+- `event.type`: String (`create`, `update`, `delete`)
+- `event.timestamp`: Integer timestamp
+- `event.document`: Map representing the current document state (for `create` and `update`).
+- `event.before`: Map representing the previous document state (if available).
+
+Collection matching uses `path.Match`, supporting shell file name patterns.
+
+### 8.5 Internal API & Security
+The internal trigger endpoints (`/v1/trigger/...`) are protected by a system role check.
+- **Middleware**: `triggerProtected` ensures the caller has `role: system`.
+- **Worker Authentication**: The delivery worker generates a system token (signed with internal key) to authenticate against these endpoints if needed, or to authenticate itself to the webhook destination (current behavior).
+
+### 8.6 Reliability & Checkpointing
+The Trigger Service maintains a checkpoint to ensure at-least-once processing of the change stream.
+- **Storage**: Checkpoints are stored in the `sys` collection under `sys/checkpoints/trigger_evaluator`.
+- **Resume**: On startup, the service loads the last processed resume token.
+- **Update**: The checkpoint is updated after processing each event (synchronously in v1).
+
+### 8.7 System Token in Payload
+The system token is now included in the `DeliveryTask` payload as `systemToken`, instead of being sent as an `Authorization` header. This allows the webhook receiver to parse the token from the JSON body and use it for callbacks.

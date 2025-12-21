@@ -21,6 +21,8 @@ type StorageInterface interface {
 	CreateUser(ctx context.Context, user *User) error
 	GetUserByUsername(ctx context.Context, username string) (*User, error)
 	GetUserByID(ctx context.Context, id string) (*User, error)
+	ListUsers(ctx context.Context, limit int, offset int) ([]*User, error)
+	UpdateUser(ctx context.Context, user *User) error
 	UpdateUserLoginStats(ctx context.Context, id string, lastLogin time.Time, attempts int, lockoutUntil time.Time) error
 	RevokeToken(ctx context.Context, jti string, expiresAt time.Time) error
 	RevokeTokenImmediate(ctx context.Context, jti string, expiresAt time.Time) error
@@ -102,6 +104,13 @@ func (s *AuthService) register(ctx context.Context, req LoginRequest) (*TokenPai
 		UpdatedAt:    time.Now(),
 		Disabled:     false,
 		Roles:        []string{}, // Default roles
+	}
+
+	// Assign admin role to default superuser
+	if user.Username == "syntrix" {
+		user.Roles = append(user.Roles, "admin")
+	} else {
+		user.Roles = append(user.Roles, "user")
 	}
 
 	if err := s.storage.CreateUser(ctx, user); err != nil {
@@ -216,4 +225,19 @@ func (s *AuthService) MiddlewareOptional(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func (s *AuthService) ListUsers(ctx context.Context, limit int, offset int) ([]*User, error) {
+	return s.storage.ListUsers(ctx, limit, offset)
+}
+
+func (s *AuthService) UpdateUser(ctx context.Context, id string, roles []string, disabled bool) error {
+	user, err := s.storage.GetUserByID(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	user.Roles = roles
+	user.Disabled = disabled
+	return s.storage.UpdateUser(ctx, user)
 }

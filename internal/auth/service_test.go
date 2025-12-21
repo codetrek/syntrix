@@ -63,7 +63,8 @@ func (m *MockStorage) EnsureIndexes(ctx context.Context) error {
 
 func TestSignIn_AutoRegister(t *testing.T) {
 	mockStorage := new(MockStorage)
-	tokenService, _ := NewTokenService(15*time.Minute, 7*24*time.Hour, 2*time.Minute)
+	key, _ := GeneratePrivateKey()
+	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
 	authService := NewAuthService(mockStorage, tokenService)
 
 	ctx := context.Background()
@@ -89,7 +90,8 @@ func TestSignIn_AutoRegister(t *testing.T) {
 
 func TestSignIn_Success(t *testing.T) {
 	mockStorage := new(MockStorage)
-	tokenService, _ := NewTokenService(15*time.Minute, 7*24*time.Hour, 2*time.Minute)
+	key, _ := GeneratePrivateKey()
+	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
 	authService := NewAuthService(mockStorage, tokenService)
 
 	ctx := context.Background()
@@ -118,7 +120,8 @@ func TestSignIn_Success(t *testing.T) {
 
 func TestSignIn_WrongPassword(t *testing.T) {
 	mockStorage := new(MockStorage)
-	tokenService, _ := NewTokenService(15*time.Minute, 7*24*time.Hour, 2*time.Minute)
+	key, _ := GeneratePrivateKey()
+	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
 	authService := NewAuthService(mockStorage, tokenService)
 
 	ctx := context.Background()
@@ -148,7 +151,8 @@ func TestSignIn_WrongPassword(t *testing.T) {
 
 func TestRefresh_Success(t *testing.T) {
 	mockStorage := new(MockStorage)
-	tokenService, _ := NewTokenService(15*time.Minute, 7*24*time.Hour, 2*time.Minute)
+	key, _ := GeneratePrivateKey()
+	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
 	authService := NewAuthService(mockStorage, tokenService)
 
 	ctx := context.Background()
@@ -171,7 +175,8 @@ func TestRefresh_Success(t *testing.T) {
 
 func TestRefresh_Revoked(t *testing.T) {
 	mockStorage := new(MockStorage)
-	tokenService, _ := NewTokenService(15*time.Minute, 7*24*time.Hour, 2*time.Minute)
+	key, _ := GeneratePrivateKey()
+	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
 	authService := NewAuthService(mockStorage, tokenService)
 
 	ctx := context.Background()
@@ -192,7 +197,8 @@ func TestRefresh_Revoked(t *testing.T) {
 
 func TestMiddleware(t *testing.T) {
 	mockStorage := new(MockStorage)
-	tokenService, _ := NewTokenService(15*time.Minute, 7*24*time.Hour, 2*time.Minute)
+	key, _ := GeneratePrivateKey()
+	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
 	authService := NewAuthService(mockStorage, tokenService)
 
 	// Create a valid token
@@ -227,4 +233,52 @@ func TestMiddleware(t *testing.T) {
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func (m *MockStorage) ListUsers(ctx context.Context, limit int, offset int) ([]*User, error) {
+args := m.Called(ctx, limit, offset)
+if args.Get(0) == nil {
+return nil, args.Error(1)
+}
+return args.Get(0).([]*User), args.Error(1)
+}
+
+func (m *MockStorage) UpdateUser(ctx context.Context, user *User) error {
+args := m.Called(ctx, user)
+return args.Error(0)
+}
+
+func TestAuthService_ListUsers(t *testing.T) {
+mockStorage := new(MockStorage)
+authService := NewAuthService(mockStorage, nil)
+
+ctx := context.Background()
+users := []*User{
+{ID: "1", Username: "user1"},
+{ID: "2", Username: "user2"},
+}
+
+mockStorage.On("ListUsers", ctx, 10, 0).Return(users, nil)
+
+result, err := authService.ListUsers(ctx, 10, 0)
+assert.NoError(t, err)
+assert.Equal(t, users, result)
+mockStorage.AssertExpectations(t)
+}
+
+func TestAuthService_UpdateUser(t *testing.T) {
+mockStorage := new(MockStorage)
+authService := NewAuthService(mockStorage, nil)
+
+ctx := context.Background()
+user := &User{ID: "1", Username: "user1", Roles: []string{"user"}, Disabled: false}
+
+mockStorage.On("GetUserByID", ctx, "1").Return(user, nil)
+mockStorage.On("UpdateUser", ctx, mock.MatchedBy(func(u *User) bool {
+return u.ID == "1" && u.Disabled == true && len(u.Roles) == 1 && u.Roles[0] == "admin"
+})).Return(nil)
+
+err := authService.UpdateUser(ctx, "1", []string{"admin"}, true)
+assert.NoError(t, err)
+mockStorage.AssertExpectations(t)
 }

@@ -25,6 +25,7 @@ IMMEDIATELY STOP and ask user when:
 ## 🚫 FORBIDDEN PATTERNS
 - Using unverified parameters from external interfaces (Strict validation required)
 - **Integration Tests**: Direct calls to internal service components (e.g., `query.Engine`, `storage.Backend`) are FORBIDDEN in `tests/integration`. Tests must treat the service as a black box and interact ONLY via public interfaces (HTTP API, etc.).
+- **File Editing**: Using `cat` or `echo` to write or append to files in the terminal is FORBIDDEN. ALWAYS use the `create_file` or `replace_string_in_file` tools.
 
 ## 🔄 DECISION TREE
 Before ANY file creation:

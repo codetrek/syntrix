@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"syntrix/internal/auth"
 	"syntrix/internal/config"
 	"syntrix/internal/services"
 
@@ -152,36 +151,14 @@ match:
 	}
 }
 
-func (e *ServiceEnv) GetToken(t *testing.T, uid string, role string) string {
-	ctx := context.Background()
-	connCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	client, err := mongo.Connect(connCtx, options.Client().ApplyURI(e.MongoURI))
+func (e *ServiceEnv) GenerateSystemToken(t *testing.T) string {
+	tokenService := e.Manager.TokenService()
+	token, err := tokenService.GenerateSystemToken("system-worker")
 	require.NoError(t, err)
-	defer client.Disconnect(ctx)
+	return token
+}
 
-	hash, algo, _ := auth.HashPassword("password")
-
-	user := auth.User{
-		ID:            uid,
-		Username:      uid,
-		PasswordHash:  hash,
-		PasswordAlgo:  algo,
-		Roles:         []string{role},
-		Disabled:      false,
-		CreatedAt:     time.Now(),
-		LastLoginAt:   time.Now(),
-		LoginAttempts: 0,
-		LockoutUntil:  time.Time{},
-	}
-
-	_, err = client.Database(e.DBName).Collection("auth_users").InsertOne(ctx, user)
-	// Ignore duplicate key error if user already exists
-	if err != nil && !mongo.IsDuplicateKeyError(err) {
-		require.NoError(t, err)
-	}
-
+func (e *ServiceEnv) GetToken(t *testing.T, uid string, role string) string {
 	// Login
 	loginBody := map[string]string{
 		"username": uid,

@@ -19,7 +19,7 @@ syntrix/
 │   └── storage/          # Storage interfaces and MongoDB backend
 ├── pkg/                  # Public library code
 ├── tests/                # Integration tests
-├── discussion/           # Architecture and Design documents
+├── docs/design/          # Architecture and Design documents
 ├── go.mod                # Go module definition
 └── README.md
 ```

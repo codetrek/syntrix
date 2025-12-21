@@ -39,7 +39,12 @@ func TestLoadConfig_EnvVars(t *testing.T) {
 }
 
 func TestLoadConfig_FileOverride(t *testing.T) {
-	// Create a temporary config.yml in the package directory
+	// Create config directory
+	err := os.Mkdir("config", 0755)
+	require.NoError(t, err)
+	defer os.RemoveAll("config")
+
+	// Create a temporary config.yml in the config directory
 	configContent := []byte(`
 storage:
   mongo_uri: "mongodb://file:27017"
@@ -47,9 +52,8 @@ storage:
 api:
   port: 7070
 `)
-	err := os.WriteFile("config.yml", configContent, 0644)
+	err = os.WriteFile("config/config.yml", configContent, 0644)
 	require.NoError(t, err)
-	defer os.Remove("config.yml")
 
 	cfg := LoadConfig()
 
@@ -59,8 +63,13 @@ api:
 }
 
 func TestLoadConfig_LocalFileOverride(t *testing.T) {
+	// Create config directory
+	err := os.Mkdir("config", 0755)
+	require.NoError(t, err)
+	defer os.RemoveAll("config")
+
 	// Create config.yml
-	err := os.WriteFile("config.yml", []byte(`
+	err = os.WriteFile("config/config.yml", []byte(`
 storage:
   mongo_uri: "mongodb://file:27017"
   database_name: "filedb"
@@ -68,15 +77,13 @@ api:
   port: 7070
 `), 0644)
 	require.NoError(t, err)
-	defer os.Remove("config.yml")
 
 	// Create config.local.yml
-	err = os.WriteFile("config.local.yml", []byte(`
+	err = os.WriteFile("config/config.local.yml", []byte(`
 storage:
   mongo_uri: "mongodb://local:27017"
 `), 0644)
 	require.NoError(t, err)
-	defer os.Remove("config.local.yml")
 
 	cfg := LoadConfig()
 
@@ -86,13 +93,17 @@ storage:
 }
 
 func TestLoadConfig_EnvOverrideFile(t *testing.T) {
+	// Create config directory
+	err := os.Mkdir("config", 0755)
+	require.NoError(t, err)
+	defer os.RemoveAll("config")
+
 	// Create config.yml
-	err := os.WriteFile("config.yml", []byte(`
+	err = os.WriteFile("config/config.yml", []byte(`
 storage:
   mongo_uri: "mongodb://file:27017"
 `), 0644)
 	require.NoError(t, err)
-	defer os.Remove("config.yml")
 
 	os.Setenv("MONGO_URI", "mongodb://env:27017")
 	defer os.Unsetenv("MONGO_URI")

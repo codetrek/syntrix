@@ -9,7 +9,8 @@ import (
 )
 
 func TestTokenService_GenerateAndValidate(t *testing.T) {
-	ts, err := NewTokenService(15*time.Minute, 1*time.Hour, 2*time.Minute)
+	key, _ := GeneratePrivateKey()
+	ts, err := NewTokenService(key, 15*time.Minute, 1*time.Hour, 2*time.Minute)
 	require.NoError(t, err)
 
 	user := &User{
@@ -42,7 +43,8 @@ func TestTokenService_GenerateAndValidate(t *testing.T) {
 
 func TestTokenService_ExpiredToken(t *testing.T) {
 	// Create service with very short TTL
-	ts, err := NewTokenService(1*time.Millisecond, 1*time.Millisecond, 0)
+	key, _ := GeneratePrivateKey()
+	ts, err := NewTokenService(key, 1*time.Millisecond, 1*time.Millisecond, 0)
 	require.NoError(t, err)
 
 	user := &User{ID: "user-1", Username: "user"}
@@ -59,8 +61,10 @@ func TestTokenService_ExpiredToken(t *testing.T) {
 }
 
 func TestTokenService_InvalidSignature(t *testing.T) {
-	ts1, _ := NewTokenService(1*time.Hour, 1*time.Hour, 0)
-	ts2, _ := NewTokenService(1*time.Hour, 1*time.Hour, 0) // Different keys
+	key1, _ := GeneratePrivateKey()
+	ts1, _ := NewTokenService(key1, 1*time.Hour, 1*time.Hour, 0)
+	key2, _ := GeneratePrivateKey()
+	ts2, _ := NewTokenService(key2, 1*time.Hour, 1*time.Hour, 0) // Different keys
 
 	user := &User{ID: "user-1", Username: "user"}
 	pair, _ := ts1.GenerateTokenPair(user)

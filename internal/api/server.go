@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"syntrix/internal/auth"
 	"syntrix/internal/authz"
 	"syntrix/internal/query"
 	"syntrix/internal/storage"
@@ -14,12 +13,12 @@ import (
 
 type Server struct {
 	engine query.Service
-	auth   *auth.AuthService
-	authz  *authz.Engine
+	auth   AuthService
+	authz  AuthzService
 	mux    *http.ServeMux
 }
 
-func NewServer(engine query.Service, auth *auth.AuthService, authz *authz.Engine) *Server {
+func NewServer(engine query.Service, auth AuthService, authz AuthzService) *Server {
 	s := &Server{
 		engine: engine,
 		auth:   auth,
@@ -45,6 +44,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) routes() {
+	// Console
+	s.mux.Handle("GET /console/", http.StripPrefix("/console/", http.FileServer(http.Dir("console"))))
+
 	// Document Operations
 	s.mux.HandleFunc("GET /v1/{path...}", s.maybeProtected(s.authorized(s.handleGetDocument, "read")))
 	s.mux.HandleFunc("POST /v1/{path...}", s.maybeProtected(s.authorized(s.handleCreateDocument, "create")))
@@ -69,6 +71,13 @@ func (s *Server) routes() {
 		s.mux.HandleFunc("POST /v1/auth/login", s.handleLogin)
 		s.mux.HandleFunc("POST /v1/auth/refresh", s.handleRefresh)
 		s.mux.HandleFunc("POST /v1/auth/logout", s.handleLogout)
+
+		// Admin Operations
+		s.mux.HandleFunc("GET /admin/users", s.adminOnly(s.handleAdminListUsers))
+		s.mux.HandleFunc("PATCH /admin/users/{id}", s.adminOnly(s.handleAdminUpdateUser))
+		s.mux.HandleFunc("GET /admin/rules", s.adminOnly(s.handleAdminGetRules))
+		s.mux.HandleFunc("POST /admin/rules/push", s.adminOnly(s.handleAdminPushRules))
+		s.mux.HandleFunc("GET /admin/health", s.adminOnly(s.handleAdminHealth))
 	}
 
 	// Health Check

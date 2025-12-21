@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"syntrix/internal/auth"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -39,7 +41,7 @@ func TestDeliveryWorker_ProcessTask(t *testing.T) {
 	defer server.Close()
 
 	// 2. Setup Worker
-	worker := NewDeliveryWorker()
+	worker := NewDeliveryWorker(nil)
 
 	// 3. Create Task
 	task := &DeliveryTask{
@@ -61,7 +63,7 @@ func TestDeliveryWorker_ProcessTask_Failure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	worker := NewDeliveryWorker()
+	worker := NewDeliveryWorker(nil)
 
 	task := &DeliveryTask{
 		TriggerID: "trig-1",
@@ -71,4 +73,35 @@ func TestDeliveryWorker_ProcessTask_Failure(t *testing.T) {
 	err := worker.ProcessTask(context.Background(), task)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "webhook failed with status: 500")
+}
+
+func TestDeliveryWorker_ProcessTask_WithToken(t *testing.T) {
+	// 1. Setup Token Service
+	key, _ := auth.GeneratePrivateKey()
+	tokenService, err := auth.NewTokenService(key, time.Hour, time.Hour, time.Minute)
+	assert.NoError(t, err)
+
+	// 2. Setup Mock Server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify Authorization Header
+		authHeader := r.Header.Get("Authorization")
+		assert.NotEmpty(t, authHeader)
+		assert.True(t, strings.HasPrefix(authHeader, "Bearer "))
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	// 3. Setup Worker
+	worker := NewDeliveryWorker(tokenService)
+
+	// 4. Create Task
+	task := &DeliveryTask{
+		TriggerID: "trig-1",
+		URL:       server.URL,
+	}
+
+	// 5. Execute
+	err = worker.ProcessTask(context.Background(), task)
+	assert.NoError(t, err)
 }

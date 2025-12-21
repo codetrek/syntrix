@@ -3,7 +3,10 @@ package auth
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
+	"os"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -18,13 +21,7 @@ type TokenService struct {
 	refreshOverlap time.Duration
 }
 
-func NewTokenService(accessTTL, refreshTTL, refreshOverlap time.Duration) (*TokenService, error) {
-	// Generate RSA keys (in production, load from secret manager)
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return nil, err
-	}
-
+func NewTokenService(privateKey *rsa.PrivateKey, accessTTL, refreshTTL, refreshOverlap time.Duration) (*TokenService, error) {
 	return &TokenService{
 		privateKey:     privateKey,
 		publicKey:      &privateKey.PublicKey,
@@ -32,6 +29,40 @@ func NewTokenService(accessTTL, refreshTTL, refreshOverlap time.Duration) (*Toke
 		refreshTTL:     refreshTTL,
 		refreshOverlap: refreshOverlap,
 	}, nil
+}
+
+func LoadPrivateKey(path string) (*rsa.PrivateKey, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, errors.New("failed to decode PEM block containing private key")
+	}
+
+	return x509.ParsePKCS1PrivateKey(block.Bytes)
+}
+
+func SavePrivateKey(path string, key *rsa.PrivateKey) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	privateKeyBytes := x509.MarshalPKCS1PrivateKey(key)
+	block := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: privateKeyBytes,
+	}
+
+	return pem.Encode(file, block)
+}
+
+func GeneratePrivateKey() (*rsa.PrivateKey, error) {
+	return rsa.GenerateKey(rand.Reader, 2048)
 }
 
 func (s *TokenService) GenerateTokenPair(user *User) (*TokenPair, error) {

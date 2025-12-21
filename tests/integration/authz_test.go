@@ -109,7 +109,7 @@ match:
 
 	// Scenario 5: Admin Access (Admin Token) -> Allow
 	t.Run("Admin Access Admin Token", func(t *testing.T) {
-		token := env.GetToken(t, "admin1", "admin")
+		token := env.GetToken(t, "syntrix", "admin")
 		require.NotEmpty(t, token)
 
 		code := makeRequest("GET", "/v1/admin/doc1", token, nil)

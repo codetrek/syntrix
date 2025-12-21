@@ -11,6 +11,7 @@ auth:
   refresh_token_ttl: 168h # 7 days
   auth_code_ttl: 2m
   rules_file: "security.yaml"
+  private_key_file: "keys/auth_private.pem"
 
 api:
   port: 8080

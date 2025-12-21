@@ -26,13 +26,13 @@ func TestMongoBackend_Watch(t *testing.T) {
 
 	// Perform Operations
 	go func() {
-		time.Sleep(500 * time.Millisecond) // Wait for watch to establish
+		time.Sleep(100 * time.Millisecond) // Wait for watch to establish
 
 		// Create
 		doc := storage.NewDocument("users/watcher", "users", map[string]interface{}{"msg": "hello"})
 		backend.Create(context.Background(), doc)
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 
 		filters := storage.Filters{
 			{Field: "version", Op: "==", Value: doc.Version},
@@ -42,7 +42,7 @@ func TestMongoBackend_Watch(t *testing.T) {
 			t.Logf("Update failed: %v", err)
 		}
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 
 		// Delete
 		if err := backend.Delete(context.Background(), "users/watcher", nil); err != nil {

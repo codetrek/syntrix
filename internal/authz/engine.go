@@ -292,3 +292,20 @@ func stripDatabasePrefix(path string) string {
 	}
 	return path
 }
+
+func (e *Engine) GetRules() *RuleSet {
+	return e.rules
+}
+
+func (e *Engine) UpdateRules(content []byte) error {
+	var rules RuleSet
+	if err := yaml.Unmarshal(content, &rules); err != nil {
+		return err
+	}
+
+	// Validate rules? (e.g. check if CEL expressions compile)
+	// For now, just update.
+	e.rules = &rules
+	e.programMap = sync.Map{} // Clear cache
+	return nil
+}

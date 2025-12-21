@@ -1,0 +1,106 @@
+package integration
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestAdminAPIIntegration(t *testing.T) {
+	env := setupServiceEnv(t, "")
+	defer env.Cancel()
+
+	adminToken := env.GetToken(t, "syntrix", "admin")
+	userToken := env.GetToken(t, "regular-user", "user")
+
+	var regularUserID string
+
+	t.Run("ListUsers_Admin", func(t *testing.T) {
+		resp := env.MakeRequest(t, "GET", "/admin/users", nil, adminToken)
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var users []map[string]interface{}
+		err := json.NewDecoder(resp.Body).Decode(&users)
+		require.NoError(t, err)
+		resp.Body.Close()
+
+		assert.GreaterOrEqual(t, len(users), 2) // admin-user and regular-user
+
+		for _, u := range users {
+			if u["username"] == "regular-user" {
+				regularUserID = u["id"].(string)
+				break
+			}
+		}
+		require.NotEmpty(t, regularUserID, "regular-user not found")
+	})
+
+	t.Run("ListUsers_User_Forbidden", func(t *testing.T) {
+		resp := env.MakeRequest(t, "GET", "/admin/users", nil, userToken)
+		require.Equal(t, http.StatusForbidden, resp.StatusCode)
+		resp.Body.Close()
+	})
+
+	t.Run("UpdateUser_Admin", func(t *testing.T) {
+		require.NotEmpty(t, regularUserID)
+		// Disable regular-user
+		body := map[string]interface{}{
+			"roles":    []string{"user"},
+			"disabled": true,
+		}
+		resp := env.MakeRequest(t, "PATCH", "/admin/users/"+regularUserID, body, adminToken)
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		resp.Body.Close()
+
+		// Verify disabled
+		resp = env.MakeRequest(t, "GET", "/admin/users", nil, adminToken)
+		var users []map[string]interface{}
+		json.NewDecoder(resp.Body).Decode(&users)
+		resp.Body.Close()
+
+		var found bool
+		for _, u := range users {
+			if u["id"] == regularUserID {
+				found = true
+				assert.True(t, u["disabled"].(bool))
+				break
+			}
+		}
+		assert.True(t, found)
+	})
+
+	t.Run("PushRules_Admin", func(t *testing.T) {
+		rules := `
+rules_version: '1'
+service: syntrix
+match:
+  /test:
+    allow:
+      read: "true"
+`
+		req, err := http.NewRequest("POST", env.APIURL+"/admin/rules/push", bytes.NewBufferString(rules))
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		resp.Body.Close()
+
+		// Verify rules updated (by fetching them)
+		resp = env.MakeRequest(t, "GET", "/admin/rules", nil, adminToken)
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		// The response is the rules content
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(resp.Body)
+		resp.Body.Close()
+
+		assert.Contains(t, buf.String(), "/test")
+	})
+}

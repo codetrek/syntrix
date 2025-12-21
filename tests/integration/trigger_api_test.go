@@ -15,7 +15,7 @@ func TestTriggerAPIIntegration(t *testing.T) {
 	env := setupServiceEnv(t, "")
 	defer env.Cancel()
 
-	token := env.GetToken(t, "test-user", "system")
+	token := env.GenerateSystemToken(t)
 
 	t.Run("Transactional Write - Success", func(t *testing.T) {
 		reqBody := api.TriggerWriteRequest{

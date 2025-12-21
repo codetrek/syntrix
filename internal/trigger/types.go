@@ -98,4 +98,5 @@ type DeliveryTask struct {
 	SecretsRef  string                 `json:"secretsRef"`
 	RetryPolicy RetryPolicy            `json:"retryPolicy"`
 	Timeout     Duration               `json:"timeout"`
+	SystemToken string                 `json:"systemToken,omitempty"`
 }
