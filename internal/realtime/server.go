@@ -38,7 +38,7 @@ func NewServer(qs query.Service, dataCollection string) *Server {
 // It returns an error if watching fails to start.
 // The background tasks run until ctx is cancelled.
 func (s *Server) StartBackgroundTasks(ctx context.Context) error {
-	go s.hub.Run()
+	go s.hub.Run(ctx)
 
 	// Watch all collections
 	stream, err := s.queryService.WatchCollection(ctx, "")

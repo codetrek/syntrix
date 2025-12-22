@@ -20,8 +20,8 @@ func CheckDocumentID(id string) bool {
 //
 //	"id" field is reserved for document ID.
 //	"version" field is reserved for document version.
-//	"updated_at" field is reserved for last updated timestamp.
-//	"created_at" field is reserved for creation timestamp.
+//	"updatedAt" field is reserved for last updated timestamp.
+//	"createdAt" field is reserved for creation timestamp.
 //	"collection" field is reserved for collection name.
 type Document map[string]interface{}
 
@@ -73,8 +73,8 @@ func (doc Document) HasKey(key string) bool {
 
 func (doc Document) StripProtectedFields() {
 	delete(doc, "version")
-	delete(doc, "updated_at")
-	delete(doc, "created_at")
+	delete(doc, "updatedAt")
+	delete(doc, "createdAt")
 	delete(doc, "collection")
 }
 

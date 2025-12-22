@@ -2,6 +2,8 @@ package config
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,10 +27,26 @@ func TestLoadConfig_EnvVars(t *testing.T) {
 	os.Setenv("MONGO_URI", "mongodb://test:27017")
 	os.Setenv("DB_NAME", "testdb")
 	os.Setenv("API_PORT", "9090")
+	os.Setenv("API_QUERY_SERVICE_URL", "http://api-env")
+	os.Setenv("REALTIME_PORT", "9091")
+	os.Setenv("REALTIME_QUERY_SERVICE_URL", "http://rt-env")
+	os.Setenv("QUERY_PORT", "9092")
+	os.Setenv("QUERY_CSP_SERVICE_URL", "http://csp-env")
+	os.Setenv("CSP_PORT", "9093")
+	os.Setenv("TRIGGER_NATS_URL", "nats://env:4222")
+	os.Setenv("TRIGGER_RULES_FILE", "custom.json")
 	defer func() {
 		os.Unsetenv("MONGO_URI")
 		os.Unsetenv("DB_NAME")
 		os.Unsetenv("API_PORT")
+		os.Unsetenv("API_QUERY_SERVICE_URL")
+		os.Unsetenv("REALTIME_PORT")
+		os.Unsetenv("REALTIME_QUERY_SERVICE_URL")
+		os.Unsetenv("QUERY_PORT")
+		os.Unsetenv("QUERY_CSP_SERVICE_URL")
+		os.Unsetenv("CSP_PORT")
+		os.Unsetenv("TRIGGER_NATS_URL")
+		os.Unsetenv("TRIGGER_RULES_FILE")
 	}()
 
 	cfg := LoadConfig()
@@ -36,6 +54,31 @@ func TestLoadConfig_EnvVars(t *testing.T) {
 	assert.Equal(t, "mongodb://test:27017", cfg.Storage.MongoURI)
 	assert.Equal(t, "testdb", cfg.Storage.DatabaseName)
 	assert.Equal(t, 9090, cfg.API.Port)
+	assert.Equal(t, "http://api-env", cfg.API.QueryServiceURL)
+	assert.Equal(t, 9091, cfg.Realtime.Port)
+	assert.Equal(t, "http://rt-env", cfg.Realtime.QueryServiceURL)
+	assert.Equal(t, 9092, cfg.Query.Port)
+	assert.Equal(t, "http://csp-env", cfg.Query.CSPServiceURL)
+	assert.Equal(t, 9093, cfg.CSP.Port)
+	assert.Equal(t, "nats://env:4222", cfg.Trigger.NatsURL)
+	assert.True(t, strings.HasSuffix(cfg.Trigger.RulesFile, filepath.Join("config", "custom.json")))
+}
+
+func TestLoadConfig_LoadFileErrors(t *testing.T) {
+	require.NoError(t, os.Mkdir("config", 0755))
+	defer os.RemoveAll("config")
+
+	// Create a directory where a file is expected to trigger read error path
+	require.NoError(t, os.Mkdir("config/config.yml", 0755))
+
+	// Malformed YAML to trigger parse error path
+	require.NoError(t, os.WriteFile("config/config.local.yml", []byte("not: [valid"), 0644))
+
+	cfg := LoadConfig()
+
+	// Defaults should remain when files fail to load/parse
+	assert.Equal(t, 8080, cfg.API.Port)
+	assert.Equal(t, "mongodb://localhost:27017", cfg.Storage.MongoURI)
 }
 
 func TestLoadConfig_FileOverride(t *testing.T) {

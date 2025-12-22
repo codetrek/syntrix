@@ -12,8 +12,8 @@ type User struct {
 	Username      string                 `json:"username" bson:"username"`
 	PasswordHash  string                 `json:"password_hash" bson:"password_hash"`
 	PasswordAlgo  string                 `json:"password_algo" bson:"password_algo"` // "argon2id" or "bcrypt"
-	CreatedAt     time.Time              `json:"created_at" bson:"created_at"`
-	UpdatedAt     time.Time              `json:"updated_at" bson:"updated_at"`
+	CreatedAt     time.Time              `json:"createdAt" bson:"createdAt"`
+	UpdatedAt     time.Time              `json:"updatedAt" bson:"updatedAt"`
 	Disabled      bool                   `json:"disabled" bson:"disabled"`
 	Roles         []string               `json:"roles" bson:"roles"`
 	Profile       map[string]interface{} `json:"profile" bson:"profile"`

@@ -118,7 +118,7 @@ func TestAPIIntegration(t *testing.T) {
 		},
 	}
 	resp = env.MakeRequest(t, "PATCH", fmt.Sprintf("/v1/%s/%s", collection, docID), ifMatchFailData, token)
-	require.Equal(t, http.StatusConflict, resp.StatusCode)
+	require.Equal(t, http.StatusPreconditionFailed, resp.StatusCode)
 
 	// 6. Scenario: Delete Document
 	resp = env.MakeRequest(t, "DELETE", fmt.Sprintf("/v1/%s/%s", collection, docID), nil, token)

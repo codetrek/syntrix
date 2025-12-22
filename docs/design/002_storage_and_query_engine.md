@@ -32,10 +32,10 @@ type Document struct {
 	Data map[string]interface{} `json:"data" bson:"data"`
 
 	// UpdatedAt is the timestamp of the last update (Unix millionseconds)
-	UpdatedAt int64 `json:"updated_at" bson:"updated_at"`
+	UpdatedAt int64 `json:"updatedAt" bson:"updatedAt"`
 
 	// CreatedAt is the timestamp of the creation (Unix millionseconds)
-	CreatedAt int64 `json:"created_at" bson:"created_at"`
+	CreatedAt int64 `json:"createdAt" bson:"createdAt"`
 
 	// Version is the optimistic concurrency control version
 	Version int64 `json:"version" bson:"version"`
@@ -89,8 +89,8 @@ We will use a **Single Collection** strategy for simplicity and efficiency.
   "fullpath": "users/alice/posts/post1",      // Full Pathname
   "collection": "users/alice/posts",          // Collection fullpath (for listing documents)
   "parent": "users/alice",                    // Parent path (parent of the collection)
-  "updated_at": NumberLong(1678888888000),    // Timestamp
-  "created_at": NumberLong(1678888888000),    // Timestamp
+  "updatedAt": NumberLong(1678888888000),    // Timestamp
+  "createdAt": NumberLong(1678888888000),    // Timestamp
   "version": NumberLong(1),                   // Optimistic locking version
   "data": {                                   // Actual user data
     "title": "Hello World",
@@ -132,7 +132,7 @@ type Filter struct {
 }
 
 type Order struct {
-	Field     string // "created_at"
+	Field     string // "createdAt"
 	Direction string // "asc" or "desc"
 }
 ```

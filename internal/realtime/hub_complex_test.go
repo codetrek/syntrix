@@ -1,6 +1,7 @@
 package realtime
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -11,8 +12,11 @@ import (
 )
 
 func TestHub_Broadcast_ComplexFilters(t *testing.T) {
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
+
 	hub := NewHub()
-	go hub.Run()
+	go hub.Run(hubCtx)
 
 	client := &Client{
 		hub:           hub,
@@ -52,7 +56,7 @@ func TestHub_Broadcast_ComplexFilters(t *testing.T) {
 		CelProgram:  prgContains,
 	}
 
-	hub.register <- client
+	hub.Register(client)
 	time.Sleep(50 * time.Millisecond)
 
 	// 1. Test "in" - Match

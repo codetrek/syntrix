@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"syntrix/internal/auth"
@@ -64,6 +65,11 @@ func (m *MockAdminAuthService) UpdateUser(ctx context.Context, id string, roles 
 	args := m.Called(ctx, id, roles, disabled)
 	return args.Error(0)
 }
+
+type errReadCloser struct{ err error }
+
+func (e errReadCloser) Read(p []byte) (int, error) { return 0, e.err }
+func (e errReadCloser) Close() error               { return nil }
 
 func (m *MockAdminAuthService) Logout(ctx context.Context, refreshToken string) error {
 	args := m.Called(ctx, refreshToken)
@@ -134,6 +140,24 @@ func TestAdmin_ListUsers(t *testing.T) {
 	assert.Equal(t, "user1", respUsers[0].Username)
 }
 
+func TestAdmin_ListUsers_WithPaging(t *testing.T) {
+	mockAuth := new(MockAdminAuthService)
+	mockAuthz := new(MockAdminAuthzService)
+	server := NewServer(nil, mockAuth, mockAuthz)
+
+	users := []*auth.User{}
+	mockAuth.On("ListUsers", mock.Anything, 10, 5).Return(users, nil)
+
+	req := httptest.NewRequest("GET", "/admin/users?limit=10&offset=5", nil)
+	req.Header.Set("X-Role", "admin")
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	mockAuth.AssertExpectations(t)
+}
+
 func TestAdmin_UpdateUser(t *testing.T) {
 	mockAuth := new(MockAdminAuthService)
 	mockAuthz := new(MockAdminAuthzService)
@@ -160,6 +184,43 @@ func TestAdmin_UpdateUser(t *testing.T) {
 	mockAuth.AssertExpectations(t)
 }
 
+func TestAdmin_UpdateUser_InvalidBody(t *testing.T) {
+	mockAuth := new(MockAdminAuthService)
+	mockAuthz := new(MockAdminAuthzService)
+	server := NewServer(nil, mockAuth, mockAuthz)
+
+	req := httptest.NewRequest("PATCH", "/admin/users/123", bytes.NewBufferString("{invalid"))
+	req.Header.Set("X-Role", "admin")
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	mockAuth.AssertNotCalled(t, "UpdateUser", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestAdmin_UpdateUser_Error(t *testing.T) {
+	mockAuth := new(MockAdminAuthService)
+	mockAuthz := new(MockAdminAuthzService)
+	server := NewServer(nil, mockAuth, mockAuthz)
+
+	body := map[string]interface{}{
+		"roles":    []string{"user"},
+		"disabled": false,
+	}
+	bodyBytes, _ := json.Marshal(body)
+	req := httptest.NewRequest("PATCH", "/admin/users/123", bytes.NewReader(bodyBytes))
+	req.Header.Set("X-Role", "admin")
+	w := httptest.NewRecorder()
+
+	mockAuth.On("UpdateUser", mock.Anything, "123", []string{"user"}, false).Return(errors.New("fail"))
+
+	server.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	mockAuth.AssertExpectations(t)
+}
+
 func TestAdmin_PushRules(t *testing.T) {
 	mockAuth := new(MockAdminAuthService)
 	mockAuthz := new(MockAdminAuthzService)
@@ -180,6 +241,93 @@ func TestAdmin_PushRules(t *testing.T) {
 	// Assert
 	assert.Equal(t, http.StatusOK, w.Code)
 	mockAuthz.AssertExpectations(t)
+}
+
+func TestAdmin_PushRules_Invalid(t *testing.T) {
+	mockAuth := new(MockAdminAuthService)
+	mockAuthz := new(MockAdminAuthzService)
+	server := NewServer(nil, mockAuth, mockAuthz)
+
+	rulesContent := []byte("bad")
+	mockAuthz.On("UpdateRules", rulesContent).Return(errors.New("bad rules"))
+
+	req := httptest.NewRequest("POST", "/admin/rules/push", bytes.NewReader(rulesContent))
+	req.Header.Set("X-Role", "admin")
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	mockAuthz.AssertExpectations(t)
+}
+
+func TestAdmin_PushRules_ReadError(t *testing.T) {
+	mockAuth := new(MockAdminAuthService)
+	mockAuthz := new(MockAdminAuthzService)
+	server := NewServer(nil, mockAuth, mockAuthz)
+
+	req := httptest.NewRequest("POST", "/admin/rules/push", nil)
+	req.Body = errReadCloser{err: errors.New("read error")}
+	req.Header.Set("X-Role", "admin")
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	mockAuthz.AssertNotCalled(t, "UpdateRules", mock.Anything)
+}
+
+func TestAdmin_ListUsers_Error(t *testing.T) {
+	mockAuth := new(MockAdminAuthService)
+	mockAuthz := new(MockAdminAuthzService)
+	server := NewServer(nil, mockAuth, mockAuthz)
+
+	mockAuth.On("ListUsers", mock.Anything, 50, 0).Return(nil, errors.New("boom"))
+
+	req := httptest.NewRequest("GET", "/admin/users", nil)
+	req.Header.Set("X-Role", "admin")
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	mockAuth.AssertExpectations(t)
+}
+
+func TestAdmin_GetRules(t *testing.T) {
+	mockAuth := new(MockAdminAuthService)
+	mockAuthz := new(MockAdminAuthzService)
+	server := NewServer(nil, mockAuth, mockAuthz)
+
+	ruleSet := &authz.RuleSet{Version: "1"}
+	mockAuthz.On("GetRules").Return(ruleSet)
+
+	req := httptest.NewRequest("GET", "/admin/rules", nil)
+	req.Header.Set("X-Role", "admin")
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp authz.RuleSet
+	assert.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	assert.Equal(t, "1", resp.Version)
+	mockAuthz.AssertExpectations(t)
+}
+
+func TestAdmin_Health(t *testing.T) {
+	mockAuth := new(MockAdminAuthService)
+	mockAuthz := new(MockAdminAuthzService)
+	server := NewServer(nil, mockAuth, mockAuthz)
+
+	req := httptest.NewRequest("GET", "/admin/health", nil)
+	req.Header.Set("X-Role", "admin")
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "OK", w.Body.String())
 }
 
 func TestAdmin_AccessDenied(t *testing.T) {

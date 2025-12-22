@@ -15,14 +15,14 @@ type Evaluator interface {
 	Evaluate(ctx context.Context, trigger *Trigger, event *storage.Event) (bool, error)
 }
 
-// CELEvaluator implements Evaluator using Google CEL.
-type CELEvaluator struct {
+// celeEvaluator implements Evaluator using Google CEL.
+type celeEvaluator struct {
 	env        *cel.Env
 	prgCache   map[string]cel.Program
 	cacheMutex sync.RWMutex
 }
 
-func NewCELEvaluator() (*CELEvaluator, error) {
+func NewEvaluator() (Evaluator, error) {
 	// Define the CEL environment with an 'event' variable
 	env, err := cel.NewEnv(
 		cel.Variable("event", cel.MapType(cel.StringType, cel.DynType)),
@@ -31,13 +31,13 @@ func NewCELEvaluator() (*CELEvaluator, error) {
 		return nil, err
 	}
 
-	return &CELEvaluator{
+	return &celeEvaluator{
 		env:      env,
 		prgCache: make(map[string]cel.Program),
 	}, nil
 }
 
-func (e *CELEvaluator) Evaluate(ctx context.Context, trigger *Trigger, event *storage.Event) (bool, error) {
+func (e *celeEvaluator) Evaluate(ctx context.Context, trigger *Trigger, event *storage.Event) (bool, error) {
 	// 1. Check event type (create, update, delete)
 	eventTypeMatch := false
 	for _, evt := range trigger.Events {
@@ -127,7 +127,7 @@ func (e *CELEvaluator) Evaluate(ctx context.Context, trigger *Trigger, event *st
 	return match, nil
 }
 
-func (e *CELEvaluator) getProgram(condition string) (cel.Program, error) {
+func (e *celeEvaluator) getProgram(condition string) (cel.Program, error) {
 	e.cacheMutex.RLock()
 	prg, ok := e.prgCache[condition]
 	e.cacheMutex.RUnlock()

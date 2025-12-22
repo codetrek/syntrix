@@ -123,7 +123,7 @@ func (c *Client) DeleteDocument(ctx context.Context, path string) error {
 	return nil
 }
 
-func (c *Client) ExecuteQuery(ctx context.Context, q storage.Query) ([]*storage.Document, error) {
+func (c *Client) ExecuteQuery(ctx context.Context, q storage.Query) ([]common.Document, error) {
 	resp, err := c.post(ctx, "/internal/v1/query/execute", q)
 	if err != nil {
 		return nil, err
@@ -134,7 +134,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, q storage.Query) ([]*storage.
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	var docs []*storage.Document
+	var docs []common.Document
 	if err := json.NewDecoder(resp.Body).Decode(&docs); err != nil {
 		return nil, err
 	}

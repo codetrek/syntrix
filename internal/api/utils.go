@@ -26,8 +26,8 @@ func flattenDocument(doc *storage.Document) common.Document {
 
 	// Add system fields
 	flat["version"] = doc.Version
-	flat["updated_at"] = doc.UpdatedAt
-	flat["created_at"] = doc.CreatedAt
+	flat["updatedAt"] = doc.UpdatedAt
+	flat["createdAt"] = doc.CreatedAt
 	flat["collection"] = doc.Collection
 	if doc.Deleted {
 		flat["deleted"] = true

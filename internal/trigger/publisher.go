@@ -14,20 +14,20 @@ type EventPublisher interface {
 	Publish(ctx context.Context, task *DeliveryTask) error
 }
 
-// NatsPublisher implements EventPublisher using NATS JetStream.
-type NatsPublisher struct {
+// natsPublisher implements EventPublisher using NATS JetStream.
+type natsPublisher struct {
 	js jetstream.JetStream
 }
 
-func NewNatsPublisher(nc *nats.Conn) (*NatsPublisher, error) {
+func NewEventPublisher(nc *nats.Conn) (EventPublisher, error) {
 	js, err := jetstream.New(nc)
 	if err != nil {
 		return nil, err
 	}
-	return &NatsPublisher{js: js}, nil
+	return &natsPublisher{js: js}, nil
 }
 
-func (p *NatsPublisher) Publish(ctx context.Context, task *DeliveryTask) error {
+func (p *natsPublisher) Publish(ctx context.Context, task *DeliveryTask) error {
 	// Subject format: triggers.<tenant>.<collection>.<docKey>
 	// Note: docKey might contain dots, so we might need to sanitize or use a different separator if NATS wildcards are used for routing.
 	// For now, assuming docKey is safe or we accept the structure.

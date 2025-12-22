@@ -10,7 +10,7 @@ import (
 )
 
 func TestCELEvaluator(t *testing.T) {
-	evaluator, err := NewCELEvaluator()
+	evaluator, err := NewEvaluator()
 	require.NoError(t, err)
 
 	tests := []struct {

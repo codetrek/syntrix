@@ -361,7 +361,7 @@ const setupReplication = async (collection: RxCollection, remoteCollectionPath: 
                     documents: data.documents.map((doc: any) => ({
                         ...doc,
                         id: doc.id, // Ensure ID is mapped
-                        updatedAt: doc.updated_at, // Map snake_case to camelCase
+                        updatedAt: doc.updatedAt, // Map snake_case to camelCase
                         version: doc.version // Map version
                     })),
                     checkpoint: data.checkpoint ? { updatedAt: data.checkpoint } : null

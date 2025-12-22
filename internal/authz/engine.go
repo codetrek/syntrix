@@ -18,14 +18,21 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type Engine struct {
+type Engine interface {
+	Evaluate(ctx context.Context, path string, action string, req Request, existingRes *Resource) (bool, error)
+	GetRules() *RuleSet
+	UpdateRules(content []byte) error
+	LoadRules(path string) error
+}
+
+type ruleEngine struct {
 	rules      *RuleSet
 	celEnv     *cel.Env
 	programMap sync.Map // map[string]cel.Program
 	query      query.Service
 }
 
-func NewEngine(q query.Service) (*Engine, error) {
+func NewEngine(q query.Service) (Engine, error) {
 	// Define CEL environment
 	env, err := cel.NewEnv(
 		cel.Declarations(
@@ -38,13 +45,13 @@ func NewEngine(q query.Service) (*Engine, error) {
 		return nil, err
 	}
 
-	return &Engine{
+	return &ruleEngine{
 		celEnv: env,
 		query:  q,
 	}, nil
 }
 
-func (e *Engine) LoadRules(path string) error {
+func (e *ruleEngine) LoadRules(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -60,7 +67,7 @@ func (e *Engine) LoadRules(path string) error {
 	return nil
 }
 
-func (e *Engine) Evaluate(ctx context.Context, path string, action string, req Request, existingRes *Resource) (bool, error) {
+func (e *ruleEngine) Evaluate(ctx context.Context, path string, action string, req Request, existingRes *Resource) (bool, error) {
 	if e.rules == nil {
 		return false, nil
 	}
@@ -69,7 +76,7 @@ func (e *Engine) Evaluate(ctx context.Context, path string, action string, req R
 	return e.matchPath(ctx, e.rules.Match, fullPath, action, make(map[string]string), req, existingRes)
 }
 
-func (e *Engine) matchPath(ctx context.Context, blocks map[string]MatchBlock, path string, action string, vars map[string]string, req Request, existingRes *Resource) (bool, error) {
+func (e *ruleEngine) matchPath(ctx context.Context, blocks map[string]MatchBlock, path string, action string, vars map[string]string, req Request, existingRes *Resource) (bool, error) {
 	if len(blocks) == 0 {
 		return false, nil
 	}
@@ -132,7 +139,7 @@ func matchPattern(pattern, path string) (bool, string, map[string]string) {
 	return true, remaining, vars
 }
 
-func (e *Engine) evaluateAllow(ctx context.Context, allow map[string]string, action string, vars map[string]string, req Request, existingRes *Resource) (bool, error) {
+func (e *ruleEngine) evaluateAllow(ctx context.Context, allow map[string]string, action string, vars map[string]string, req Request, existingRes *Resource) (bool, error) {
 	for actionsStr, condition := range allow {
 		actions := strings.Split(actionsStr, ",")
 		for _, a := range actions {
@@ -164,7 +171,7 @@ func matchesAction(ruleAction, reqAction string) bool {
 	return false
 }
 
-func (e *Engine) evalCondition(ctx context.Context, condition string, vars map[string]string, req Request, existingRes *Resource) (bool, error) {
+func (e *ruleEngine) evalCondition(ctx context.Context, condition string, vars map[string]string, req Request, existingRes *Resource) (bool, error) {
 	for k, v := range vars {
 		condition = strings.ReplaceAll(condition, "$("+k+")", v)
 	}
@@ -190,7 +197,7 @@ func (e *Engine) evalCondition(ctx context.Context, condition string, vars map[s
 	return out.Value() == true, nil
 }
 
-func (e *Engine) getProgram(expression string, vars map[string]string) (cel.Program, error) {
+func (e *ruleEngine) getProgram(expression string, vars map[string]string) (cel.Program, error) {
 	varOpts := []cel.EnvOption{}
 	for k := range vars {
 		varOpts = append(varOpts, cel.Declarations(decls.NewVar(k, decls.String)))
@@ -300,11 +307,11 @@ func stripDatabasePrefix(path string) string {
 	return path
 }
 
-func (e *Engine) GetRules() *RuleSet {
+func (e *ruleEngine) GetRules() *RuleSet {
 	return e.rules
 }
 
-func (e *Engine) UpdateRules(content []byte) error {
+func (e *ruleEngine) UpdateRules(content []byte) error {
 	var rules RuleSet
 	if err := yaml.Unmarshal(content, &rules); err != nil {
 		return err

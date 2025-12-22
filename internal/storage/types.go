@@ -2,12 +2,7 @@ package storage
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
-	"strings"
-	"time"
-
-	"github.com/zeebo/blake3"
 )
 
 var (
@@ -15,8 +10,8 @@ var (
 	ErrNotFound = errors.New("document not found")
 	// ErrExists is returned when trying to create a document that already exists
 	ErrExists = errors.New("document already exists")
-	// ErrVersionConflict is returned when a CAS operation fails due to version mismatch
-	ErrVersionConflict = errors.New("version conflict")
+	// ErrPreconditionFailed is returned when a CAS operation fails due to unmet preconditions
+	ErrPreconditionFailed = errors.New("precondition failed")
 )
 
 // Document represents a stored document in the database
@@ -34,10 +29,10 @@ type Document struct {
 	Parent string `json:"-" bson:"parent"`
 
 	// UpdatedAt is the timestamp of the last update (Unix millionseconds)
-	UpdatedAt int64 `json:"updated_at" bson:"updated_at"`
+	UpdatedAt int64 `json:"updatedAt" bson:"updated_at"`
 
 	// CreatedAt is the timestamp of the creation (Unix millionseconds)
-	CreatedAt int64 `json:"created_at" bson:"created_at"`
+	CreatedAt int64 `json:"createdAt" bson:"created_at"`
 
 	// Version is the optimistic concurrency control version
 	Version int64 `json:"version" bson:"version"`
@@ -130,36 +125,6 @@ type Filter struct {
 type Order struct {
 	Field     string `json:"field"`
 	Direction string `json:"direction"` // "asc" or "desc"
-}
-
-// CalculateID calculates the document ID (hash) from the full path
-func CalculateID(fullpath string) string {
-	hash := blake3.Sum256([]byte(fullpath))
-	return hex.EncodeToString(hash[:16])
-}
-
-// NewDocument creates a new document instance with initialized metadata
-func NewDocument(fullpath string, collection string, data map[string]interface{}) *Document {
-	// Calculate Parent from collection path
-	parent := ""
-	if idx := strings.LastIndex(collection, "/"); idx != -1 {
-		parent = collection[:idx]
-	}
-
-	id := CalculateID(fullpath)
-
-	now := time.Now().UnixMilli()
-
-	return &Document{
-		Id:         id,
-		Fullpath:   fullpath,
-		Collection: collection,
-		Parent:     parent,
-		Data:       data,
-		UpdatedAt:  now,
-		CreatedAt:  now,
-		Version:    1,
-	}
 }
 
 // ReplicationPullRequest represents a request to pull changes

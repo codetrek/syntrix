@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,4 +139,50 @@ func TestStorage_Revocation(t *testing.T) {
 	revoked, err = s.IsRevoked(ctx, jti2, 1*time.Minute)
 	require.NoError(t, err)
 	assert.True(t, revoked)
+}
+
+func TestStorage_ListUsersAndUpdate(t *testing.T) {
+	s, teardown := setupTestStorage(t)
+	defer teardown()
+
+	ctx := context.Background()
+
+	baseTime := time.Now().Add(-2 * time.Hour).Truncate(time.Millisecond)
+	users := []*User{
+		{ID: "u1", Username: "Alice", Roles: []string{"reader"}, CreatedAt: baseTime, UpdatedAt: baseTime},
+		{ID: "u2", Username: "Bob", Roles: []string{"writer"}, CreatedAt: baseTime, UpdatedAt: baseTime},
+		{ID: "u3", Username: "Carol", Roles: []string{"admin"}, CreatedAt: baseTime, UpdatedAt: baseTime},
+	}
+
+	for _, u := range users {
+		require.NoError(t, s.CreateUser(ctx, u))
+	}
+
+	firstPage, err := s.ListUsers(ctx, 2, 0)
+	require.NoError(t, err)
+	assert.Len(t, firstPage, 2)
+
+	secondPage, err := s.ListUsers(ctx, 2, 2)
+	require.NoError(t, err)
+	assert.Len(t, secondPage, 1)
+
+	allUsers := append(firstPage, secondPage...)
+	idSet := map[string]struct{}{}
+	for _, u := range allUsers {
+		idSet[u.ID] = struct{}{}
+		assert.Equal(t, strings.ToLower(u.Username), u.Username)
+	}
+	assert.Len(t, idSet, 3)
+
+	original, err := s.GetUserByID(ctx, "u2")
+	require.NoError(t, err)
+
+	update := &User{ID: "u2", Roles: []string{"admin", "editor"}, Disabled: true}
+	require.NoError(t, s.UpdateUser(ctx, update))
+
+	updated, err := s.GetUserByID(ctx, "u2")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"admin", "editor"}, updated.Roles)
+	assert.True(t, updated.Disabled)
+	assert.True(t, updated.UpdatedAt.After(original.UpdatedAt))
 }

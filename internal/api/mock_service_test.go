@@ -51,12 +51,12 @@ func (m *MockQueryService) DeleteDocument(ctx context.Context, path string) erro
 	return args.Error(0)
 }
 
-func (m *MockQueryService) ExecuteQuery(ctx context.Context, q storage.Query) ([]*storage.Document, error) {
+func (m *MockQueryService) ExecuteQuery(ctx context.Context, q storage.Query) ([]common.Document, error) {
 	args := m.Called(ctx, q)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*storage.Document), args.Error(1)
+	return args.Get(0).([]common.Document), args.Error(1)
 }
 
 func (m *MockQueryService) WatchCollection(ctx context.Context, collection string) (<-chan storage.Event, error) {
@@ -170,5 +170,10 @@ func (m *MockAuthzService) GetRules() *authz.RuleSet {
 
 func (m *MockAuthzService) UpdateRules(content []byte) error {
 	args := m.Called(content)
+	return args.Error(0)
+}
+
+func (m *MockAuthzService) LoadRules(path string) error {
+	args := m.Called(path)
 	return args.Error(0)
 }

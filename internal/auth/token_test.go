@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -73,4 +74,31 @@ func TestTokenService_InvalidSignature(t *testing.T) {
 	_, err := ts2.ValidateToken(pair.AccessToken)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "verification error")
+}
+
+func TestTokenService_SaveAndLoadPrivateKey(t *testing.T) {
+	key, err := GeneratePrivateKey()
+	require.NoError(t, err)
+
+	path := filepath.Join(t.TempDir(), "key.pem")
+	require.NoError(t, SavePrivateKey(path, key))
+
+	loaded, err := LoadPrivateKey(path)
+	require.NoError(t, err)
+	assert.Equal(t, key.PublicKey.N, loaded.PublicKey.N)
+}
+
+func TestTokenService_GenerateSystemToken(t *testing.T) {
+	key, _ := GeneratePrivateKey()
+	ts, err := NewTokenService(key, 15*time.Minute, 1*time.Hour, 2*time.Minute)
+	require.NoError(t, err)
+
+	token, err := ts.GenerateSystemToken("worker")
+	require.NoError(t, err)
+
+	claims, err := ts.ValidateToken(token)
+	require.NoError(t, err)
+	assert.Equal(t, "system:worker", claims.Subject)
+	assert.Contains(t, claims.Roles, "system")
+	assert.Contains(t, claims.Roles, "service:worker")
 }

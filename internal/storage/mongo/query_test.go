@@ -79,4 +79,17 @@ func TestMongoBackend_Query(t *testing.T) {
 	assert.Len(t, docs, 2)
 	assert.Equal(t, "Bob", docs[0].Data["name"])
 	assert.Equal(t, "Alice", docs[1].Data["name"])
+
+	// Test 5: Field mapping (version and custom) with multi-filter and IN
+	docs, err = backend.Query(ctx, storage.Query{
+		Collection: "users",
+		Filters: []storage.Filter{
+			{Field: "version", Op: ">=", Value: int64(1)},
+			{Field: "active", Op: "==", Value: true},
+			{Field: "name", Op: "in", Value: []string{"Alice", "Charlie"}},
+		},
+	})
+	require.NoError(t, err)
+	assert.Len(t, docs, 1)
+	assert.Equal(t, "Alice", docs[0].Data["name"])
 }

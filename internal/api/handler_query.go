@@ -24,11 +24,6 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flatDocs := make([]map[string]interface{}, len(docs))
-	for i, doc := range docs {
-		flatDocs[i] = flattenDocument(doc)
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(flatDocs)
+	json.NewEncoder(w).Encode(docs)
 }

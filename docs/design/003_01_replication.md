@@ -16,8 +16,8 @@ This document details the replication HTTP protocol used by Syntrix. It separate
 Documents in responses and requests use a flattened JSON object with reserved metadata fields:
 - `id` (string): required document ID.
 - `version` (int64): optimistic concurrency version (optional on push, returned on pull/conflicts).
-- `updated_at` (int64, millis): server update timestamp (returned on pull/conflicts).
-- `created_at` (int64, millis): server creation timestamp (returned on pull/conflicts).
+- `updatedAt` (int64, millis): server update timestamp (returned on pull/conflicts).
+- `createdAt` (int64, millis): server creation timestamp (returned on pull/conflicts).
 - `collection` (string): collection path (returned on pull/conflicts).
 - `deleted` (bool): present and true if the document is a tombstone.
 - All other fields are user data.
@@ -36,8 +36,8 @@ Documents in responses and requests use a flattened JSON object with reserved me
       "id": "m1",
       "text": "hello",
       "version": 2,
-      "updated_at": 1710000000000,
-      "created_at": 1700000000000,
+      "updatedAt": 1710000000000,
+      "createdAt": 1700000000000,
       "collection": "room/chatroom-1/messages",
       "deleted": false
     }
@@ -85,8 +85,8 @@ Documents in responses and requests use a flattened JSON object with reserved me
       "id": "m1",
       "text": "server-copy",
       "version": 3,
-      "updated_at": 1710000001000,
-      "created_at": 1700000000000,
+      "updatedAt": 1710000001000,
+      "createdAt": 1700000000000,
       "collection": "room/chatroom-1/messages"
     }
   ]

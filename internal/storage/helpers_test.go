@@ -31,3 +31,17 @@ func TestNewDocument(t *testing.T) {
 	assert.GreaterOrEqual(t, doc.UpdatedAt, before)
 	assert.LessOrEqual(t, doc.UpdatedAt, after)
 }
+
+func TestNewDocumentTimestamps(t *testing.T) {
+	path := "users/alice"
+	collection := "users"
+	data := map[string]interface{}{"hello": "world"}
+
+	before := time.Now().UnixMilli()
+	doc := NewDocument(path, collection, data)
+	after := time.Now().UnixMilli()
+
+	assert.Equal(t, doc.CreatedAt, doc.UpdatedAt)
+	assert.GreaterOrEqual(t, doc.CreatedAt, before)
+	assert.LessOrEqual(t, doc.CreatedAt, after)
+}

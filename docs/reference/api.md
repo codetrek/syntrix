@@ -83,8 +83,8 @@ These endpoints allow you to perform CRUD operations on documents.
 
 - `id`: Document ID (immutable).
 - `version`: Document version (auto-incremented).
-- `created_at`: Database creation timestamp (Unix milliseconds).
-- `updated_at`: Database last update timestamp (Unix milliseconds).
+- `createdAt`: Database creation timestamp (Unix milliseconds).
+- `updatedAt`: Database last update timestamp (Unix milliseconds).
 - `collection`: Collection path.
 
 ### Get Document
@@ -103,8 +103,8 @@ Retrieve a document by its full path.
   "text": "Hello World",
   "sender": "alice",
   "version": 1,
-  "created_at": 1700000000000,
-  "updated_at": 1700000000000,
+  "createdAt": 1700000000000,
+  "updatedAt": 1700000000000,
   "collection": "rooms/room-1/messages"
 }
 ```
@@ -204,7 +204,7 @@ Execute complex queries against a collection.
   ],
   "orderBy": [
     {
-      "field": "created_at",
+      "field": "createdAt",
       "direction": "desc"
     }
   ],

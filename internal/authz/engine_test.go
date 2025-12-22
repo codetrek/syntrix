@@ -51,7 +51,7 @@ func (m *MockQueryService) DeleteDocument(ctx context.Context, path string) erro
 	return nil
 }
 
-func (m *MockQueryService) ExecuteQuery(ctx context.Context, q storage.Query) ([]*storage.Document, error) {
+func (m *MockQueryService) ExecuteQuery(ctx context.Context, q storage.Query) ([]common.Document, error) {
 	return nil, nil
 }
 

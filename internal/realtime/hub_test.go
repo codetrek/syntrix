@@ -1,6 +1,7 @@
 package realtime
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -8,11 +9,15 @@ import (
 	"syntrix/internal/storage"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHub_Broadcast(t *testing.T) {
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
+
 	hub := NewHub()
-	go hub.Run()
+	go hub.Run(hubCtx)
 
 	// Create a mock client
 	client := &Client{
@@ -28,7 +33,7 @@ func TestHub_Broadcast(t *testing.T) {
 	}
 
 	// Register client
-	hub.register <- client
+	hub.Register(client)
 
 	// Wait for registration
 	time.Sleep(100 * time.Millisecond)
@@ -63,7 +68,7 @@ func TestHub_Broadcast(t *testing.T) {
 	}
 
 	// Unregister client
-	hub.unregister <- client
+	hub.Unregister(client)
 	time.Sleep(100 * time.Millisecond)
 
 	// Broadcast another event
@@ -81,8 +86,11 @@ func TestHub_Broadcast(t *testing.T) {
 }
 
 func TestHub_Broadcast_WithFilter(t *testing.T) {
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
+
 	hub := NewHub()
-	go hub.Run()
+	go hub.Run(hubCtx)
 
 	// Create a mock client
 	client := &Client{
@@ -108,7 +116,7 @@ func TestHub_Broadcast_WithFilter(t *testing.T) {
 	}
 
 	// Register client
-	hub.register <- client
+	hub.Register(client)
 	time.Sleep(50 * time.Millisecond)
 
 	// 1. Broadcast event that does NOT match (age = 18)
@@ -155,4 +163,71 @@ func TestHub_Broadcast_WithFilter(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		t.Fatal("Timeout waiting for matching broadcast message")
 	}
+}
+
+func TestHub_Broadcast_WaitsForSlowClient(t *testing.T) {
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
+
+	hub := NewHub()
+	go hub.Run(hubCtx)
+
+	client := &Client{
+		hub:           hub,
+		send:          make(chan BaseMessage, 1),
+		subscriptions: map[string]Subscription{"sub": {Query: storage.Query{Collection: "users"}, IncludeData: true}},
+	}
+
+	hub.Register(client)
+
+	// Fill the channel to trigger the backpressure path
+	client.send <- BaseMessage{Type: TypeEvent}
+
+	// Broadcast while channel is full; reader will drain after a short delay
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		<-client.send
+	}()
+
+	hub.Broadcast(storage.Event{
+		Type:     storage.EventCreate,
+		Id:       "users/123",
+		Document: &storage.Document{Id: "users/123", Collection: "users", Data: map[string]interface{}{}}})
+
+	select {
+	case <-client.send:
+		// received after buffer freed
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected buffered send to succeed")
+	}
+}
+
+func TestHub_Run_CancelsGracefully(t *testing.T) {
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	hub := NewHub()
+	done := make(chan struct{})
+
+	go func() {
+		hub.Run(hubCtx)
+		close(done)
+	}()
+
+	client := &Client{
+		hub:           hub,
+		send:          make(chan BaseMessage, 1),
+		subscriptions: map[string]Subscription{"sub": {Query: storage.Query{Collection: "users"}, IncludeData: true}},
+	}
+
+	require.True(t, hub.Register(client))
+	hubCancel()
+
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("hub did not exit after cancel")
+	}
+
+	// Calls after cancellation should not block
+	hub.Unregister(client)
+	hub.Broadcast(storage.Event{Id: "users/1", Type: storage.EventCreate})
 }

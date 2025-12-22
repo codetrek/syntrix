@@ -37,12 +37,12 @@ func TestDocumentSystemFields(t *testing.T) {
 
 	assert.Equal(t, collection, createdDoc["collection"])
 	assert.Equal(t, float64(1), createdDoc["version"]) // JSON numbers are floats
-	assert.NotEmpty(t, createdDoc["created_at"])
-	assert.NotEmpty(t, createdDoc["updated_at"])
+	assert.NotEmpty(t, createdDoc["createdAt"])
+	assert.NotEmpty(t, createdDoc["updatedAt"])
 
-	createdAt := createdDoc["created_at"].(float64)
-	updatedAt := createdDoc["updated_at"].(float64)
-	assert.Equal(t, createdAt, updatedAt, "On create, created_at should equal updated_at")
+	createdAt := createdDoc["createdAt"].(float64)
+	updatedAt := createdDoc["updatedAt"].(float64)
+	assert.Equal(t, createdAt, updatedAt, "On create, createdAt should equal updatedAt")
 
 	// Sleep to ensure timestamp difference
 	time.Sleep(10 * time.Millisecond)
@@ -67,10 +67,10 @@ func TestDocumentSystemFields(t *testing.T) {
 
 	// Verify System Fields on Update
 	assert.Equal(t, float64(2), patchedDoc["version"])
-	assert.Equal(t, createdAt, patchedDoc["created_at"].(float64), "created_at should not change")
-	assert.Greater(t, patchedDoc["updated_at"].(float64), updatedAt, "updated_at should increase")
+	assert.Equal(t, createdAt, patchedDoc["createdAt"].(float64), "createdAt should not change")
+	assert.Greater(t, patchedDoc["updatedAt"].(float64), updatedAt, "updatedAt should increase")
 
-	updatedAtAfterPatch := patchedDoc["updated_at"].(float64)
+	updatedAtAfterPatch := patchedDoc["updatedAt"].(float64)
 
 	// Sleep to ensure timestamp difference
 	time.Sleep(10 * time.Millisecond)
@@ -92,15 +92,15 @@ func TestDocumentSystemFields(t *testing.T) {
 
 	// Verify System Fields on Replace
 	assert.Equal(t, float64(3), replacedDoc["version"])
-	assert.Equal(t, createdAt, replacedDoc["created_at"].(float64), "created_at should not change")
-	assert.Greater(t, replacedDoc["updated_at"].(float64), updatedAtAfterPatch, "updated_at should increase")
+	assert.Equal(t, createdAt, replacedDoc["createdAt"].(float64), "createdAt should not change")
+	assert.Greater(t, replacedDoc["updatedAt"].(float64), updatedAtAfterPatch, "updatedAt should increase")
 
 	// 4. Verify Shadow Fields Protection (Try to write them)
 	maliciousData := map[string]interface{}{
 		"doc": map[string]interface{}{
 			"field4":     "value4",
 			"version":    999,
-			"created_at": 0,
+			"createdAt": 0,
 			"collection": "hacked",
 		},
 	}
@@ -113,6 +113,6 @@ func TestDocumentSystemFields(t *testing.T) {
 	resp.Body.Close()
 
 	assert.Equal(t, float64(4), protectedDoc["version"], "Server should ignore client version and increment its own")
-	assert.Equal(t, createdAt, protectedDoc["created_at"].(float64), "Server should ignore client created_at")
+	assert.Equal(t, createdAt, protectedDoc["createdAt"].(float64), "Server should ignore client createdAt")
 	assert.Equal(t, collection, protectedDoc["collection"], "Server should ignore client collection")
 }

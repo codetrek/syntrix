@@ -189,7 +189,7 @@ func (s *Storage) UpdateUser(ctx context.Context, user *User) error {
 		"$set": bson.M{
 			"roles":      user.Roles,
 			"disabled":   user.Disabled,
-			"updated_at": time.Now(),
+			"updatedAt": time.Now(),
 		},
 	}
 	_, err := s.userColl.UpdateOne(ctx, filter, update)

@@ -108,8 +108,8 @@ func (s *Server) handleReplaceDocument(w http.ResponseWriter, r *http.Request) {
 
 	doc, err := s.engine.ReplaceDocument(r.Context(), data.Doc, data.IfMatch)
 	if err != nil {
-		if errors.Is(err, storage.ErrVersionConflict) {
-			http.Error(w, "Version conflict", http.StatusConflict)
+		if errors.Is(err, storage.ErrPreconditionFailed) {
+			http.Error(w, "Version conflict", http.StatusPreconditionFailed)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -161,8 +161,8 @@ func (s *Server) handlePatchDocument(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Document not found", http.StatusNotFound)
 			return
 		}
-		if errors.Is(err, storage.ErrVersionConflict) {
-			http.Error(w, "Version conflict", http.StatusConflict)
+		if errors.Is(err, storage.ErrPreconditionFailed) {
+			http.Error(w, "Version conflict", http.StatusPreconditionFailed)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)

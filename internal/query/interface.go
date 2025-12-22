@@ -14,7 +14,7 @@ type Service interface {
 	ReplaceDocument(ctx context.Context, data common.Document, pred storage.Filters) (common.Document, error)
 	PatchDocument(ctx context.Context, data common.Document, pred storage.Filters) (common.Document, error)
 	DeleteDocument(ctx context.Context, path string) error
-	ExecuteQuery(ctx context.Context, q storage.Query) ([]*storage.Document, error)
+	ExecuteQuery(ctx context.Context, q storage.Query) ([]common.Document, error)
 	WatchCollection(ctx context.Context, collection string) (<-chan storage.Event, error)
 	Pull(ctx context.Context, req storage.ReplicationPullRequest) (*storage.ReplicationPullResponse, error)
 	Push(ctx context.Context, req storage.ReplicationPushRequest) (*storage.ReplicationPushResponse, error)

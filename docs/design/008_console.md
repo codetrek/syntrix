@@ -32,7 +32,7 @@
 - Distinct CORS allowlists for admin vs end-user origins; update via config, not UI.
 
 #### Rule publish/rollback (from 007_3)
-- Artifact: text file (e.g., `security.rules.cel`), versioned in control-plane table `rules_versions` with `id`, `created_at`, `created_by`, `status` (staged/active/disabled), `hash`, `size`, `notes`; keep last N (e.g., 20).
+- Artifact: text file (e.g., `security.rules.cel`), versioned in control-plane table `rules_versions` with `id`, `createdAt`, `created_by`, `status` (staged/active/disabled), `hash`, `size`, `notes`; keep last N (e.g., 20).
 - Serving: control-plane exposes `/admin/rules/active` and watch/poll endpoint for nodes to fetch active version & generation.
 - Publish flow: `syntrix-cli rules push` → parse/compile/validate (forbidden functions, size limits) → optional `dry-run` (stage only) → activate via atomic pointer swap → notify nodes to hot-reload generation.
 - Rollback: `syntrix-cli rules rollback <version>`; swap pointer, audit `rolled_back_from`.

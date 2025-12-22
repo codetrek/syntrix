@@ -1,10 +1,12 @@
 package realtime
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"sync"
 	"syntrix/internal/storage"
+	"time"
 )
 
 // Hub maintains the set of active clients and broadcasts messages to the
@@ -23,6 +25,9 @@ type Hub struct {
 	unregister chan *Client
 
 	mu sync.RWMutex
+
+	runCtx   context.Context
+	runCtxMu sync.RWMutex
 }
 
 func NewHub() *Hub {
@@ -34,9 +39,14 @@ func NewHub() *Hub {
 	}
 }
 
-func (h *Hub) Run() {
+func (h *Hub) Run(ctx context.Context) {
+	h.setRunCtx(ctx)
+
 	for {
 		select {
+		case <-ctx.Done():
+			h.shutdownClients()
+			return
 		case client := <-h.register:
 			h.mu.Lock()
 			h.clients[client] = true
@@ -51,12 +61,6 @@ func (h *Hub) Run() {
 		case message := <-h.broadcast:
 			h.mu.RLock()
 			for client := range h.clients {
-				// Check if client is subscribed to this event
-				// For now, we just broadcast to all, but Client.send is now chan BaseMessage
-				// We need to wrap it or let Client filter it?
-				// Better: Hub filters. But Hub needs to know subscriptions.
-
-				// Let's iterate and check subscriptions
 				client.mu.Lock()
 				for subID, sub := range client.subscriptions {
 					// Determine collection from event
@@ -64,16 +68,13 @@ func (h *Hub) Run() {
 					if message.Document != nil {
 						eventCollection = message.Document.Collection
 					} else {
-						// Fallback for delete events: extract from path
 						parts := strings.Split(message.Id, "/")
 						if len(parts) >= 2 {
 							eventCollection = parts[len(parts)-2]
 						}
 					}
 
-					// Simple filter: Collection match
 					if sub.Query.Collection == "" || eventCollection == sub.Query.Collection {
-						// Check filters
 						if sub.CelProgram != nil {
 							if message.Document == nil {
 								continue
@@ -82,7 +83,6 @@ func (h *Hub) Run() {
 								"doc": message.Document.Data,
 							})
 							if err != nil {
-								// Evaluation error (e.g. field missing) -> treat as no match
 								continue
 							}
 							if val, ok := out.Value().(bool); !ok || !val {
@@ -90,7 +90,6 @@ func (h *Hub) Run() {
 							}
 						}
 
-						// Send event
 						var doc map[string]interface{}
 						if sub.IncludeData {
 							doc = flattenDocument(message.Document)
@@ -105,16 +104,15 @@ func (h *Hub) Run() {
 								Timestamp: message.Timestamp,
 							},
 						}
-						msg := BaseMessage{
-							Type:    TypeEvent,
-							Payload: mustMarshal(payload),
-						}
+						msg := BaseMessage{Type: TypeEvent, Payload: mustMarshal(payload)}
 
 						select {
 						case client.send <- msg:
 						default:
-							// close(client.send)
-							// delete(h.clients, client)
+							select {
+							case client.send <- msg:
+							case <-time.After(50 * time.Millisecond):
+							}
 						}
 					}
 				}
@@ -126,7 +124,32 @@ func (h *Hub) Run() {
 }
 
 func (h *Hub) Broadcast(event storage.Event) {
-	h.broadcast <- event
+	select {
+	case <-h.Done():
+		return
+	default:
+	}
+
+	select {
+	case h.broadcast <- event:
+	case <-h.Done():
+	}
+}
+
+func (h *Hub) Register(client *Client) bool {
+	select {
+	case h.register <- client:
+		return true
+	case <-h.Done():
+		return false
+	}
+}
+
+func (h *Hub) Unregister(client *Client) {
+	select {
+	case h.unregister <- client:
+	case <-h.Done():
+	}
 }
 
 func flattenDocument(doc *storage.Document) map[string]interface{} {
@@ -148,8 +171,8 @@ func flattenDocument(doc *storage.Document) map[string]interface{} {
 
 	// Add system fields
 	flat["version"] = doc.Version
-	flat["updated_at"] = doc.UpdatedAt
-	flat["created_at"] = doc.CreatedAt
+	flat["updatedAt"] = doc.UpdatedAt
+	flat["createdAt"] = doc.CreatedAt
 	flat["collection"] = doc.Collection
 	return flat
 }
@@ -157,4 +180,28 @@ func flattenDocument(doc *storage.Document) map[string]interface{} {
 func mustMarshal(v interface{}) []byte {
 	b, _ := json.Marshal(v) // Should not fail for internal types
 	return b
+}
+
+func (h *Hub) setRunCtx(ctx context.Context) {
+	h.runCtxMu.Lock()
+	h.runCtx = ctx
+	h.runCtxMu.Unlock()
+}
+
+func (h *Hub) Done() <-chan struct{} {
+	h.runCtxMu.RLock()
+	defer h.runCtxMu.RUnlock()
+	if h.runCtx == nil {
+		return nil
+	}
+	return h.runCtx.Done()
+}
+
+func (h *Hub) shutdownClients() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for client := range h.clients {
+		close(client.send)
+		delete(h.clients, client)
+	}
 }

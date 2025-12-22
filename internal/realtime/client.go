@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,20 +24,37 @@ const (
 
 	// Time allowed to read the next pong message from the peer.
 	pongWait = 60 * time.Second
-
-	// Send pings to peer with this period. Must be less than pongWait.
-	pingPeriod = (pongWait * 9) / 10
-
 	// Maximum message size allowed from peer.
 	maxMessageSize = 512
 )
 
+// Send pings to peer with this period. Must be less than pongWait.
+var pingPeriod = (pongWait * 9) / 10
+
+// Heartbeat interval for SSE clients.
+var sseHeartbeatInterval = 15 * time.Second
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins for now
-	},
+	CheckOrigin:     safeCheckOrigin,
+}
+
+// safeCheckOrigin only allows empty origin or origins whose host matches the request host.
+// This mitigates cross-site WebSocket abuse while keeping same-origin clients working.
+func safeCheckOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+
+	// Compare host (includes port) to ensure exact match with request host.
+	return strings.EqualFold(u.Host, r.Host)
 }
 
 // Client is a middleman between the websocket connection and the hub.
@@ -67,7 +86,7 @@ type Subscription struct {
 // reads from this goroutine.
 func (c *Client) readPump() {
 	defer func() {
-		c.hub.unregister <- c
+		c.hub.Unregister(c)
 		c.conn.Close()
 	}()
 	c.conn.SetReadLimit(maxMessageSize)
@@ -217,13 +236,18 @@ func (c *Client) writePump() {
 
 // ServeReplicationStream handles websocket requests from the peer.
 func ServeWs(hub *Hub, qs query.Service, w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(r.Context())
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println(err)
 		return
 	}
 	client := &Client{hub: hub, queryService: qs, conn: conn, send: make(chan BaseMessage, 256), subscriptions: make(map[string]Subscription)}
-	client.hub.register <- client
+	if !client.hub.Register(client) {
+		conn.Close()
+		return
+	}
 
 	// Allow collection of memory referenced by the caller by doing all work in
 	// new goroutines.
@@ -233,6 +257,8 @@ func ServeWs(hub *Hub, qs query.Service, w http.ResponseWriter, r *http.Request)
 
 // ServeSSE handles Server-Sent Events requests.
 func ServeSSE(hub *Hub, qs query.Service, w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
@@ -264,11 +290,13 @@ func ServeSSE(hub *Hub, qs query.Service, w http.ResponseWriter, r *http.Request
 	}
 	log.Printf("[Info][SSE] connection established. Subscribed to collection=%s", collection)
 
-	client.hub.register <- client
+	if !client.hub.Register(client) {
+		return
+	}
 
 	// Unregister on exit
 	defer func() {
-		client.hub.unregister <- client
+		client.hub.Unregister(client)
 		log.Println("[Info][SSE] connection closed")
 	}()
 
@@ -277,12 +305,12 @@ func ServeSSE(hub *Hub, qs query.Service, w http.ResponseWriter, r *http.Request
 	flusher.Flush()
 
 	// Heartbeat ticker
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(sseHeartbeatInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			log.Println("[Info][SSE] context cancelled, closing connection")
 			return
 		case <-ticker.C:

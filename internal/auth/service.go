@@ -29,12 +29,22 @@ type StorageInterface interface {
 	IsRevoked(ctx context.Context, jti string, gracePeriod time.Duration) (bool, error)
 }
 
+type Service interface {
+	Middleware(next http.Handler) http.Handler
+	MiddlewareOptional(next http.Handler) http.Handler
+	SignIn(ctx context.Context, req LoginRequest) (*TokenPair, error)
+	Refresh(ctx context.Context, req RefreshRequest) (*TokenPair, error)
+	ListUsers(ctx context.Context, limit int, offset int) ([]*User, error)
+	UpdateUser(ctx context.Context, id string, roles []string, disabled bool) error
+	Logout(ctx context.Context, refreshToken string) error
+}
+
 type AuthService struct {
 	storage      StorageInterface
 	tokenService *TokenService
 }
 
-func NewAuthService(storage StorageInterface, tokenService *TokenService) *AuthService {
+func NewAuthService(storage StorageInterface, tokenService *TokenService) Service {
 	return &AuthService{
 		storage:      storage,
 		tokenService: tokenService,

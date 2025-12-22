@@ -32,6 +32,10 @@ type ServiceEnv struct {
 }
 
 func setupServiceEnv(t *testing.T, rulesContent string, configModifiers ...func(*config.Config)) *ServiceEnv {
+	return setupServiceEnvWithOptions(t, rulesContent, configModifiers, nil)
+}
+
+func setupServiceEnvWithOptions(t *testing.T, rulesContent string, configModifiers []func(*config.Config), optsModifiers []func(*services.Options)) *ServiceEnv {
 	// 1. Setup Config
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
@@ -103,6 +107,7 @@ match:
 			RefreshTokenTTL: 7 * 24 * time.Hour,
 			AuthCodeTTL:     2 * time.Minute,
 			RulesFile:       rulesFile,
+			PrivateKeyFile:  t.TempDir() + "/keys/auth_private.pem",
 		},
 	}
 
@@ -120,6 +125,9 @@ match:
 		RunTriggerEvaluator: true,
 		RunTriggerWorker:    true,
 	}
+	for _, mod := range optsModifiers {
+		mod(&opts)
+	}
 
 	manager := services.NewManager(cfg, opts)
 	require.NoError(t, manager.Init(context.Background()))
@@ -128,11 +136,19 @@ match:
 	mgrCtx, mgrCancel := context.WithCancel(context.Background())
 	manager.Start(mgrCtx)
 
-	// Wait for startup
-	waitForPort(t, apiPort)
-	waitForPort(t, queryPort)
-	waitForPort(t, realtimePort)
-	waitForPort(t, cspPort)
+	// Wait for startup only for enabled services
+	if opts.RunAPI {
+		waitForPort(t, apiPort)
+	}
+	if opts.RunQuery {
+		waitForPort(t, queryPort)
+	}
+	if opts.RunRealtime {
+		waitForPort(t, realtimePort)
+	}
+	if opts.RunCSP {
+		waitForPort(t, cspPort)
+	}
 
 	return &ServiceEnv{
 		APIURL:      fmt.Sprintf("http://localhost:%d", apiPort),

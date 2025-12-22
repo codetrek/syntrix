@@ -27,8 +27,10 @@ func mapField(field string) string {
 		return "_id"
 	case "collection":
 		return "collection"
-	case "updated_at":
+	case "updatedAt":
 		return "updated_at"
+	case "createdAt":
+		return "created_at"
 	case "version":
 		return "version"
 	default:

@@ -17,8 +17,8 @@ Base URL: `/v1`
 {
   "id": "msg-1",
   "collection": "messages",
-  "updated_at": 1678888888000,
-  "created_at": 1678888888000,
+  "updatedAt": 1678888888000,
+  "createdAt": 1678888888000,
   "version": 1,
   "text": "Hello World",
   "sender": "alice"
@@ -41,8 +41,8 @@ Base URL: `/v1`
 {
   "id": "generated-id-123",
   "collection": "messages",
-  "updated_at": 1678888888000,
-  "created_at": 1678888888000,
+  "updatedAt": 1678888888000,
+  "createdAt": 1678888888000,
   "version": 1,
   "text": "Hello World",
   "sender": "bob"
@@ -204,7 +204,7 @@ All messages follow a standard JSON envelope:
   "payload": {
     "collection": "rooms/room-1/messages",
     "checkpoint": {
-      "updated_at": 1678888888000,
+      "updatedAt": 1678888888000,
       "id": "last-doc-id"
     }
   }
@@ -219,7 +219,7 @@ All messages follow a standard JSON envelope:
     "streamId": "stream-1",
     "documents": [ ... ],
     "checkpoint": {
-      "updated_at": 1678889999000,
+      "updatedAt": 1678889999000,
       "id": "new-last-doc-id"
     }
   }

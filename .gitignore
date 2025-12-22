@@ -15,6 +15,7 @@ node_modules/
 
 # Output of go coverage tool
 *.out
+test_coverage.html
 
 # Dependency directories
 vendor/
@@ -29,6 +30,9 @@ vendor/
 .vscode/
 *.swp
 *.swo
+
+# Test Keys
+*.pem
 
 # OS
 .DS_Store

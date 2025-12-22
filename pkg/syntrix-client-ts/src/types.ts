@@ -3,8 +3,8 @@ export interface Document<T = any> {
     fullpath: string;
     collection: string;
     parent: string;
-    updated_at: number;
-    created_at: number;
+    updatedAt: number;
+    createdAt: number;
     version: number;
     data: T;
     deleted?: boolean;

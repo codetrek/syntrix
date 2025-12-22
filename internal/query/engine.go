@@ -68,8 +68,8 @@ func flattenStorageDocument(doc *storage.Document) common.Document {
 	out.SetID(extractIDFromFullpath(doc.Fullpath))
 	out.SetCollection(doc.Collection)
 	out["version"] = doc.Version
-	out["updated_at"] = doc.UpdatedAt
-	out["created_at"] = doc.CreatedAt
+	out["updatedAt"] = doc.UpdatedAt
+	out["createdAt"] = doc.CreatedAt
 	if doc.Deleted {
 		out["deleted"] = true
 	}
@@ -170,9 +170,19 @@ func (e *Engine) DeleteDocument(ctx context.Context, path string) error {
 }
 
 // ExecuteQuery executes a structured query.
-func (e *Engine) ExecuteQuery(ctx context.Context, q storage.Query) ([]*storage.Document, error) {
+func (e *Engine) ExecuteQuery(ctx context.Context, q storage.Query) ([]common.Document, error) {
 	// Future: Add query validation and optimization here
-	return e.storage.Query(ctx, q)
+	storedDocs, err := e.storage.Query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+
+	flatDocs := make([]common.Document, len(storedDocs))
+	for i, d := range storedDocs {
+		flatDocs[i] = flattenStorageDocument(d)
+	}
+
+	return flatDocs, nil
 }
 
 // WatchCollection returns a channel of events for a collection.
@@ -231,14 +241,14 @@ func (e *Engine) Pull(ctx context.Context, req storage.ReplicationPullRequest) (
 		Collection: req.Collection,
 		Filters: []storage.Filter{
 			{
-				Field: "updated_at",
+				Field: "updatedAt",
 				Op:    ">",
 				Value: req.Checkpoint,
 			},
 		},
 		OrderBy: []storage.Order{
 			{
-				Field:     "updated_at",
+				Field:     "updatedAt",
 				Direction: "asc",
 			},
 		},
@@ -325,7 +335,7 @@ func (e *Engine) Push(ctx context.Context, req storage.ReplicationPushRequest) (
 		// Handle Delete
 		if doc.Deleted {
 			if err := e.storage.Delete(ctx, doc.Fullpath, filters); err != nil {
-				if err == storage.ErrVersionConflict {
+				if err == storage.ErrPreconditionFailed {
 					// Fetch latest to return as conflict
 					latest, _ := e.storage.Get(ctx, doc.Fullpath)
 					if latest != nil {
@@ -349,7 +359,7 @@ func (e *Engine) Push(ctx context.Context, req storage.ReplicationPushRequest) (
 
 		// Update
 		if err := e.storage.Update(ctx, doc.Id, doc.Data, filters); err != nil {
-			if err == storage.ErrVersionConflict {
+			if err == storage.ErrPreconditionFailed {
 				// Fetch latest to return as conflict
 				latest, _ := e.storage.Get(ctx, doc.Id)
 				if latest != nil {

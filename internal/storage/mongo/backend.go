@@ -123,7 +123,7 @@ func (m *MongoBackend) Update(ctx context.Context, path string, data map[string]
 		if count == 0 {
 			return storage.ErrNotFound
 		}
-		return storage.ErrVersionConflict
+		return storage.ErrPreconditionFailed
 	}
 
 	return nil
@@ -161,7 +161,7 @@ func (m *MongoBackend) Patch(ctx context.Context, path string, data map[string]i
 		if count == 0 {
 			return storage.ErrNotFound
 		}
-		return storage.ErrVersionConflict
+		return storage.ErrPreconditionFailed
 	}
 
 	return nil
@@ -205,7 +205,7 @@ func (m *MongoBackend) Delete(ctx context.Context, path string, precond storage.
 				return storage.ErrNotFound // Already deleted
 			}
 		}
-		return storage.ErrVersionConflict
+		return storage.ErrPreconditionFailed
 	}
 
 	return nil

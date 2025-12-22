@@ -24,10 +24,10 @@ type Document struct {
 	Data map[string]interface{} `json:"data" bson:"data"`
 
 	// UpdatedAt is the timestamp of the last update (Unix millionseconds), Updated on every write
-	UpdatedAt int64 `json:"updated_at" bson:"updated_at"`
+	UpdatedAt int64 `json:"updatedAt" bson:"updatedAt"`
 
 	// CreatedAt is the timestamp of the creation (Unix millionseconds), Set on create only
-	CreatedAt int64 `json:"created_at" bson:"created_at"`
+	CreatedAt int64 `json:"createdAt" bson:"createdAt"`
 
 	// Version is the optimistic concurrency control version, Auto-increment per update, client cannot set
 	Version int64 `json:"version" bson:"version"`
@@ -50,15 +50,15 @@ type Document map[string]interface{}
   "id": "alice",               // Required; immutable once written; allowed charset: [A-Za-z0-9_.-]
   "collection": "chats/chatroom-1/members", // Shadow field, server-written; client input ignored
   "version": 0,                // Shadow field, server-written; client input ignored
-  "updated_at": 1700000000000,  // Shadow field, server-written; client input ignored
-  "created_at": 1700000000000,  // Shadow field, server-written; client input ignored
+  "updatedAt": 1700000000000,  // Shadow field, server-written; client input ignored
+  "createdAt": 1700000000000,  // Shadow field, server-written; client input ignored
   /* other user fields */
 }
 ```
 
 **Rules & protections**
 - `id` is required and immutable after creation; server enforces charset `[A-Za-z0-9_.-]` and rejects mutations on update/patch.
-- Shadow fields (`collection`, `version`, `updated_at`, `created_at`) are server-owned; client-supplied values are ignored/overwritten.
+- Shadow fields (`collection`, `version`, `updatedAt`, `createdAt`) are server-owned; client-supplied values are ignored/overwritten.
 
 ## 3 Soft Delete Mechanism
 
@@ -74,4 +74,4 @@ When a document is deleted via the API or Storage interface, it is **soft delete
     *   Reviving a soft-deleted document emits a `create` event.
 
 - `version` in MongoDocument is incremented automatically per write and not client-settable.
-- `created_at` is set once on create; `updated_at` updates on every write.
+- `createdAt` is set once on create; `updatedAt` updates on every write.

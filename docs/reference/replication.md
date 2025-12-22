@@ -16,8 +16,8 @@ Replication endpoints for offline-first clients. All documents use a flattened s
       "id": "msg-2",
       "text": "Offline message",
       "version": 2,
-      "updated_at": 1710000000000,
-      "created_at": 1700000000000,
+      "updatedAt": 1710000000000,
+      "createdAt": 1700000000000,
       "collection": "rooms/room-1/messages",
       "deleted": false
     }
@@ -56,8 +56,8 @@ Replication endpoints for offline-first clients. All documents use a flattened s
       "id": "msg-2",
       "text": "Server copy",
       "version": 3,
-      "updated_at": 1710000001000,
-      "created_at": 1700000000000,
+      "updatedAt": 1710000001000,
+      "createdAt": 1700000000000,
       "collection": "rooms/room-1/messages"
     }
   ]

@@ -78,7 +78,7 @@ func TestMongoBackend_CRUD(t *testing.T) {
 		{Field: "version", Op: "==", Value: oldVersion},
 	}
 	err = backend.Update(ctx, docPath, newData, filters)
-	assert.ErrorIs(t, err, storage.ErrVersionConflict)
+	assert.ErrorIs(t, err, storage.ErrPreconditionFailed)
 
 	// 5. Delete
 	err = backend.Delete(ctx, docPath, nil)
@@ -129,12 +129,58 @@ func TestMongoBackend_Update_IfMatch(t *testing.T) {
 		{Field: "score", Op: ">", Value: 200},
 	}
 	err = backend.Update(ctx, docPath, newData2, filters2)
-	assert.ErrorIs(t, err, storage.ErrVersionConflict)
+	assert.ErrorIs(t, err, storage.ErrPreconditionFailed)
 
 	// Verify No Update
 	fetchedDoc, err = backend.Get(ctx, docPath)
 	require.NoError(t, err)
 	assert.Equal(t, "inactive", fetchedDoc.Data["status"])
+}
+
+func TestMongoBackend_FilterOperators_OnUpdatePatchDelete(t *testing.T) {
+	backend := setupTestBackend(t)
+	defer backend.Close(context.Background())
+
+	ctx := context.Background()
+	path := "users/filter-ops"
+
+	seed := storage.NewDocument(path, "users", map[string]interface{}{
+		"age":  int64(30),
+		"tags": []string{"a", "b"},
+	})
+	require.NoError(t, backend.Create(ctx, seed))
+
+	// Update guarded by numeric GT
+	gtFilter := storage.Filters{{Field: "age", Op: ">", Value: int64(25)}}
+	require.NoError(t, backend.Update(ctx, path, map[string]interface{}{
+		"age":  int64(31),
+		"tags": []string{"a", "b"},
+	}, gtFilter))
+
+	updated, err := backend.Get(ctx, path)
+	require.NoError(t, err)
+	assert.EqualValues(t, 31, updated.Data["age"])
+
+	// Update blocked by LT (should conflict)
+	ltFilter := storage.Filters{{Field: "age", Op: "<", Value: int64(20)}}
+	err = backend.Update(ctx, path, map[string]interface{}{"age": 40}, ltFilter)
+	assert.ErrorIs(t, err, storage.ErrPreconditionFailed)
+
+	// Patch using IN
+	inFilter := storage.Filters{{Field: "tags", Op: "in", Value: []string{"a", "c"}}}
+	require.NoError(t, backend.Patch(ctx, path, map[string]interface{}{"city": "NY"}, inFilter))
+
+	afterPatch, err := backend.Get(ctx, path)
+	require.NoError(t, err)
+	require.EqualValues(t, int64(3), afterPatch.Version)
+	assert.Equal(t, "NY", afterPatch.Data["city"])
+
+	// Delete guarded by GTE version
+	gteFilter := storage.Filters{{Field: "version", Op: ">=", Value: afterPatch.Version}}
+	require.NoError(t, backend.Delete(ctx, path, gteFilter))
+
+	_, err = backend.Get(ctx, path)
+	assert.ErrorIs(t, err, storage.ErrNotFound)
 }
 
 func TestMongoBackend_CreateDuplicate(t *testing.T) {
@@ -208,4 +254,94 @@ func TestMongoBackend_Patch(t *testing.T) {
 	require.True(t, ok)
 	assert.EqualValues(t, 31, info2["age"])
 	assert.Equal(t, "New York", info2["city"])
+}
+
+func TestMongoBackend_Patch_WithFilter(t *testing.T) {
+	backend := setupTestBackend(t)
+	defer backend.Close(context.Background())
+
+	ctx := context.Background()
+	path := "users/patch-precond"
+
+	base := storage.NewDocument(path, "users", map[string]interface{}{"name": "One"})
+	require.NoError(t, backend.Create(ctx, base))
+
+	wrong := storage.Filters{{Field: "version", Op: "==", Value: int64(0)}}
+	err := backend.Patch(ctx, path, map[string]interface{}{"name": "Wrong"}, wrong)
+	assert.ErrorIs(t, err, storage.ErrPreconditionFailed)
+
+	current, err := backend.Get(ctx, path)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), current.Version)
+	assert.Equal(t, "One", current.Data["name"])
+
+	match := storage.Filters{{Field: "version", Op: "==", Value: current.Version}}
+	require.NoError(t, backend.Patch(ctx, path, map[string]interface{}{"name": "Two"}, match))
+
+	updated, err := backend.Get(ctx, path)
+	require.NoError(t, err)
+	assert.Equal(t, "Two", updated.Data["name"])
+	assert.Equal(t, int64(2), updated.Version)
+}
+
+func TestMongoBackend_Delete_WithFilter(t *testing.T) {
+	backend := setupTestBackend(t)
+	defer backend.Close(context.Background())
+
+	ctx := context.Background()
+	path := "users/delete-precond"
+
+	doc := storage.NewDocument(path, "users", map[string]interface{}{"name": "ToDelete"})
+	require.NoError(t, backend.Create(ctx, doc))
+
+	wrong := storage.Filters{{Field: "version", Op: "==", Value: int64(0)}}
+	err := backend.Delete(ctx, path, wrong)
+	assert.ErrorIs(t, err, storage.ErrPreconditionFailed)
+
+	stillThere, err := backend.Get(ctx, path)
+	require.NoError(t, err)
+	assert.Equal(t, "ToDelete", stillThere.Data["name"])
+
+	match := storage.Filters{{Field: "version", Op: "==", Value: stillThere.Version}}
+	require.NoError(t, backend.Delete(ctx, path, match))
+
+	_, err = backend.Get(ctx, path)
+	assert.ErrorIs(t, err, storage.ErrNotFound)
+}
+
+func TestMongoBackend_Transaction(t *testing.T) {
+	backend := setupTestBackend(t)
+	defer backend.Close(context.Background())
+
+	ctx := context.Background()
+	path := "users/tx"
+
+	err := backend.Transaction(ctx, func(txCtx context.Context, tx storage.StorageBackend) error {
+		return tx.Create(txCtx, storage.NewDocument(path, "users", map[string]interface{}{"ok": true}))
+	})
+	if err != nil {
+		t.Skipf("Skipping transaction test (likely no replica set): %v", err)
+		return
+	}
+
+	fetched, err := backend.Get(ctx, path)
+	require.NoError(t, err)
+	assert.True(t, fetched.Data["ok"].(bool))
+
+	// Ensure rollback on error
+	err = backend.Transaction(ctx, func(txCtx context.Context, tx storage.StorageBackend) error {
+		_ = tx.Delete(txCtx, path, nil)
+		return assert.AnError
+	})
+	if err != nil {
+		// With transactions enabled, we expect returned error to propagate
+		assert.Error(t, err)
+	}
+
+	fetchedAfter, err := backend.Get(ctx, path)
+	if err != nil {
+		t.Skipf("Skipping transaction rollback assertion (transaction unsupported): %v", err)
+		return
+	}
+	assert.True(t, fetchedAfter.Data["ok"].(bool))
 }

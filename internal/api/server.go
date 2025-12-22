@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"syntrix/internal/auth"
 	"syntrix/internal/authz"
 	"syntrix/internal/common"
 	"syntrix/internal/query"
@@ -14,12 +15,12 @@ import (
 
 type Server struct {
 	engine query.Service
-	auth   AuthService
-	authz  AuthzService
+	auth   auth.Service
+	authz  authz.Engine
 	mux    *http.ServeMux
 }
 
-func NewServer(engine query.Service, auth AuthService, authz AuthzService) *Server {
+func NewServer(engine query.Service, auth auth.Service, authz authz.Engine) *Server {
 	s := &Server{
 		engine: engine,
 		auth:   auth,

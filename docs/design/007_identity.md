@@ -17,7 +17,7 @@
 - Non-goals (now): multi-factor auth, social login, SSO, SCIM, org/tenant hierarchy, password reset via email/SMS. Admin UI is documented separately in [008_console.md](008_console.md).
 
 ## 3. Identity Service (How)
-- **Data model**: logical collection `auth_users/{user_id}` (or SQL table `auth_users`) with: `id` (UUID), `username` (unique, stored lowercased for comparison), `password_hash`, `password_algo`, `created_at`, `updated_at`, `disabled` (bool), `roles` (string array, optional, max 10 items, each ≤32 chars), `profile` (opaque JSON).
+- **Data model**: logical collection `auth_users/{user_id}` (or SQL table `auth_users`) with: `id` (UUID), `username` (unique, stored lowercased for comparison), `password_hash`, `password_algo`, `createdAt`, `updatedAt`, `disabled` (bool), `roles` (string array, optional, max 10 items, each ≤32 chars), `profile` (opaque JSON).
 - **Password hashing**: prefer `argon2id` (or `bcrypt` fallback) with per-user salt; store parameters alongside hash for future migration.
 - **Sign-up**: username + password; validate strength; reject duplicates; persist auth record; return JWT (access) on success.
 - **Sign-in**: username + password; verify hash; issue access token (≈15m) and refresh token (≈7d) if refresh is enabled.

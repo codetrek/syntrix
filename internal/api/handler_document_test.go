@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -180,4 +181,274 @@ func TestHandlePatchDocument_IfMatch(t *testing.T) {
 	var resp map[string]interface{}
 	json.Unmarshal(rr.Body.Bytes(), &resp)
 	assert.Equal(t, "read", resp["status"])
+}
+
+func TestHandleGetDocument_InvalidPath(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.SetPathValue("path", "rooms//")
+	rr := httptest.NewRecorder()
+
+	server.handleGetDocument(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestHandleGetDocument_InternalError(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	mockService.On("GetDocument", mock.Anything, "rooms/room-1/messages/msg-1").Return(nil, errors.New("boom"))
+
+	req, _ := http.NewRequest("GET", "/v1/rooms/room-1/messages/msg-1", nil)
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	mockService.AssertExpectations(t)
+}
+
+func TestHandleCreateDocument_InvalidCollection(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	req, _ := http.NewRequest("POST", "/v1/Invalid!", bytes.NewBufferString(`{"id":"1"}`))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestHandleCreateDocument_BadBody(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	req, _ := http.NewRequest("POST", "/v1/rooms/room-1/messages", bytes.NewBufferString("{invalid"))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestHandleCreateDocument_ValidationError(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	req, _ := http.NewRequest("POST", "/v1/rooms/room-1/messages", bytes.NewBufferString(`{"id":""}`))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestHandleCreateDocument_Conflict(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	mockService.On("CreateDocument", mock.Anything, mock.AnythingOfType("common.Document")).Return(storage.ErrExists)
+
+	req, _ := http.NewRequest("POST", "/v1/rooms/room-1/messages", bytes.NewBufferString(`{"id":"msg-1"}`))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusConflict, rr.Code)
+	mockService.AssertExpectations(t)
+}
+
+func TestHandleCreateDocument_GetError(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	mockService.On("CreateDocument", mock.Anything, mock.AnythingOfType("common.Document")).Return(nil)
+	mockService.On("GetDocument", mock.Anything, "rooms/room-1/messages/msg-1").Return(nil, errors.New("fetch"))
+
+	req, _ := http.NewRequest("POST", "/v1/rooms/room-1/messages", bytes.NewBufferString(`{"id":"msg-1"}`))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	mockService.AssertExpectations(t)
+}
+
+func TestHandleReplaceDocument_InvalidPath(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	req, _ := http.NewRequest("PUT", "/v1/rooms", bytes.NewBufferString(`{"doc":{}}`))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestHandleReplaceDocument_InvalidBody(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	req, _ := http.NewRequest("PUT", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString("{invalid"))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestHandleReplaceDocument_ValidationError(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	req, _ := http.NewRequest("PUT", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"id":""}}`))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestHandleReplaceDocument_IDMismatch(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	req, _ := http.NewRequest("PUT", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"id":"msg-2"}}`))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestHandleReplaceDocument_VersionConflict(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	mockService.On("ReplaceDocument", mock.Anything, mock.AnythingOfType("common.Document"), mock.Anything).Return(nil, storage.ErrPreconditionFailed)
+
+	req, _ := http.NewRequest("PUT", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"id":"msg-1"}}`))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+	mockService.AssertExpectations(t)
+}
+
+func TestHandlePatchDocument_InvalidBody(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	req, _ := http.NewRequest("PATCH", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString("{invalid"))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestHandlePatchDocument_InvalidPath(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	req := httptest.NewRequest("PATCH", "/", bytes.NewBufferString(`{"doc":{"status":"read"}}`))
+	req.SetPathValue("path", "rooms")
+	rr := httptest.NewRecorder()
+
+	server.handlePatchDocument(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestHandlePatchDocument_NoData(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	req, _ := http.NewRequest("PATCH", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"id":"msg-1"}}`))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestHandlePatchDocument_NotFound(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	mockService.On("PatchDocument", mock.Anything, mock.AnythingOfType("common.Document"), mock.Anything).Return(nil, storage.ErrNotFound)
+
+	req, _ := http.NewRequest("PATCH", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"status":"read"}}`))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusNotFound, rr.Code)
+	mockService.AssertExpectations(t)
+}
+
+func TestHandlePatchDocument_VersionConflict(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	mockService.On("PatchDocument", mock.Anything, mock.AnythingOfType("common.Document"), mock.Anything).Return(nil, storage.ErrPreconditionFailed)
+
+	req, _ := http.NewRequest("PATCH", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"status":"read"}}`))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
+	mockService.AssertExpectations(t)
+}
+
+func TestHandlePatchDocument_InternalError(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	mockService.On("PatchDocument", mock.Anything, mock.AnythingOfType("common.Document"), mock.Anything).Return(nil, errors.New("boom"))
+
+	req, _ := http.NewRequest("PATCH", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"status":"read"}}`))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	mockService.AssertExpectations(t)
+}
+
+func TestHandleDeleteDocument_NotFound(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	mockService.On("DeleteDocument", mock.Anything, "rooms/room-1/messages/msg-1").Return(storage.ErrNotFound)
+
+	req, _ := http.NewRequest("DELETE", "/v1/rooms/room-1/messages/msg-1", nil)
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusNotFound, rr.Code)
+	mockService.AssertExpectations(t)
+}
+
+func TestHandleDeleteDocument_InternalError(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	mockService.On("DeleteDocument", mock.Anything, "rooms/room-1/messages/msg-1").Return(errors.New("boom"))
+
+	req, _ := http.NewRequest("DELETE", "/v1/rooms/room-1/messages/msg-1", nil)
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	mockService.AssertExpectations(t)
 }

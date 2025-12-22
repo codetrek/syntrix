@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"syntrix/internal/common"
 	"syntrix/internal/storage"
 
 	"github.com/stretchr/testify/assert"
@@ -17,19 +18,9 @@ func TestHandleQuery(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := NewServer(mockService, nil, nil)
 
-	docs := []*storage.Document{
-		{
-			Id:         "rooms/room-1/messages/msg-1",
-			Collection: "rooms/room-1/messages",
-			Data:       map[string]interface{}{"name": "Alice"},
-			Version:    1,
-		},
-		{
-			Id:         "rooms/room-1/messages/msg-2",
-			Collection: "rooms/room-1/messages",
-			Data:       map[string]interface{}{"name": "Bob"},
-			Version:    1,
-		},
+	docs := []common.Document{
+		{"id": "msg-1", "collection": "rooms/room-1/messages", "name": "Alice", "version": int64(1)},
+		{"id": "msg-2", "collection": "rooms/room-1/messages", "name": "Bob", "version": int64(1)},
 	}
 
 	mockService.On("ExecuteQuery", mock.Anything, mock.AnythingOfType("storage.Query")).Return(docs, nil)
@@ -52,4 +43,47 @@ func TestHandleQuery(t *testing.T) {
 	json.Unmarshal(rr.Body.Bytes(), &resp)
 	assert.Len(t, resp, 2)
 	assert.Equal(t, "Alice", resp[0]["name"])
+}
+
+func TestHandleQuery_BadJSON(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	req := httptest.NewRequest("POST", "/v1/query", bytes.NewReader([]byte("{bad")))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestHandleQuery_ValidateError(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	q := storage.Query{} // missing collection triggers validation error
+	body, _ := json.Marshal(q)
+	req := httptest.NewRequest("POST", "/v1/query", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestHandleQuery_EngineError(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := NewServer(mockService, nil, nil)
+
+	q := storage.Query{Collection: "rooms"}
+	mockService.On("ExecuteQuery", mock.Anything, q).Return(nil, assert.AnError)
+
+	body, _ := json.Marshal(q)
+	req := httptest.NewRequest("POST", "/v1/query", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	mockService.AssertExpectations(t)
 }

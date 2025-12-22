@@ -135,13 +135,13 @@ await client.batch([
 ### 6.1 Transport Contract
 - **Pull**: `GET /v1/replication/pull?collection=...&checkpoint=...&limit=...` (checkpoint is a stringified int64; limit 0–1000).
 - **Push**: `POST /v1/replication/push` with body `{ collection, changes: [{ doc }] }`; conflicts are returned as `conflicts` array.
-- **Document shape (client-facing)**: responses expose logical `id` (path segment), `collection`, `data`, `version`, `updated_at`, `created_at`, optional `deleted`. The server’s internal hash ID is opaque and never returned. Clients send only `collection` + `id` + `data`; any client-sent `version/updated_at/fullpath/parent/deleted` are ignored. Soft delete only via `action=delete` in changes.
+- **Document shape (client-facing)**: responses expose logical `id` (path segment), `collection`, `data`, `version`, `updatedAt`, `createdAt`, optional `deleted`. The server’s internal hash ID is opaque and never returned. Clients send only `collection` + `id` + `data`; any client-sent `version/updatedAt/fullpath/parent/deleted` are ignored. Soft delete only via `action=delete` in changes.
 
 ### 6.2 SDK Adapter Shape (planned in `src/replication/`)
 - Factory: `setupSyntrixReplication<T>({ collectionPath, baseURL, token, rxCollection, live?, pull?: { batchSize?, retryTime? }, push?: { retryTime? }, headers?, mapDocToPush?, mapPulledDoc? }) => RxReplicationState<T>`.
 - `collectionPath` matches backend paths (do not rely on RxDB collection name).
 - Pull handler maps `batchSize` to `limit`; uses returned `checkpoint` string.
-- Push handler maps RxDB docs to `{ doc }` with only `collection`, `id`, `data`; server derives `fullpath/parent/version/updated_at/deleted`. Soft delete is expressed as `action: "delete"`.
+- Push handler maps RxDB docs to `{ doc }` with only `collection`, `id`, `data`; server derives `fullpath/parent/version/updatedAt/deleted`. Soft delete is expressed as `action: "delete"`.
 - Hooks `mapDocToPush` / `mapPulledDoc` let apps adapt schemas without leaking SDK internals.
 - `live` enables continuous replication; stream/WebSocket can be added later.
 
@@ -157,5 +157,5 @@ await client.batch([
 - Periodically cleanup deleted/expired docs to control storage growth and init time; consider selective caching for cold data or constrained devices.
 
 ### 6.4 Forward Compatibility & Live Stream
-- **Checkpoint evolution**: current checkpoint is a stringified int64; design adapter to allow future upgrade to structured checkpoints (e.g., `{ updated_at, id }`) without breaking callers.
+- **Checkpoint evolution**: current checkpoint is a stringified int64; design adapter to allow future upgrade to structured checkpoints (e.g., `{ updatedAt, id }`) without breaking callers.
 - **Live mode**: Prefer existing `/v1/realtime` (WebSocket/SSE) for live replication feed; periodic pull remains a fallback.

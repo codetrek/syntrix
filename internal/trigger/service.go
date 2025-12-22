@@ -72,7 +72,7 @@ func (s *TriggerService) Watch(ctx context.Context, backend storage.StorageBacke
 			if evt.ResumeToken != nil {
 				err := backend.Update(ctx, "sys/checkpoints/trigger_evaluator", map[string]interface{}{
 					"token":      evt.ResumeToken,
-					"updated_at": time.Now().Unix(),
+					"updatedAt": time.Now().Unix(),
 				}, storage.Filters{})
 				if err != nil {
 					// If it doesn't exist, create it
@@ -82,7 +82,7 @@ func (s *TriggerService) Watch(ctx context.Context, backend storage.StorageBacke
 							Collection: "sys",
 							Data: map[string]interface{}{
 								"token":      evt.ResumeToken,
-								"updated_at": time.Now().Unix(),
+								"updatedAt": time.Now().Unix(),
 							},
 						})
 					} else {

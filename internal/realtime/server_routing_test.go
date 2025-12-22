@@ -28,7 +28,7 @@ func (m *MockQueryService) PatchDocument(ctx context.Context, data common.Docume
 	return nil, nil
 }
 func (m *MockQueryService) DeleteDocument(ctx context.Context, path string) error { return nil }
-func (m *MockQueryService) ExecuteQuery(ctx context.Context, q storage.Query) ([]*storage.Document, error) {
+func (m *MockQueryService) ExecuteQuery(ctx context.Context, q storage.Query) ([]common.Document, error) {
 	return nil, nil
 }
 func (m *MockQueryService) WatchCollection(ctx context.Context, collection string) (<-chan storage.Event, error) {
@@ -47,7 +47,9 @@ func (m *MockQueryService) RunTransaction(ctx context.Context, fn func(ctx conte
 func TestServer_Routing(t *testing.T) {
 	qs := &MockQueryService{}
 	server := NewServer(qs, "")
-	go server.hub.Run()
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
+	go server.hub.Run(hubCtx)
 
 	tests := []struct {
 		name      string
