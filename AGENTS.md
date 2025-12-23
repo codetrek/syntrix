@@ -9,6 +9,7 @@ applyTo: "**"
 - always ask "should I add more testing" and make robust but not over-engineering testing
 - always document the "Why" (reasoning/analysis) alongside the "How" (decision/implementation) in design discussion documents
 - all documentation and code must be written in English
+- frontend engineering uses `bun` for package scripts and tests unless explicitly overridden
 
 ## � DOCUMENTATION STRUCTURE
 When creating design or implementation documentation, follow this structure:

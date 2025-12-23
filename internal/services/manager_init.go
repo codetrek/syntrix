@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"syntrix/internal/api"
+	"syntrix/internal/api/realtime"
 	"syntrix/internal/auth"
 	"syntrix/internal/authz"
 	"syntrix/internal/csp"
 	"syntrix/internal/query"
-	"syntrix/internal/realtime"
 	mongostore "syntrix/internal/storage/mongo"
 	"syntrix/internal/trigger"
 
@@ -59,18 +59,11 @@ func (m *Manager) Init(ctx context.Context) error {
 
 	if m.opts.RunAPI {
 		if queryService == nil {
-			queryService = query.NewClient(m.cfg.API.QueryServiceURL)
+			queryService = query.NewClient(m.cfg.Gateway.QueryServiceURL)
 		}
 		if err := m.initAPIServer(queryService); err != nil {
 			return err
 		}
-	}
-
-	if m.opts.RunRealtime {
-		if queryService == nil {
-			queryService = query.NewClient(m.cfg.Realtime.QueryServiceURL)
-		}
-		m.initRealtimeServer(queryService)
 	}
 
 	if m.opts.RunCSP {
@@ -201,23 +194,17 @@ func (m *Manager) initAPIServer(queryService query.Service) error {
 		log.Printf("Loaded authorization rules from %s", m.cfg.Auth.RulesFile)
 	}
 
-	apiServer := api.NewServer(queryService, m.authService, authzEngine)
+	// Always initialize realtime server as part of gateway
+	m.rtServer = realtime.NewServer(queryService, m.cfg.Storage.DataCollection)
+
+	apiServer := api.NewServer(queryService, m.authService, authzEngine, m.rtServer)
 	m.servers = append(m.servers, &http.Server{
-		Addr:    fmt.Sprintf(":%d", m.cfg.API.Port),
+		Addr:    fmt.Sprintf(":%d", m.cfg.Gateway.Port),
 		Handler: apiServer,
 	})
-	m.serverNames = append(m.serverNames, "API Gateway")
+	m.serverNames = append(m.serverNames, "Unified Gateway")
 
 	return nil
-}
-
-func (m *Manager) initRealtimeServer(queryService query.Service) {
-	m.rtServer = realtime.NewServer(queryService, m.cfg.Storage.DataCollection)
-	m.servers = append(m.servers, &http.Server{
-		Addr:    fmt.Sprintf(":%d", m.cfg.Realtime.Port),
-		Handler: m.rtServer,
-	})
-	m.serverNames = append(m.serverNames, "Realtime Gateway")
 }
 
 func (m *Manager) initCSPServer() {

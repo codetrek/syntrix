@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"syntrix/internal/api"
-	"syntrix/internal/realtime"
+	"syntrix/internal/api/realtime"
+	"syntrix/internal/api/rest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,7 +27,7 @@ func TestReplication_FullFlow(t *testing.T) {
 	collectionName := "replication_test_col"
 
 	// 1. Setup Realtime (SSE) Connection
-	sseURL := fmt.Sprintf("%s/v1/realtime?collection=%s", env.RealtimeURL, collectionName)
+	sseURL := fmt.Sprintf("%s/realtime/sse?collection=%s", env.RealtimeURL, collectionName)
 	req, err := http.NewRequest("GET", sseURL, nil)
 	require.NoError(t, err)
 	req.Header.Set("Accept", "text/event-stream")
@@ -56,9 +56,9 @@ func TestReplication_FullFlow(t *testing.T) {
 		"version": float64(0), // New document
 	}
 
-	pushBody := api.ReplicaPushRequest{
+	pushBody := rest.ReplicaPushRequest{
 		Collection: collectionName,
-		Changes: []api.ReplicaChange{
+		Changes: []rest.ReplicaChange{
 			{
 				Doc: docData,
 			},

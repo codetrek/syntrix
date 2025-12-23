@@ -63,15 +63,13 @@ func TestIntegration_ForceQueryClient_API(t *testing.T) {
 	queryStub := newMinimalQueryServer(t)
 
 	cfgMod := func(cfg *config.Config) {
-		cfg.API.QueryServiceURL = queryStub.server.URL
-		cfg.Realtime.QueryServiceURL = queryStub.server.URL
+		cfg.Gateway.QueryServiceURL = queryStub.server.URL
 		cfg.Auth.RulesFile = "" // disable auth enforcement
 		cfg.Auth.PrivateKeyFile = ""
 	}
 
 	optsMod := func(opts *services.Options) {
 		opts.RunQuery = false
-		opts.RunRealtime = false
 		opts.RunCSP = false
 		opts.RunAuth = false
 		opts.RunTriggerEvaluator = false

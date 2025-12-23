@@ -78,7 +78,7 @@ func TestManager_InitTokenService_GenerateKey(t *testing.T) {
 
 func TestManager_InitAPIServer_WithRules(t *testing.T) {
 	cfg := config.LoadConfig()
-	cfg.API.Port = 0
+	cfg.Gateway.Port = 0
 	rulesPath := filepath.Join(t.TempDir(), "rules.yaml")
 	rulesContent := "match:\n  /databases/{db}/documents/{doc}:\n    allow:\n      get: \"true\"\n"
 	assert.NoError(t, os.WriteFile(rulesPath, []byte(rulesContent), 0644))
@@ -90,12 +90,12 @@ func TestManager_InitAPIServer_WithRules(t *testing.T) {
 	err := mgr.initAPIServer(querySvc)
 	assert.NoError(t, err)
 	assert.Len(t, mgr.servers, 1)
-	assert.Equal(t, "API Gateway", mgr.serverNames[0])
+	assert.Equal(t, "Unified Gateway", mgr.serverNames[0])
 }
 
 func TestManager_InitAPIServer_NoRules(t *testing.T) {
 	cfg := config.LoadConfig()
-	cfg.API.Port = 0
+	cfg.Gateway.Port = 0
 	cfg.Auth.RulesFile = ""
 
 	mgr := NewManager(cfg, Options{})
@@ -104,19 +104,20 @@ func TestManager_InitAPIServer_NoRules(t *testing.T) {
 	err := mgr.initAPIServer(querySvc)
 	assert.NoError(t, err)
 	assert.Len(t, mgr.servers, 1)
-	assert.Equal(t, "API Gateway", mgr.serverNames[0])
+	assert.Equal(t, "Unified Gateway", mgr.serverNames[0])
 }
 
-func TestManager_InitRealtimeServer(t *testing.T) {
+func TestManager_InitAPIServer_WithRealtime(t *testing.T) {
 	cfg := config.LoadConfig()
-	cfg.Realtime.Port = 0
+	cfg.Gateway.Port = 0
+	cfg.Auth.RulesFile = ""
 	mgr := NewManager(cfg, Options{})
 
-	mgr.initRealtimeServer(&stubQueryService{})
-
+	err := mgr.initAPIServer(&stubQueryService{})
+	assert.NoError(t, err)
 	assert.NotNil(t, mgr.rtServer)
 	assert.Len(t, mgr.servers, 1)
-	assert.Equal(t, "Realtime Gateway", mgr.serverNames[0])
+	assert.Equal(t, "Unified Gateway", mgr.serverNames[0])
 }
 
 func TestManager_InitTriggerServices_NATSFailure(t *testing.T) {
@@ -213,14 +214,16 @@ func TestManager_Init_RunCSPPath(t *testing.T) {
 
 func TestManager_Init_RunRealtimePath(t *testing.T) {
 	cfg := config.LoadConfig()
-	cfg.Realtime.Port = 0
-	mgr := NewManager(cfg, Options{RunRealtime: true})
+	cfg.Gateway.Port = 0
+	
+	cfg.Auth.RulesFile = ""
+	mgr := NewManager(cfg, Options{RunAPI: true, })
 
 	err := mgr.Init(context.Background())
 	assert.NoError(t, err)
 	assert.NotNil(t, mgr.rtServer)
 	assert.Len(t, mgr.servers, 1)
-	assert.Equal(t, "Realtime Gateway", mgr.serverNames[0])
+	assert.Equal(t, "Unified Gateway", mgr.serverNames[0])
 }
 
 type fakeStorageBackend struct {

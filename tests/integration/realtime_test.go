@@ -81,7 +81,7 @@ func TestRealtime_FullFlow(t *testing.T) {
 	defer env.Cancel()
 
 	// Convert http URL to ws URL
-	wsURL := "ws" + strings.TrimPrefix(env.RealtimeURL, "http") + "/v1/realtime"
+	wsURL := "ws" + strings.TrimPrefix(env.RealtimeURL, "http") + "/realtime/ws"
 
 	// Connect to Websocket
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -203,7 +203,7 @@ func TestRealtime_SSE(t *testing.T) {
 	defer env.Cancel()
 
 	collectionName := "sse_test_col"
-	sseURL := fmt.Sprintf("%s/v1/realtime?collection=%s", env.RealtimeURL, collectionName)
+	sseURL := fmt.Sprintf("%s/realtime/sse?collection=%s", env.RealtimeURL, collectionName)
 
 	req, err := http.NewRequest("GET", sseURL, nil)
 	require.NoError(t, err)
@@ -283,7 +283,7 @@ func TestRealtime_Stream(t *testing.T) {
 	defer env.Cancel()
 
 	collectionName := "stream_test_col"
-	wsURL := "ws" + strings.TrimPrefix(env.RealtimeURL, "http") + "/v1/realtime"
+	wsURL := "ws" + strings.TrimPrefix(env.RealtimeURL, "http") + "/realtime/ws"
 
 	// 1. Create a document beforehand
 	docData := map[string]interface{}{
@@ -379,7 +379,7 @@ func TestRealtime_Filtering(t *testing.T) {
 	defer env.Cancel()
 
 	// Convert http URL to ws URL
-	wsURL := "ws" + strings.TrimPrefix(env.RealtimeURL, "http") + "/v1/realtime"
+	wsURL := "ws" + strings.TrimPrefix(env.RealtimeURL, "http") + "/realtime/ws"
 
 	// Connect to Websocket
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)

@@ -58,10 +58,10 @@ func setupServiceEnvWithOptions(t *testing.T, rulesContent string, configModifie
 	err = client.Database(dbName).Drop(ctx)
 	require.NoError(t, err)
 
-	apiPort := 18084
-	queryPort := 18085
-	realtimePort := 18086
-	cspPort := 18087
+	apiPort := getFreePort(t)
+	queryPort := getFreePort(t)
+	realtimePort := apiPort
+	cspPort := getFreePort(t)
 
 	// Create security rules file
 	if rulesContent == "" {
@@ -81,17 +81,13 @@ match:
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		API: config.APIConfig{
+		Gateway: config.GatewayConfig{
 			Port:            apiPort,
 			QueryServiceURL: fmt.Sprintf("http://localhost:%d", queryPort),
 		},
 		Query: config.QueryConfig{
 			Port:          queryPort,
 			CSPServiceURL: fmt.Sprintf("http://localhost:%d", cspPort),
-		},
-		Realtime: config.RealtimeConfig{
-			Port:            realtimePort,
-			QueryServiceURL: fmt.Sprintf("http://localhost:%d", queryPort),
 		},
 		CSP: config.CSPConfig{
 			Port: cspPort,
@@ -119,7 +115,6 @@ match:
 	opts := services.Options{
 		RunAPI:              true,
 		RunQuery:            true,
-		RunRealtime:         true,
 		RunCSP:              true,
 		RunAuth:             true,
 		RunTriggerEvaluator: true,
@@ -142,9 +137,6 @@ match:
 	}
 	if opts.RunQuery {
 		waitForPort(t, queryPort)
-	}
-	if opts.RunRealtime {
-		waitForPort(t, realtimePort)
 	}
 	if opts.RunCSP {
 		waitForPort(t, cspPort)
@@ -232,4 +224,13 @@ func waitForPort(t *testing.T, port int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("Timeout waiting for port %d to be ready", port)
+}
+
+func getFreePort(t *testing.T) int {
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	addr := listener.Addr().(*net.TCPAddr)
+	return addr.Port
 }

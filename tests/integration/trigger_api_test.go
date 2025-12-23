@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"syntrix/internal/api"
+	"syntrix/internal/api/rest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,8 +18,8 @@ func TestTriggerAPIIntegration(t *testing.T) {
 	token := env.GenerateSystemToken(t)
 
 	t.Run("Transactional Write - Success", func(t *testing.T) {
-		reqBody := api.TriggerWriteRequest{
-			Writes: []api.TriggerWriteOp{
+		reqBody := rest.TriggerWriteRequest{
+			Writes: []rest.TriggerWriteOp{
 				{Type: "create", Path: "api/doc1", Data: map[string]interface{}{"val": 1}},
 				{Type: "create", Path: "api/doc2", Data: map[string]interface{}{"val": 2}},
 			},
@@ -51,8 +51,8 @@ func TestTriggerAPIIntegration(t *testing.T) {
 		require.Equal(t, http.StatusCreated, resp.StatusCode)
 
 		// Now try to create doc4 AND doc3 (duplicate) in one transaction
-		reqBody := api.TriggerWriteRequest{
-			Writes: []api.TriggerWriteOp{
+		reqBody := rest.TriggerWriteRequest{
+			Writes: []rest.TriggerWriteOp{
 				{Type: "create", Path: "api/doc4", Data: map[string]interface{}{"val": 4}},
 				{Type: "create", Path: "api/doc3", Data: map[string]interface{}{"val": 33}}, // Should fail
 			},

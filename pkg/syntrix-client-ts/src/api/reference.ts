@@ -1,113 +1,82 @@
-import { StorageClient } from '../internal/interfaces';
-import { Filter, Order, Query } from '../types';
+import { StorageClient } from '../internal/storage-client';
+import { CollectionReference, DocumentReference, Query } from './types';
 
-export class DocumentReference<T = any> {
-    constructor(
-        private api: StorageClient,
-        public readonly path: string
-    ) {}
+export class DocumentReferenceImpl<T> implements DocumentReference<T> {
+  constructor(private storage: StorageClient, public path: string, public id: string) {}
 
-    collection(path: string): CollectionReference {
-        return new CollectionReference(this.api, `${this.path}/${path}`);
-    }
+  async get(): Promise<T | null> {
+    return this.storage.get<T>(this.path);
+  }
 
-    async get(): Promise<T | null> {
-        return this.api.get<T>(this.path);
-    }
+  async set(data: T): Promise<T> {
+    return this.storage.set<T>(this.path, data);
+  }
 
-    async set(data: T): Promise<T> {
-        // 'set' usually implies overwrite (replace) or create if not exists.
-        // In our API, PUT is replace.
-        return this.api.replace<T>(this.path, data);
-    }
+  async update(data: Partial<T>): Promise<T> {
+    return this.storage.update<T>(this.path, data);
+  }
 
-    async update(data: Partial<T>): Promise<T> {
-        return this.api.update<T>(this.path, data);
-    }
+  async delete(): Promise<void> {
+    return this.storage.delete(this.path);
+  }
 
-    async delete(): Promise<void> {
-        return this.api.delete(this.path);
-    }
+  collection<U>(path: string): CollectionReference<U> {
+    return new CollectionReferenceImpl<U>(this.storage, `${this.path}/${path}`);
+  }
 }
 
-export class CollectionReference<T = any> {
-    constructor(
-        private api: StorageClient,
-        public readonly path: string
-    ) {}
+export class QueryImpl<T> implements Query<T> {
+  protected filters: any[] = [];
+  protected sort: any[] = [];
+  protected limitVal?: number;
 
-    doc(id: string): DocumentReference<T> {
-        return new DocumentReference<T>(this.api, `${this.path}/${id}`);
-    }
+  constructor(protected storage: StorageClient, public path: string) {}
 
-    async add(data: T, id?: string): Promise<DocumentReference<T>> {
-        const result = await this.api.create<T>(this.path, data, id);
-        // Assuming result has the ID, or we used the passed ID.
-        // If the API returns the created object with ID, we can extract it.
-        // For now, let's assume if we passed ID, we use it. If not, we hope the API returns it.
-        // But our generic create returns T.
-        const docId = id || (result as any).id;
-        if (!docId) {
-            throw new Error("Created document does not have an ID");
-        }
-        return this.doc(docId);
-    }
+  where(field: string, op: string, value: any): Query<T> {
+    this.filters.push({ field, op, value });
+    return this;
+  }
 
-    // Query methods
-    where(field: string, op: string, value: any): QueryBuilder<T> {
-        return new QueryBuilder<T>(this.api, this.path).where(field, op, value);
-    }
+  orderBy(field: string, direction: 'asc' | 'desc' = 'asc'): Query<T> {
+    this.sort.push({ field, direction });
+    return this;
+  }
 
-    orderBy(field: string, direction: 'asc' | 'desc' = 'asc'): QueryBuilder<T> {
-        return new QueryBuilder<T>(this.api, this.path).orderBy(field, direction);
-    }
+  limit(n: number): Query<T> {
+    this.limitVal = n;
+    return this;
+  }
 
-    limit(limit: number): QueryBuilder<T> {
-        return new QueryBuilder<T>(this.api, this.path).limit(limit);
-    }
-
-    async get(): Promise<T[]> {
-        return new QueryBuilder<T>(this.api, this.path).get();
-    }
+  async get(): Promise<T[]> {
+    const query = {
+      from: this.path,
+      filters: this.filters,
+      sort: this.sort,
+      limit: this.limitVal
+    };
+    return this.storage.query<T>('/v1/query', query);
+  }
 }
 
-export class QueryBuilder<T = any> {
-    private query: Query;
+export class CollectionReferenceImpl<T> extends QueryImpl<T> implements CollectionReference<T> {
+  constructor(storage: StorageClient, path: string) {
+    super(storage, path);
+  }
 
-    constructor(
-        private api: StorageClient,
-        collection: string
-    ) {
-        this.query = {
-            collection,
-            filters: [],
-            orderBy: []
-        };
+  doc(id?: string): DocumentReference<T> {
+    if (id) {
+      return new DocumentReferenceImpl<T>(this.storage, `${this.path}/${id}`, id);
     }
+    const autoId = crypto.randomUUID();
+    return new DocumentReferenceImpl<T>(this.storage, `${this.path}/${autoId}`, autoId);
+  }
 
-    where(field: string, op: string, value: any): this {
-        this.query.filters = this.query.filters || [];
-        this.query.filters.push({ field, op, value });
-        return this;
+  async add(data: T): Promise<DocumentReference<T>> {
+    const result: any = await this.storage.create<T>(this.path, data);
+    const id = result.id;
+    if (!id) {
+        throw new Error('Server did not return an ID for the created document');
     }
-
-    orderBy(field: string, direction: 'asc' | 'desc' = 'asc'): this {
-        this.query.orderBy = this.query.orderBy || [];
-        this.query.orderBy.push({ field, direction });
-        return this;
-    }
-
-    limit(limit: number): this {
-        this.query.limit = limit;
-        return this;
-    }
-
-    startAfter(cursor: string): this {
-        this.query.startAfter = cursor;
-        return this;
-    }
-
-    async get(): Promise<T[]> {
-        return this.api.query<T>(this.query);
-    }
+    return new DocumentReferenceImpl<T>(this.storage, `${this.path}/${id}`, id);
+  }
 }

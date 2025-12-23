@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"syntrix/internal/api/realtime"
 	"syntrix/internal/common"
 	"syntrix/internal/config"
 	"syntrix/internal/query"
-	"syntrix/internal/realtime"
 	"syntrix/internal/storage"
 	"syntrix/internal/trigger"
 
@@ -52,7 +52,7 @@ func TestManager_Start_Shutdown_WithServer(t *testing.T) {
 
 func TestManager_Start_RealtimeBackground_Failure(t *testing.T) {
 	cfg := config.LoadConfig()
-	mgr := NewManager(cfg, Options{RunRealtime: true})
+	mgr := NewManager(cfg, Options{RunAPI: true})
 	stub := &rtQueryStub{failAlways: true}
 	mgr.rtServer = realtime.NewServer(stub, cfg.Storage.DataCollection)
 
@@ -68,7 +68,7 @@ func TestManager_Start_RealtimeBackground_Failure(t *testing.T) {
 
 func TestManager_Start_RealtimeBackground_Success(t *testing.T) {
 	cfg := config.LoadConfig()
-	mgr := NewManager(cfg, Options{RunRealtime: true})
+	mgr := NewManager(cfg, Options{RunAPI: true})
 	stub := &rtQueryStub{}
 	mgr.rtServer = realtime.NewServer(stub, cfg.Storage.DataCollection)
 
@@ -83,7 +83,7 @@ func TestManager_Start_RealtimeBackground_Success(t *testing.T) {
 
 func TestManager_Start_RealtimeBackground_RetryThenSuccess(t *testing.T) {
 	cfg := config.LoadConfig()
-	mgr := NewManager(cfg, Options{RunRealtime: true})
+	mgr := NewManager(cfg, Options{RunAPI: true})
 	stub := &rtQueryStub{failFirst: true}
 	mgr.rtServer = realtime.NewServer(stub, cfg.Storage.DataCollection)
 

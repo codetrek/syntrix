@@ -13,13 +13,40 @@ auth:
   rules_file: "security.yaml"
   private_key_file: "keys/auth_private.pem"
 
-api:
+gateway:
   port: 8080
   query_service_url: "http://localhost:8082"
-
-realtime:
-  port: 8081
-  query_service_url: "http://localhost:8082"
+  tls:
+    enabled: false
+  auth:
+    cache_ttl: 5m
+  limits:
+    http_per_tenant_qps: 100
+    http_per_tenant_burst: 200
+    http_per_ip_qps: 50
+    http_per_ip_burst: 100
+    ws_max_connections: 10000
+    ws_max_subs_per_conn: 100
+  timeouts:
+    http_read: 10s
+    http_write: 10s
+    http_idle: 60s
+    ws_ping_interval: 30s
+    ws_idle_timeout: 90s
+    ws_write_wait: 10s
+    ws_max_message_size: 1048576
+  cors:
+    allowed_origins: ["*"]
+    allowed_methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    allowed_headers: ["Authorization", "Content-Type"]
+  gzip: true
+  realtime:
+    transport: "both"
+    per_message_deflate: true
+  replication:
+    pull_rate: 10
+    push_rate: 10
+    batch_size: 100
 
 query:
   port: 8082

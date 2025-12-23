@@ -20,7 +20,7 @@ func (m *Manager) Start(bgCtx context.Context) {
 	}
 
 	// Start Realtime Background Tasks with retry
-	if m.opts.RunRealtime {
+	if m.rtServer != nil {
 		go func() {
 			// Give servers a moment to start
 			time.Sleep(50 * time.Millisecond)

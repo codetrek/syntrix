@@ -15,21 +15,19 @@ import (
 
 func main() {
 	// 0. Parse Command Line Flags
-	runAPI := flag.Bool("api", false, "Run API Service")
+	runAPI := flag.Bool("api", false, "Run API Gateway (REST + Realtime)")
 	runCSP := flag.Bool("csp", false, "Run CSP Service")
 	runQuery := flag.Bool("query", false, "Run Query Service")
-	runRealtime := flag.Bool("realtime", false, "Run Realtime Service")
 	runTriggerEvaluator := flag.Bool("trigger-evaluator", false, "Run Trigger Evaluator Service")
 	runTriggerWorker := flag.Bool("trigger-worker", false, "Run Trigger Worker Service")
 	runAll := flag.Bool("all", false, "Run All Services")
 	flag.Parse()
 
 	// Default to running all if no specific flags are provided or if --all is set
-	if *runAll || (!*runAPI && !*runCSP && !*runQuery && !*runRealtime && !*runTriggerEvaluator && !*runTriggerWorker) {
+	if *runAll || (!*runAPI && !*runCSP && !*runQuery && !*runTriggerEvaluator && !*runTriggerWorker) {
 		*runAPI = true
 		*runCSP = true
 		*runQuery = true
-		*runRealtime = true
 		*runTriggerEvaluator = true
 		*runTriggerWorker = true
 	}
@@ -38,16 +36,13 @@ func main() {
 	cfg := config.LoadConfig()
 	log.Println("Starting Syntrix Services...")
 	if *runAPI {
-		log.Println("- API Service: Enabled")
+		log.Println("- API Gateway (REST + Realtime): Enabled")
 	}
 	if *runCSP {
 		log.Println("- CSP Service: Enabled")
 	}
 	if *runQuery {
 		log.Println("- Query Service: Enabled")
-	}
-	if *runRealtime {
-		log.Println("- Realtime Service: Enabled")
 	}
 	if *runTriggerEvaluator {
 		log.Println("- Trigger Evaluator Service: Enabled")
@@ -62,7 +57,6 @@ func main() {
 		RunAuth:             *runAPI, // Enable Auth if API is enabled
 		RunCSP:              *runCSP,
 		RunQuery:            *runQuery,
-		RunRealtime:         *runRealtime,
 		RunTriggerEvaluator: *runTriggerEvaluator,
 		RunTriggerWorker:    *runTriggerWorker,
 	}

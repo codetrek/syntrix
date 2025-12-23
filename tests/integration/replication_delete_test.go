@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"testing"
 
-	"syntrix/internal/api"
+	"syntrix/internal/api/rest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,9 +30,9 @@ func TestReplication_Delete(t *testing.T) {
 		"version": float64(0),
 	}
 
-	pushBody := api.ReplicaPushRequest{
+	pushBody := rest.ReplicaPushRequest{
 		Collection: collectionName,
-		Changes: []api.ReplicaChange{
+		Changes: []rest.ReplicaChange{
 			{
 				Doc: docData,
 			},
@@ -59,9 +59,9 @@ func TestReplication_Delete(t *testing.T) {
 		"version": float64(1), // Assuming version incremented
 	}
 
-	deleteBody := api.ReplicaPushRequest{
+	deleteBody := rest.ReplicaPushRequest{
 		Collection: collectionName,
-		Changes: []api.ReplicaChange{
+		Changes: []rest.ReplicaChange{
 			{
 				Action: "delete",
 				Doc:    deleteDocData,

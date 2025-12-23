@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"sync"
 
+	"syntrix/internal/api/realtime"
 	"syntrix/internal/auth"
 	"syntrix/internal/config"
-	"syntrix/internal/realtime"
 	"syntrix/internal/storage"
 	"syntrix/internal/trigger"
 
@@ -21,7 +21,6 @@ type Options struct {
 	RunAuth             bool
 	RunCSP              bool
 	RunQuery            bool
-	RunRealtime         bool
 	ForceQueryClient    bool
 	RunTriggerEvaluator bool
 	RunTriggerWorker    bool
