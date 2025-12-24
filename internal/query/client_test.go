@@ -288,7 +288,7 @@ func TestClient_ExecuteQuery_Success(t *testing.T) {
 func TestClient_Pull_Success(t *testing.T) {
 	expected := storage.ReplicationPullResponse{Checkpoint: 10}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/internal/v1/replication/pull", r.URL.Path)
+		require.Equal(t, "/internal/replication/v1/pull", r.URL.Path)
 		w.WriteHeader(http.StatusOK)
 		require.NoError(t, json.NewEncoder(w).Encode(expected))
 	}))
@@ -303,7 +303,7 @@ func TestClient_Pull_Success(t *testing.T) {
 func TestClient_Push_Success(t *testing.T) {
 	expected := storage.ReplicationPushResponse{Conflicts: []*storage.Document{}}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/internal/v1/replication/push", r.URL.Path)
+		require.Equal(t, "/internal/replication/v1/push", r.URL.Path)
 		w.WriteHeader(http.StatusOK)
 		require.NoError(t, json.NewEncoder(w).Encode(expected))
 	}))

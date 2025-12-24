@@ -25,29 +25,29 @@ func TestTriggerAPIIntegration(t *testing.T) {
 			},
 		}
 
-		resp := env.MakeRequest(t, "POST", "/v1/trigger/write", reqBody, token)
+		resp := env.MakeRequest(t, "POST", "/api/v1/trigger/write", reqBody, token)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 		// Verify via API
-		resp = env.MakeRequest(t, "GET", "/v1/api/doc1", nil, token)
+		resp = env.MakeRequest(t, "GET", "/api/v1/api/doc1", nil, token)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 		var doc map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&doc)
 		assert.EqualValues(t, 1, doc["val"])
 
-		resp = env.MakeRequest(t, "GET", "/v1/api/doc2", nil, token)
+		resp = env.MakeRequest(t, "GET", "/api/v1/api/doc2", nil, token)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 	})
 
 	t.Run("Transactional Write - Rollback on Error", func(t *testing.T) {
 		// First create doc3
-		// POST to collection /v1/api with ID in body
+		// POST to collection /api/v1/api with ID in body
 		doc3Body := map[string]interface{}{
 			"id":  "doc3",
 			"val": 3,
 		}
-		resp := env.MakeRequest(t, "POST", "/v1/api", doc3Body, token)
+		resp := env.MakeRequest(t, "POST", "/api/v1/api", doc3Body, token)
 		require.Equal(t, http.StatusCreated, resp.StatusCode)
 
 		// Now try to create doc4 AND doc3 (duplicate) in one transaction
@@ -58,15 +58,15 @@ func TestTriggerAPIIntegration(t *testing.T) {
 			},
 		}
 
-		resp = env.MakeRequest(t, "POST", "/v1/trigger/write", reqBody, token)
+		resp = env.MakeRequest(t, "POST", "/api/v1/trigger/write", reqBody, token)
 		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 
 		// Verify doc4 was NOT created
-		resp = env.MakeRequest(t, "GET", "/v1/api/doc4", nil, token)
+		resp = env.MakeRequest(t, "GET", "/api/v1/api/doc4", nil, token)
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 
 		// Verify doc3 is unchanged
-		resp = env.MakeRequest(t, "GET", "/v1/api/doc3", nil, token)
+		resp = env.MakeRequest(t, "GET", "/api/v1/api/doc3", nil, token)
 		var doc3 map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&doc3)
 		assert.EqualValues(t, 3, doc3["val"])

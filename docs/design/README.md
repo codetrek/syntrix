@@ -17,6 +17,10 @@ This directory now splits designs into server-side and SDK-focused documents.
 - [server/010_control_plane.md](server/010_control_plane.md) - Control Plane design
 - [server/011_transaction_implementation.md](server/011_transaction_implementation.md) - Transaction implementation details
 
+## Automata
+
+- [automata/000_design.md](automata/000_design.md) - The design of automata
+
 ## SDK
 
 - [sdk/001_sdk_architecture.md](sdk/001_sdk_architecture.md) - SDK Architecture

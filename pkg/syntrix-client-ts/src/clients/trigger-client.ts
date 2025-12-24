@@ -16,7 +16,7 @@ export class TriggerClient {
   constructor(baseUrl: string, token: string) {
     const cleanBaseUrl = baseUrl.replace(/\/$/, '');
     const axiosInstance = axios.create({
-        baseURL: `${cleanBaseUrl}/v1/trigger`,
+        baseURL: `${cleanBaseUrl}/api/v1/trigger`,
         headers: { Authorization: `Bearer ${token}` }
     });
     this.storage = new RestTransport(axiosInstance);

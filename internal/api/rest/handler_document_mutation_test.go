@@ -15,7 +15,7 @@ func TestHandleReplaceDocument_IdMutation(t *testing.T) {
 
 	// Try to replace document msg-1 with body containing id: msg-2
 	body := []byte(`{"doc":{"id": "msg-2", "name": "Bob"}}`)
-	req, _ := http.NewRequest("PUT", "/v1/rooms/room-1/messages/msg-1", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("PUT", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -30,7 +30,7 @@ func TestHandleUpdateDocument_IdMutation(t *testing.T) {
 
 	// Try to update document msg-1 with body containing id: msg-2
 	body := []byte(`{"doc":{"id": "msg-2", "name": "Bob"}}`)
-	req, _ := http.NewRequest("PATCH", "/v1/rooms/room-1/messages/msg-1", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("PATCH", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)

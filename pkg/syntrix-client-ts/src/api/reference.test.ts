@@ -86,7 +86,7 @@ describe('Reference API', () => {
         .limit(10)
         .get();
 
-      expect(mockStorage.query).toHaveBeenCalledWith('/v1/query', {
+      expect(mockStorage.query).toHaveBeenCalledWith('/api/v1/query', {
         from: 'users',
         filters: [{ field: 'age', op: '>=', value: 18 }],
         sort: [{ field: 'name', direction: 'asc' }],

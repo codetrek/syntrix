@@ -23,7 +23,7 @@ func TestDocumentSystemFields(t *testing.T) {
 		"field1": "value1",
 	}
 
-	resp := env.MakeRequest(t, "POST", "/v1/"+collection, docData, token)
+	resp := env.MakeRequest(t, "POST", "/api/v1/"+collection, docData, token)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
 	var createdDoc map[string]interface{}
@@ -53,7 +53,7 @@ func TestDocumentSystemFields(t *testing.T) {
 			"field2": "value2",
 		},
 	}
-	resp = env.MakeRequest(t, "PATCH", fmt.Sprintf("/v1/%s/%s", collection, docID), patchData, token)
+	resp = env.MakeRequest(t, "PATCH", fmt.Sprintf("/api/v1/%s/%s", collection, docID), patchData, token)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var patchedDoc map[string]interface{}
@@ -82,7 +82,7 @@ func TestDocumentSystemFields(t *testing.T) {
 			"field3": "value3",
 		},
 	}
-	resp = env.MakeRequest(t, "PUT", fmt.Sprintf("/v1/%s/%s", collection, docID), replaceData, token)
+	resp = env.MakeRequest(t, "PUT", fmt.Sprintf("/api/v1/%s/%s", collection, docID), replaceData, token)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var replacedDoc map[string]interface{}
@@ -104,7 +104,7 @@ func TestDocumentSystemFields(t *testing.T) {
 			"collection": "hacked",
 		},
 	}
-	resp = env.MakeRequest(t, "PATCH", fmt.Sprintf("/v1/%s/%s", collection, docID), maliciousData, token)
+	resp = env.MakeRequest(t, "PATCH", fmt.Sprintf("/api/v1/%s/%s", collection, docID), maliciousData, token)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var protectedDoc map[string]interface{}

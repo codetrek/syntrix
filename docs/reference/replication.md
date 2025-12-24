@@ -3,7 +3,7 @@
 Replication endpoints for offline-first clients. All documents use a flattened shape; storage internals are never exposed.
 
 ## Pull Changes
-- **Endpoint:** `GET /v1/replication/pull`
+- **Endpoint:** `GET /replication/v1/pull`
 - **Query Parameters:**
   - `collection` (string, required)
   - `checkpoint` (string, required): stringified int64, opaque to clients
@@ -27,7 +27,7 @@ Replication endpoints for offline-first clients. All documents use a flattened s
 ```
 
 ## Push Changes
-- **Endpoint:** `POST /v1/replication/push`
+- **Endpoint:** `POST /replication/v1/push`
 - **Request Body:**
 ```json
 {

@@ -20,7 +20,7 @@ export class SyntrixClient {
 
   async query<T>(query: SyntrixQuery): Promise<T[]> {
     try {
-      const response = await this.client.post('/v1/trigger/query', query);
+      const response = await this.client.post('/api/v1/trigger/query', query);
       const docs = response.data;
       if (Array.isArray(docs)) {
           return docs as T[];
@@ -34,7 +34,7 @@ export class SyntrixClient {
 
   async getDocument<T>(path: string): Promise<T | null> {
     try {
-      const response = await this.client.post('/v1/trigger/get', { paths: [path] });
+      const response = await this.client.post('/api/v1/trigger/get', { paths: [path] });
       if (response.data.documents && response.data.documents.length > 0) {
           return response.data.documents[0] as T;
       }
@@ -55,7 +55,7 @@ export class SyntrixClient {
           throw new Error("Document ID required for trigger write");
       }
 
-      await this.client.post('/v1/trigger/write', {
+      await this.client.post('/api/v1/trigger/write', {
         writes: [{
           type: 'create',
           path: docPath,
@@ -70,7 +70,7 @@ export class SyntrixClient {
 
   async updateDocument(path: string, data: any) {
     try {
-      await this.client.post('/v1/trigger/write', {
+      await this.client.post('/api/v1/trigger/write', {
         writes: [{
           type: 'update',
           path: path,

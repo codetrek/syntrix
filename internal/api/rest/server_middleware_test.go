@@ -41,7 +41,7 @@ func TestProtected_NoAuth(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/any", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/any", nil)
 	w := httptest.NewRecorder()
 
 	handler(w, req)
@@ -59,7 +59,7 @@ func TestProtected_WithAuth(t *testing.T) {
 
 	handler := server.protected(func(w http.ResponseWriter, r *http.Request) {})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/any", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/any", nil)
 	w := httptest.NewRecorder()
 
 	handler(w, req)
@@ -75,7 +75,7 @@ func TestMaybeProtected_NoAuth(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/any", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/any", nil)
 	w := httptest.NewRecorder()
 
 	handler(w, req)
@@ -93,7 +93,7 @@ func TestMaybeProtected_WithAuth(t *testing.T) {
 
 	handler := server.maybeProtected(func(w http.ResponseWriter, r *http.Request) {})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/any", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/any", nil)
 	w := httptest.NewRecorder()
 
 	handler(w, req)

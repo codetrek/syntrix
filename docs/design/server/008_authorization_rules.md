@@ -87,7 +87,7 @@ We will use **CEL (Common Expression Language)** by Google. It is fast, safe, an
 
 ### 4.2 Execution Flow (API Gateway)
 
-1. **Incoming Request**: `GET /v1/rooms/123/messages/msg1`
+1. **Incoming Request**: `GET /api/v1/rooms/123/messages/msg1`
 2. **Auth Check**: Validate JWT, extract `uid`.
 3. **Rule Match**: Find the rule matching path `/rooms/123/messages/msg1`.
 4. **Pre-fetch (Optimization)**:

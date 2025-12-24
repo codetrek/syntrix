@@ -38,8 +38,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /internal/v1/document/delete", s.handleDeleteDocument)
 	s.mux.HandleFunc("POST /internal/v1/query/execute", s.handleExecuteQuery)
 	s.mux.HandleFunc("POST /internal/v1/watch", s.handleWatchCollection)
-	s.mux.HandleFunc("POST /internal/v1/replication/pull", s.handlePull)
-	s.mux.HandleFunc("POST /internal/v1/replication/push", s.handlePush)
+	s.mux.HandleFunc("POST /internal/replication/v1/pull", s.handlePull)
+	s.mux.HandleFunc("POST /internal/replication/v1/push", s.handlePush)
 
 	// Health Check
 	s.mux.HandleFunc("GET /health", s.handleHealth)

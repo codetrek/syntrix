@@ -40,7 +40,7 @@ func TestReplication_Delete(t *testing.T) {
 	}
 
 	bodyBytes, _ := json.Marshal(pushBody)
-	pushURL := fmt.Sprintf("%s/v1/replication/push?collection=%s", env.APIURL, collectionName)
+	pushURL := fmt.Sprintf("%s/replication/v1/push?collection=%s", env.APIURL, collectionName)
 
 	client := &http.Client{}
 	pushReq, err := http.NewRequest("POST", pushURL, bytes.NewBuffer(bodyBytes))
@@ -81,7 +81,7 @@ func TestReplication_Delete(t *testing.T) {
 	deleteResp.Body.Close()
 
 	// 3. Pull to verify deletion (should be returned as deleted)
-	pullURL := fmt.Sprintf("%s/v1/replication/pull?collection=%s&checkpoint=0", env.APIURL, collectionName)
+	pullURL := fmt.Sprintf("%s/replication/v1/pull?collection=%s&checkpoint=0", env.APIURL, collectionName)
 	pullReq, err := http.NewRequest("GET", pullURL, nil)
 	require.NoError(t, err)
 	pullReq.Header.Set("Authorization", "Bearer "+token)

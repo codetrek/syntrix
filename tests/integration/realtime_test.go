@@ -138,7 +138,7 @@ func TestRealtime_FullFlow(t *testing.T) {
 		"msg": "hello realtime",
 	}
 	body, _ := json.Marshal(docData)
-	resp, err := http.Post(fmt.Sprintf("%s/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(body))
+	resp, err := http.Post(fmt.Sprintf("%s/api/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(body))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	resp.Body.Close()
@@ -187,7 +187,7 @@ func TestRealtime_FullFlow(t *testing.T) {
 		"msg": "should not receive",
 	}
 	body2, _ := json.Marshal(map[string]interface{}{"data": docData2})
-	resp, err = http.Post(fmt.Sprintf("%s/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(body2))
+	resp, err = http.Post(fmt.Sprintf("%s/api/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(body2))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	resp.Body.Close()
@@ -237,7 +237,7 @@ func TestRealtime_SSE(t *testing.T) {
 		"msg": "hello sse",
 	}
 	body, _ := json.Marshal(docData)
-	apiResp, err := http.Post(fmt.Sprintf("%s/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(body))
+	apiResp, err := http.Post(fmt.Sprintf("%s/api/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(body))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, apiResp.StatusCode)
 	apiResp.Body.Close()
@@ -290,7 +290,7 @@ func TestRealtime_Stream(t *testing.T) {
 		"msg": "existing doc",
 	}
 	body, _ := json.Marshal(docData)
-	resp, err := http.Post(fmt.Sprintf("%s/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(body))
+	resp, err := http.Post(fmt.Sprintf("%s/api/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(body))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	resp.Body.Close()
@@ -340,7 +340,7 @@ func TestRealtime_Stream(t *testing.T) {
 		"msg": "new doc",
 	}
 	body2, _ := json.Marshal(docData2)
-	resp2, err := http.Post(fmt.Sprintf("%s/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(body2))
+	resp2, err := http.Post(fmt.Sprintf("%s/api/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(body2))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp2.StatusCode)
 	resp2.Body.Close()
@@ -434,7 +434,7 @@ func TestRealtime_Filtering(t *testing.T) {
 		"age":  18,
 	}
 	bodyNoMatch, _ := json.Marshal(docNoMatch)
-	resp, err := http.Post(fmt.Sprintf("%s/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(bodyNoMatch))
+	resp, err := http.Post(fmt.Sprintf("%s/api/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(bodyNoMatch))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	resp.Body.Close()
@@ -499,7 +499,7 @@ func TestRealtime_Filtering(t *testing.T) {
 		"age":  25,
 	}
 	bodyMatch, _ := json.Marshal(docMatch)
-	resp, err = http.Post(fmt.Sprintf("%s/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(bodyMatch))
+	resp, err = http.Post(fmt.Sprintf("%s/api/v1/%s", env.APIURL, collectionName), "application/json", bytes.NewBuffer(bodyMatch))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	resp.Body.Close()

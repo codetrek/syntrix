@@ -83,7 +83,7 @@ func TestIntegration_ForceQueryClient_API(t *testing.T) {
 	// Perform create through API; should hit stubbed query service via query.NewClient
 	body := map[string]interface{}{"msg": "hello"}
 	b, _ := json.Marshal(body)
-	resp, err := http.Post(env.APIURL+"/v1/forced", "application/json", bytes.NewBuffer(b))
+	resp, err := http.Post(env.APIURL+"/api/v1/forced", "application/json", bytes.NewBuffer(b))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	resp.Body.Close()

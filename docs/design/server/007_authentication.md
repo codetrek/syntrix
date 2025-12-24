@@ -147,11 +147,11 @@ CLI/Admin path (future): handled via the console/CLI in [008_console.md](008_con
 
 ## 15. API Surface (Auth)
 
-- `POST /v1/auth/signup` — username, password; returns access (and refresh if enabled).
-- `POST /v1/auth/login` — username, password; returns access (+ refresh optional).
-- `POST /v1/auth/logout` — refresh token (or Authorization header); revokes tokens.
-- `POST /v1/auth/refresh` — refresh token; returns new access (+ refresh).
-- `POST /v1/auth/password` — old_password, new_password; rotates tokens.
+- `POST /api/v1/auth/signup` — username, password; returns access (and refresh if enabled).
+- `POST /api/v1/auth/login` — username, password; returns access (+ refresh optional).
+- `POST /api/v1/auth/logout` — refresh token (or Authorization header); revokes tokens.
+- `POST /api/v1/auth/refresh` — refresh token; returns new access (+ refresh).
+- `POST /api/v1/auth/password` — old_password, new_password; rotates tokens.
 
 ## 16. Operational Concerns
 
@@ -183,8 +183,8 @@ CLI/Admin path (future): handled via the console/CLI in [008_console.md](008_con
 ## 16. Implementation Status (v1)
 
 - **Endpoints Implemented**:
-  - `POST /v1/auth/login`
-  - `POST /v1/auth/refresh`
-  - `POST /v1/auth/logout`
+  - `POST /api/v1/auth/login`
+  - `POST /api/v1/auth/refresh`
+  - `POST /api/v1/auth/logout`
 - **Missing Endpoints**:
-  - `POST /v1/auth/signup` (Not yet implemented in API server)
+  - `POST /api/v1/auth/signup` (Not yet implemented in API server)

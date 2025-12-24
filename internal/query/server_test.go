@@ -315,7 +315,7 @@ func TestServer_PullPush_Errors(t *testing.T) {
 	server, mockStorage := setupTestServer()
 
 	t.Run("pull bad json", func(t *testing.T) {
-		req := httptest.NewRequest("POST", "/internal/v1/replication/pull", bytes.NewBuffer([]byte("{bad")))
+		req := httptest.NewRequest("POST", "/internal/replication/v1/pull", bytes.NewBuffer([]byte("{bad")))
 		w := httptest.NewRecorder()
 		server.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -327,14 +327,14 @@ func TestServer_PullPush_Errors(t *testing.T) {
 		mockStorage.On("Query", mock.Anything, mock.Anything).Return(nil, assert.AnError)
 
 		body, _ := json.Marshal(storage.ReplicationPullRequest{Collection: "c"})
-		req := httptest.NewRequest("POST", "/internal/v1/replication/pull", bytes.NewBuffer(body))
+		req := httptest.NewRequest("POST", "/internal/replication/v1/pull", bytes.NewBuffer(body))
 		w := httptest.NewRecorder()
 		server.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
 	})
 
 	t.Run("push bad json", func(t *testing.T) {
-		req := httptest.NewRequest("POST", "/internal/v1/replication/push", bytes.NewBuffer([]byte("{bad")))
+		req := httptest.NewRequest("POST", "/internal/replication/v1/push", bytes.NewBuffer([]byte("{bad")))
 		w := httptest.NewRecorder()
 		server.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -347,7 +347,7 @@ func TestServer_PullPush_Errors(t *testing.T) {
 		mockStorage.On("Get", mock.Anything, mock.Anything).Return(&storage.Document{Id: "c/1", Version: 1}, nil)
 
 		body, _ := json.Marshal(storage.ReplicationPushRequest{Collection: "c", Changes: []storage.ReplicationPushChange{{Doc: &storage.Document{Id: "c/1", Fullpath: "c/1", Data: map[string]interface{}{}}}}})
-		req := httptest.NewRequest("POST", "/internal/v1/replication/push", bytes.NewBuffer(body))
+		req := httptest.NewRequest("POST", "/internal/replication/v1/push", bytes.NewBuffer(body))
 		w := httptest.NewRecorder()
 		server.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusInternalServerError, w.Code)

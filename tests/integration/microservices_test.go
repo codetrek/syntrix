@@ -25,7 +25,7 @@ func TestMicroservices_FullFlow(t *testing.T) {
 		"msg": "Hello Microservices",
 	}
 
-	resp := env.MakeRequest(t, "POST", "/v1/"+collection, docData, token)
+	resp := env.MakeRequest(t, "POST", "/api/v1/"+collection, docData, token)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
 	var createdDoc map[string]interface{}
@@ -58,7 +58,7 @@ func TestMicroservices_FullFlow(t *testing.T) {
 			"msg": "Updated Message",
 		},
 	}
-	resp = env.MakeRequest(t, "PATCH", fmt.Sprintf("/v1/%s/%s", collection, docID), patchData, token)
+	resp = env.MakeRequest(t, "PATCH", fmt.Sprintf("/api/v1/%s/%s", collection, docID), patchData, token)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	resp.Body.Close()
 }

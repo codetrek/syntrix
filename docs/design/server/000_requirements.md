@@ -23,7 +23,7 @@
 - **Batch Operations**: Bulk insert/update/delete (e.g., "Mark all messages as read").
 - **Transactions**:
   - **Public API**: Multi-document transactions are **NOT** required. Single-document atomicity is sufficient.
-  - **Internal Trigger API**: Multi-document transactions **ARE** required for the `/v1/trigger/write` endpoint to ensure atomic side-effects.
+  - **Internal Trigger API**: Multi-document transactions **ARE** required for the `/api/v1/trigger/write` endpoint to ensure atomic side-effects.
 
 ### 2.2 Realtime
 

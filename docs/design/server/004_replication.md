@@ -11,8 +11,8 @@ This document details the replication HTTP protocol used by Syntrix. It separate
 
 ## Endpoint Summary
 
-- Pull: `GET /v1/replication/pull?collection=...&checkpoint=...&limit=...`
-- Push: `POST /v1/replication/push`
+- Pull: `GET /replication/v1/pull?collection=...&checkpoint=...&limit=...`
+- Push: `POST /replication/v1/push`
 
 ## Document Shape (Flattened)
 
@@ -28,7 +28,7 @@ Documents in responses and requests use a flattened JSON object with reserved me
 
 ## Pull
 
-- Method: `GET /v1/replication/pull`
+- Method: `GET /replication/v1/pull`
 - Query params:
   - `collection` (string, required): collection path.
   - `checkpoint` (string, required): last known checkpoint as stringified int64; opaque to clients.
@@ -59,7 +59,7 @@ Documents in responses and requests use a flattened JSON object with reserved me
 
 ## Push
 
-- Method: `POST /v1/replication/push`
+- Method: `POST /replication/v1/push`
 - Request body (flattened documents):
 
 ```json

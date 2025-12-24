@@ -19,4 +19,4 @@ The console is served by the Syntrix API server at `/console/`.
 
 ## API Integration
 
-The console communicates with the Syntrix API at `/v1`.
+The console communicates with the Syntrix API at `/api/v1`.

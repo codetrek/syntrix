@@ -192,7 +192,7 @@ func (c *Client) WatchCollection(ctx context.Context, collection string) (<-chan
 }
 
 func (c *Client) Pull(ctx context.Context, req storage.ReplicationPullRequest) (*storage.ReplicationPullResponse, error) {
-	resp, err := c.post(ctx, "/internal/v1/replication/pull", req)
+	resp, err := c.post(ctx, "/internal/replication/v1/pull", req)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +210,7 @@ func (c *Client) Pull(ctx context.Context, req storage.ReplicationPullRequest) (
 }
 
 func (c *Client) Push(ctx context.Context, req storage.ReplicationPushRequest) (*storage.ReplicationPushResponse, error) {
-	resp, err := c.post(ctx, "/internal/v1/replication/push", req)
+	resp, err := c.post(ctx, "/internal/replication/v1/push", req)
 	if err != nil {
 		return nil, err
 	}

@@ -4,7 +4,7 @@
 
 ## Context & Why
 - We need offline-first replication for web clients using RxDB as local store.
-- Server exposes HTTP replication (`/v1/replication/pull`, `/v1/replication/push`) and realtime change signal (`/realtime/ws`, `/realtime/sse`).
+- Server exposes HTTP replication (`/replication/v1/pull`, `/replication/v1/push`) and realtime change signal (`/realtime/ws`, `/realtime/sse`).
 - Checkpoint is authoritative only in pull responses; realtime events are triggers, not state.
 
 **Related:** Authentication flows and retry semantics are defined in [003_authentication.md](003_authentication.md); replication uses the same token/refresh handling and does not advance checkpoints on auth errors.
@@ -33,8 +33,8 @@
 
 ## Components
 - **ReplicationCoordinator**: high-level orchestrator per collection; owns pull/push workers, realtime trigger wiring, state, callbacks.
-- **PullWorker**: executes `/v1/replication/pull` with `{collection, checkpoint, limit}`; writes results into RxDB; updates CheckpointStore.
-- **PushWorker**: drains Outbox to `/v1/replication/push`; handles conflicts by writing server docs or invoking conflict hook.
+- **PullWorker**: executes `/replication/v1/pull` with `{collection, checkpoint, limit}`; writes results into RxDB; updates CheckpointStore.
+- **PushWorker**: drains Outbox to `/replication/v1/push`; handles conflicts by writing server docs or invoking conflict hook.
 - **RealtimeTrigger**: listens `/realtime/ws` (or `/realtime/sse`); enqueues pull requests (no checkpoint from event).
 - **CheckpointStore**: persists per-collection checkpoint (stringified int64) locally (RxDB key-value or storage adapter).
 - **Outbox**: local queue of pending writes (create/update/replace/delete), durable across reloads.
@@ -61,8 +61,8 @@
 App
  |- SyntrixClient (HTTP CRUD/query)
  |- createReplicationCoordinator({...})
-			|- PullWorker -> /v1/replication/pull -> RxDB collections
-			|- PushWorker -> /v1/replication/push -> Outbox mgmt
+			|- PullWorker -> /replication/v1/pull -> RxDB collections
+			|- PushWorker -> /replication/v1/push -> Outbox mgmt
 			|- RealtimeTrigger -> schedules PullWorker
 			|- CheckpointStore / OutboxAdapter -> persistence
 ```
@@ -89,14 +89,14 @@ App
 
 ### Pull sequence (happy path)
 1) Determine `checkpoint` from CheckpointStore (default "0").
-2) Call `/v1/replication/pull?collection=...&checkpoint=...&limit=...`.
+2) Call `/replication/v1/pull?collection=...&checkpoint=...&limit=...`.
 3) Upsert returned documents into RxDB; preserve `deleted` tombstones.
 4) Persist returned `checkpoint` for next cycle.
 5) Emit callbacks `onPullSuccess` with counts/timing.
 
 ### Push sequence
 1) Read batch from Outbox (bounded size).
-2) Send `/v1/replication/push` with `{collection, changes}`.
+2) Send `/replication/v1/push` with `{collection, changes}`.
 3) On success, remove sent entries from Outbox.
 4) If `conflicts` returned, upsert them to RxDB and emit `onConflict(conflicts, locals?)`.
 5) Errors: retry with backoff, keep Outbox intact.

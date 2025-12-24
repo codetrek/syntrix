@@ -155,7 +155,7 @@ We chose RxDB as the primary client-side solution.
 
 We will provide a standard REST API for server-side integration and simple clients.
 
-- **CRUD**: Standard HTTP methods (`GET`, `POST`, `PUT`, `DELETE`, `PATCH`) mapped to document paths under `/v1/...`.
+- **CRUD**: Standard HTTP methods (`GET`, `POST`, `PUT`, `DELETE`, `PATCH`) mapped to document paths under `/api/v1/...`.
 - **Realtime**: Explicit endpoints `/realtime/ws` (WebSocket) and `/realtime/sse` (SSE) for realtime subscriptions.
 
 ### 3.4 Component Architecture
@@ -168,14 +168,14 @@ We will adopt a **Splittable Monolith** strategy.
 
 **Components:**
 
-1. **Gateway (`syntrix --gateway`)**: Unified REST/gRPC/WS/SSE entry; handles auth, CRUD routing, replication (`/v1/replication/pull`, `/v1/replication/push`), and realtime delivery at `/realtime/ws` and `/realtime/sse`.
+1. **Gateway (`syntrix --gateway`)**: Unified REST/gRPC/WS/SSE entry; handles auth, CRUD routing, replication (`/replication/v1/pull`, `/replication/v1/push`), and realtime delivery at `/realtime/ws` and `/realtime/sse`.
 2. **Query Engine (`cmd/syntrix --query`)**: Parses queries, executes aggregations, and interacts with storage.
 3. **Standalone (`cmd/syntrix --all`)**: All-in-one binary for development and simple deployments.
 
 ## 2.5 Gateway Merge Details (Latest Design)
 
 - Single port for REST/Replication and Realtime.
-- Routes: REST/Replication keep `/v1/...`; Realtime uses `/realtime/ws` (WebSocket) and `/realtime/sse` (SSE).
+- Routes: REST/Replication keep `/api/v1/...`; Realtime uses `/realtime/ws` (WebSocket) and `/realtime/sse` (SSE).
 - Code layout under `internal/api/`:
   - `rest/`: existing REST + replication handlers/routers/middleware.
   - `realtime/`: connection/auth/heartbeat/subscription/push/limits.
@@ -241,12 +241,12 @@ When a document is deleted via the API or Storage interface, it is **soft delete
 
 ### 5.1 REST API
 
-- `GET /v1/{collectionPath}/{docID}`: Get a document.
-- `POST /v1/{collectionPath}`: Create a document (auto-generated ID).
-- `PUT /v1/{collectionPath}/{docID}`: Create or Replace a document.
-- `PATCH /v1/{collectionPath}/{docID}`: Update specific fields.
-- `DELETE /v1/{collectionPath}/{docID}`: Delete a document.
-- `POST /v1/query`: Execute a structured query (JSON body).
+- `GET /api/v1/{collectionPath}/{docID}`: Get a document.
+- `POST /api/v1/{collectionPath}`: Create a document (auto-generated ID).
+- `PUT /api/v1/{collectionPath}/{docID}`: Create or Replace a document.
+- `PATCH /api/v1/{collectionPath}/{docID}`: Update specific fields.
+- `DELETE /api/v1/{collectionPath}/{docID}`: Delete a document.
+- `POST /api/v1/query`: Execute a structured query (JSON body).
 
 ### 5.2 Realtime API (WebSocket)
 
@@ -259,16 +259,16 @@ When a document is deleted via the API or Storage interface, it is **soft delete
 
 ### 5.3 RxDB Replication API
 
-- `POST /v1/replication/pull`: Fetch changes since checkpoint.
-- `POST /v1/replication/push`: Push local changes.
-- *Note: The stream part of replication uses the standard `/v1/realtime` WebSocket endpoint.*
+- `POST /replication/v1/pull`: Fetch changes since checkpoint.
+- `POST /replication/v1/push`: Push local changes.
+- *Note: The stream part of replication uses the standard `/api/v1/realtime` WebSocket endpoint.*
 
 ### 5.4 Trigger API
 
-- `POST /v1/trigger/get`: batch document reads by concrete paths.
+- `POST /api/v1/trigger/get`: batch document reads by concrete paths.
 
-- `POST /v1/trigger/query`: single query (same shape as public query API).
-- `POST /v1/trigger/write`: one or more write ops in a single request.
+- `POST /api/v1/trigger/query`: single query (same shape as public query API).
+- `POST /api/v1/trigger/write`: one or more write ops in a single request.
 
 ## 6. Usage Examples
 
@@ -277,7 +277,7 @@ When a document is deleted via the API or Storage interface, it is **soft delete
 **Create a message:**
 
 ```bash
-POST /v1/rooms/room-123/messages
+POST /api/v1/rooms/room-123/messages
 {
   "senderId": "user-alice",
   "text": "Hello everyone!",
@@ -288,7 +288,7 @@ POST /v1/rooms/room-123/messages
 **Query recent messages:**
 
 ```bash
-POST /v1/query
+POST /api/v1/query
 {
   "collection": "rooms/room-123/messages",
   "filters": [

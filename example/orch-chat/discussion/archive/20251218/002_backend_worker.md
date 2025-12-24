@@ -19,12 +19,12 @@ The worker relies on the following Syntrix triggers:
 A wrapper class for Syntrix REST API interactions.
 -   **Base URL**: `http://localhost:8080` (Default)
 -   **API Format**:
-    -   Read Document: `GET /v1/{path...}`
-    -   Create Document: `POST /v1/{path...}` (Body: JSON Data)
-    -   Update Document: `PATCH /v1/{path...}` (Body: JSON Data)
+    -   Read Document: `GET /api/v1/{path...}`
+    -   Create Document: `POST /api/v1/{path...}` (Body: JSON Data)
+    -   Update Document: `PATCH /api/v1/{path...}` (Body: JSON Data)
 -   **Methods**:
     -   `fetchHistory(chatPath)`: Retrieves conversation context.
-        -   *Implementation Note*: Currently Syntrix API only supports single document retrieval. For the demo, we might need to implement a `query` endpoint or iterate known IDs. **Correction**: Syntrix has a Query API (`POST /v1/query`). We should use that.
+        -   *Implementation Note*: Currently Syntrix API only supports single document retrieval. For the demo, we might need to implement a `query` endpoint or iterate known IDs. **Correction**: Syntrix has a Query API (`POST /api/v1/query`). We should use that.
     -   `postMessage(chatPath, content)`: Writes AI response.
     -   `postToolCall(chatPath, toolData)`: Writes tool execution request.
     -   `updateToolCall(toolPath, result)`: Updates tool execution status.
@@ -49,8 +49,8 @@ Handles logic for interacting with OpenAI.
 -   **Process**:
     1.  **Parse Context**: Extract `chatId` and `userId` from `docKey` or `collection`.
     2.  **Reconstruct History**:
-        -   **Query 1**: `POST /v1/query` with `collection: users/.../messages`, sort by `createdAt`.
-        -   **Query 2**: `POST /v1/query` with `collection: users/.../toolcall`, sort by `createdAt`.
+        -   **Query 1**: `POST /api/v1/query` with `collection: users/.../messages`, sort by `createdAt`.
+        -   **Query 2**: `POST /api/v1/query` with `collection: users/.../toolcall`, sort by `createdAt`.
         -   **Merge Logic**: Combine both lists into a single timeline based on `createdAt`.
         -   **Format**: Convert to OpenAI Message format.
             -   `messages` -> `user` / `assistant` role.

@@ -23,7 +23,7 @@ func TestHandleLogin(t *testing.T) {
 		mockAuth.On("SignIn", mock.Anything, reqBody).Return(tokenPair, nil).Once()
 
 		body, _ := json.Marshal(reqBody)
-		req := httptest.NewRequest("POST", "/v1/auth/login", bytes.NewReader(body))
+		req := httptest.NewRequest("POST", "/api/v1/auth/login", bytes.NewReader(body))
 		w := httptest.NewRecorder()
 
 		server.handleLogin(w, req)
@@ -39,7 +39,7 @@ func TestHandleLogin(t *testing.T) {
 		mockAuth.On("SignIn", mock.Anything, reqBody).Return(nil, auth.ErrInvalidCredentials).Once()
 
 		body, _ := json.Marshal(reqBody)
-		req := httptest.NewRequest("POST", "/v1/auth/login", bytes.NewReader(body))
+		req := httptest.NewRequest("POST", "/api/v1/auth/login", bytes.NewReader(body))
 		w := httptest.NewRecorder()
 
 		server.handleLogin(w, req)
@@ -48,7 +48,7 @@ func TestHandleLogin(t *testing.T) {
 	})
 
 	t.Run("InvalidBody", func(t *testing.T) {
-		req := httptest.NewRequest("POST", "/v1/auth/login", bytes.NewReader([]byte("invalid")))
+		req := httptest.NewRequest("POST", "/api/v1/auth/login", bytes.NewReader([]byte("invalid")))
 		w := httptest.NewRecorder()
 
 		server.handleLogin(w, req)
@@ -67,7 +67,7 @@ func TestHandleRefresh(t *testing.T) {
 		mockAuth.On("Refresh", mock.Anything, reqBody).Return(tokenPair, nil).Once()
 
 		body, _ := json.Marshal(reqBody)
-		req := httptest.NewRequest("POST", "/v1/auth/refresh", bytes.NewReader(body))
+		req := httptest.NewRequest("POST", "/api/v1/auth/refresh", bytes.NewReader(body))
 		w := httptest.NewRecorder()
 
 		server.handleRefresh(w, req)
@@ -83,7 +83,7 @@ func TestHandleRefresh(t *testing.T) {
 		mockAuth.On("Refresh", mock.Anything, reqBody).Return(nil, errors.New("invalid token")).Once()
 
 		body, _ := json.Marshal(reqBody)
-		req := httptest.NewRequest("POST", "/v1/auth/refresh", bytes.NewReader(body))
+		req := httptest.NewRequest("POST", "/api/v1/auth/refresh", bytes.NewReader(body))
 		w := httptest.NewRecorder()
 
 		server.handleRefresh(w, req)
@@ -101,7 +101,7 @@ func TestHandleLogout(t *testing.T) {
 		mockAuth.On("Logout", mock.Anything, "refresh_token").Return(nil).Once()
 
 		body, _ := json.Marshal(reqBody)
-		req := httptest.NewRequest("POST", "/v1/auth/logout", bytes.NewReader(body))
+		req := httptest.NewRequest("POST", "/api/v1/auth/logout", bytes.NewReader(body))
 		w := httptest.NewRecorder()
 
 		server.handleLogout(w, req)
@@ -112,7 +112,7 @@ func TestHandleLogout(t *testing.T) {
 	t.Run("Success_Header", func(t *testing.T) {
 		mockAuth.On("Logout", mock.Anything, "refresh_token").Return(nil).Once()
 
-		req := httptest.NewRequest("POST", "/v1/auth/logout", nil)
+		req := httptest.NewRequest("POST", "/api/v1/auth/logout", nil)
 		req.Header.Set("Authorization", "Bearer refresh_token")
 		w := httptest.NewRecorder()
 
@@ -122,7 +122,7 @@ func TestHandleLogout(t *testing.T) {
 	})
 
 	t.Run("MissingToken", func(t *testing.T) {
-		req := httptest.NewRequest("POST", "/v1/auth/logout", nil)
+		req := httptest.NewRequest("POST", "/api/v1/auth/logout", nil)
 		w := httptest.NewRecorder()
 
 		server.handleLogout(w, req)

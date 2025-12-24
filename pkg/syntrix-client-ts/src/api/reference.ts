@@ -54,7 +54,7 @@ export class QueryImpl<T> implements Query<T> {
       sort: this.sort,
       limit: this.limitVal
     };
-    return this.storage.query<T>('/v1/query', query);
+    return this.storage.query<T>('/api/v1/query', query);
   }
 }
 

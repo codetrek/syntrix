@@ -64,7 +64,7 @@ describe('TriggerClient', () => {
     const writes = [{ type: 'create', path: 'users/1', data: {} }];
     await client.batch(writes);
 
-    expect(capturedConfig.baseURL).toBe('http://localhost/v1/trigger');
+    expect(capturedConfig.baseURL).toBe('http://localhost/api/v1/trigger');
     expect(capturedConfig.headers.Authorization).toBe('Bearer token');
     expect(mockAxiosInstance.post).toHaveBeenCalledWith('write', { writes });
   });

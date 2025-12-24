@@ -19,13 +19,13 @@ We explicitly reject the "One Client Fits All" approach. The lifecycle, authenti
 *   **`SyntrixClient` (Standard)**:
     *   **Target**: External applications (Web, Mobile, Backend).
     *   **Auth**: Long-lived tokens or User tokens.
-    *   **Transport**: Standard REST API (`/v1/...`).
+    *   **Transport**: Standard REST API (`/api/v1/...`).
     *   **Semantics**: Standard HTTP behavior (e.g., 404 returns null).
 
 *   **`TriggerClient` (Trigger)**:
     *   **Target**: Internal Trigger Workers (Serverless/Container).
     *   **Auth**: Ephemeral `preIssuedToken` (Strictly scoped to the trigger event).
-    *   **Transport**: Internal Trigger RPC (`/v1/trigger/...`).
+    *   **Transport**: Internal Trigger RPC (`/api/v1/trigger/...`).
     *   **Capabilities**: Privileged operations like **Atomic Batch Writes** (`batch()`).
 
 ### 2.2 Interface-Based Polymorphism
@@ -74,8 +74,8 @@ graph TD
         Ref -- depends on --> StorageClient
     end
 
-    SyntrixClient -- HTTP REST --> Server[/v1/...]
-    TriggerClient -- Trigger RPC --> Server[/v1/trigger/...]
+    SyntrixClient -- HTTP REST --> Server[/api/v1/...]
+    TriggerClient -- Trigger RPC --> Server[/api/v1/trigger/...]
 ```
 
 ## 4. Implementation Details

@@ -27,7 +27,7 @@ func TestAPIIntegration(t *testing.T) {
 		"age":  42,
 	}
 
-	resp := env.MakeRequest(t, "POST", "/v1/"+collection, docData, token)
+	resp := env.MakeRequest(t, "POST", "/api/v1/"+collection, docData, token)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
 	var createdDoc map[string]interface{}
@@ -43,7 +43,7 @@ func TestAPIIntegration(t *testing.T) {
 	docID := createdDoc["id"].(string)
 
 	// 4. Scenario: Get Document
-	resp = env.MakeRequest(t, "GET", fmt.Sprintf("/v1/%s/%s", collection, docID), nil, token)
+	resp = env.MakeRequest(t, "GET", fmt.Sprintf("/api/v1/%s/%s", collection, docID), nil, token)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var fetchedDoc map[string]interface{}
@@ -60,7 +60,7 @@ func TestAPIIntegration(t *testing.T) {
 			"age": 43,
 		},
 	}
-	resp = env.MakeRequest(t, "PATCH", fmt.Sprintf("/v1/%s/%s", collection, docID), patchData, token)
+	resp = env.MakeRequest(t, "PATCH", fmt.Sprintf("/api/v1/%s/%s", collection, docID), patchData, token)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var patchedDoc map[string]interface{}
@@ -78,7 +78,7 @@ func TestAPIIntegration(t *testing.T) {
 			{Field: "name", Op: "==", Value: "Integration User"},
 		},
 	}
-	resp = env.MakeRequest(t, "POST", "/v1/query", query, token)
+	resp = env.MakeRequest(t, "POST", "/api/v1/query", query, token)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var queryResults []map[string]interface{}
@@ -105,7 +105,7 @@ func TestAPIIntegration(t *testing.T) {
 			{"field": "age", "op": "==", "value": 43},
 		},
 	}
-	resp = env.MakeRequest(t, "PATCH", fmt.Sprintf("/v1/%s/%s", collection, docID), ifMatchData, token)
+	resp = env.MakeRequest(t, "PATCH", fmt.Sprintf("/api/v1/%s/%s", collection, docID), ifMatchData, token)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// Failure case (Condition not met)
@@ -117,14 +117,14 @@ func TestAPIIntegration(t *testing.T) {
 			{"field": "age", "op": "==", "value": 999}, // Wrong age
 		},
 	}
-	resp = env.MakeRequest(t, "PATCH", fmt.Sprintf("/v1/%s/%s", collection, docID), ifMatchFailData, token)
+	resp = env.MakeRequest(t, "PATCH", fmt.Sprintf("/api/v1/%s/%s", collection, docID), ifMatchFailData, token)
 	require.Equal(t, http.StatusPreconditionFailed, resp.StatusCode)
 
 	// 6. Scenario: Delete Document
-	resp = env.MakeRequest(t, "DELETE", fmt.Sprintf("/v1/%s/%s", collection, docID), nil, token)
+	resp = env.MakeRequest(t, "DELETE", fmt.Sprintf("/api/v1/%s/%s", collection, docID), nil, token)
 	require.Equal(t, http.StatusNoContent, resp.StatusCode)
 
 	// Verify Delete
-	resp = env.MakeRequest(t, "GET", fmt.Sprintf("/v1/%s/%s", collection, docID), nil, token)
+	resp = env.MakeRequest(t, "GET", fmt.Sprintf("/api/v1/%s/%s", collection, docID), nil, token)
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 }

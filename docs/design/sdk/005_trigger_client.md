@@ -5,11 +5,11 @@
 **Related:** [001_sdk_architecture.md](001_sdk_architecture.md), [003_authentication.md](003_authentication.md)
 
 ## Scope
-HTTP client for trigger workers using `/v1/trigger/...` endpoints with privileged capabilities (e.g., atomic batch writes). Implements `StorageClient` but with trigger-specific semantics.
+HTTP client for trigger workers using `/api/v1/trigger/...` endpoints with privileged capabilities (e.g., atomic batch writes). Implements `StorageClient` but with trigger-specific semantics.
 
 ## Responsibilities
 - CRUD semantics over trigger endpoints where applicable.
-- Batch writes via `batch(writes: WriteOp[])` mapped to `/v1/trigger/write`.
+- Batch writes via `batch(writes: WriteOp[])` mapped to `/api/v1/trigger/write`.
 - Provide reference API entry points `collection(path)` and `doc(path)` consistent with `StorageClient` contract.
 - Accept `preIssuedToken` (short-lived, scoped) from trigger payload; no automatic refresh.
 
@@ -23,12 +23,12 @@ HTTP client for trigger workers using `/v1/trigger/...` endpoints with privilege
 - `collection<T>(path): CollectionReference<T>`
 - `doc<T>(path): DocumentReference<T>`
 - `batch(writes: WriteOp[]): Promise<void>`
-- `get(path): Promise<T | null>` (via `/v1/trigger/get`)
+- `get(path): Promise<T | null>` (via `/api/v1/trigger/get`)
 - `create(collectionPath, data, id): Promise<T>` (id required)
 - `update(path, data): Promise<T>`
 - `replace(path, data): Promise<T>`
 - `delete(path): Promise<void>`
-- `query(query: Query): Promise<T[]>` (via `/v1/trigger/query`)
+- `query(query: Query): Promise<T[]>` (via `/api/v1/trigger/query`)
 
 ## Behavior Notes
 - `create` requires caller-provided `id`; server does not generate one in trigger mode.
@@ -59,7 +59,7 @@ await client.batch([
 
 ## Testing Plan
 - `create` without id rejects; with id sends correct path.
-- `batch` posts writes as-is to `/v1/trigger/write`.
+- `batch` posts writes as-is to `/api/v1/trigger/write`.
 - `get` returns null on empty documents array.
-- `query` posts to `/v1/trigger/query` with given `Query` shape.
+- `query` posts to `/api/v1/trigger/query` with given `Query` shape.
 - Auth: ensures header is set; missing token yields error.

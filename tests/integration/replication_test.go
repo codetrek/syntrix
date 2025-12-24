@@ -66,7 +66,7 @@ func TestReplication_FullFlow(t *testing.T) {
 	}
 
 	bodyBytes, _ := json.Marshal(pushBody)
-	pushURL := fmt.Sprintf("%s/v1/replication/push?collection=%s", env.APIURL, collectionName)
+	pushURL := fmt.Sprintf("%s/replication/v1/push?collection=%s", env.APIURL, collectionName)
 
 	pushReq, err := http.NewRequest("POST", pushURL, bytes.NewBuffer(bodyBytes))
 	require.NoError(t, err)
@@ -121,7 +121,7 @@ func TestReplication_FullFlow(t *testing.T) {
 	}
 
 	// 4. Pull to verify storage
-	pullURL := fmt.Sprintf("%s/v1/replication/pull?collection=%s&checkpoint=0", env.APIURL, collectionName)
+	pullURL := fmt.Sprintf("%s/replication/v1/pull?collection=%s&checkpoint=0", env.APIURL, collectionName)
 	pullReq, err := http.NewRequest("GET", pullURL, nil)
 	require.NoError(t, err)
 	pullReq.Header.Set("Authorization", "Bearer "+token)

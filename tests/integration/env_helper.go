@@ -173,7 +173,7 @@ func (e *ServiceEnv) GetToken(t *testing.T, uid string, role string) string {
 		"password": "password",
 	}
 	bodyBytes, _ := json.Marshal(loginBody)
-	resp, err := http.Post(e.APIURL+"/v1/auth/login", "application/json", bytes.NewBuffer(bodyBytes))
+	resp, err := http.Post(e.APIURL+"/api/v1/auth/login", "application/json", bytes.NewBuffer(bodyBytes))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 

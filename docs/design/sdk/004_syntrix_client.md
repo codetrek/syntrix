@@ -5,7 +5,7 @@
 **Related:** [001_sdk_architecture.md](001_sdk_architecture.md), [003_authentication.md](003_authentication.md)
 
 ## Scope
-Public HTTP client for application usage (web/mobile/backend) over `/v1/...` REST. Implements `StorageClient` to power the reference API (CollectionReference/DocumentReference/QueryBuilder) and is reused by replication.
+Public HTTP client for application usage (web/mobile/backend) over `/api/v1/...` REST. Implements `StorageClient` to power the reference API (CollectionReference/DocumentReference/QueryBuilder) and is reused by replication.
 
 ## Responsibilities
 - CRUD and query over REST.
@@ -69,5 +69,5 @@ const posts = await client
 - `get` returns null on 404; throws on other errors.
 - `create` with/without id forwards payload correctly.
 - Auth: 401 triggers refresh once and retries; failure bubbles.
-- Query maps to POST `/v1/query` with provided `Query` shape.
+- Query maps to POST `/api/v1/query` with provided `Query` shape.
 - Reference API (`collection().doc().get/set/update/delete`) calls underlying methods correctly.

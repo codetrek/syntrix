@@ -23,7 +23,7 @@ func TestHandleGetDocument(t *testing.T) {
 
 	mockService.On("GetDocument", mock.Anything, "rooms/room-1/messages/msg-1").Return(doc, nil)
 
-	req, _ := http.NewRequest("GET", "/v1/rooms/room-1/messages/msg-1", nil)
+	req, _ := http.NewRequest("GET", "/api/v1/rooms/room-1/messages/msg-1", nil)
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -42,7 +42,7 @@ func TestHandleCreateDocument(t *testing.T) {
 	server := createTestServer(mockService, nil, nil)
 
 	// Note: The API server might be calling CreateDocument or ReplaceDocument depending on implementation.
-	// Assuming it calls CreateDocument for POST /v1/collection
+	// Assuming it calls CreateDocument for POST /api/v1/collection
 	mockService.On("CreateDocument", mock.Anything, mock.MatchedBy(func(doc common.Document) bool {
 		return doc.GetCollection() == "rooms/room-1/messages" && doc.GetID() == "msg-1" && doc["name"] == "Bob"
 	})).Return(nil)
@@ -51,7 +51,7 @@ func TestHandleCreateDocument(t *testing.T) {
 	mockService.On("GetDocument", mock.Anything, "rooms/room-1/messages/msg-1").Return(createdDoc, nil)
 
 	body := []byte(`{"id":"msg-1","name": "Bob"}`)
-	req, _ := http.NewRequest("POST", "/v1/rooms/room-1/messages", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("POST", "/api/v1/rooms/room-1/messages", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -65,7 +65,7 @@ func TestHandleGetDocument_NotFound(t *testing.T) {
 
 	mockService.On("GetDocument", mock.Anything, "rooms/room-1/messages/unknown").Return(nil, storage.ErrNotFound)
 
-	req, _ := http.NewRequest("GET", "/v1/rooms/room-1/messages/unknown", nil)
+	req, _ := http.NewRequest("GET", "/api/v1/rooms/room-1/messages/unknown", nil)
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -84,7 +84,7 @@ func TestHandleReplaceDocument(t *testing.T) {
 	}), mock.Anything).Return(returnedDoc, nil)
 
 	body := []byte(`{"doc":{"name": "Bob"}}`)
-	req, _ := http.NewRequest("PUT", "/v1/rooms/room-1/messages/msg-1", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("PUT", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -106,7 +106,7 @@ func TestHandleUpdateDocument(t *testing.T) {
 	}), mock.Anything).Return(returnedDoc, nil)
 
 	body := []byte(`{"doc":{"status": "read"}}`)
-	req, _ := http.NewRequest("PATCH", "/v1/rooms/room-1/messages/msg-1", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("PATCH", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -123,7 +123,7 @@ func TestHandleDeleteDocument(t *testing.T) {
 
 	mockService.On("DeleteDocument", mock.Anything, "rooms/room-1/messages/msg-1").Return(nil)
 
-	req, _ := http.NewRequest("DELETE", "/v1/rooms/room-1/messages/msg-1", nil)
+	req, _ := http.NewRequest("DELETE", "/api/v1/rooms/room-1/messages/msg-1", nil)
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -146,7 +146,7 @@ func TestHandleReplaceDocument_IfMatch(t *testing.T) {
 	}), filters).Return(returnedDoc, nil)
 
 	body := []byte(`{"doc":{"name": "Bob"}, "ifMatch": [{"field": "version", "op": "==", "value": 1}]}`)
-	req, _ := http.NewRequest("PUT", "/v1/rooms/room-1/messages/msg-1", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("PUT", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -172,7 +172,7 @@ func TestHandlePatchDocument_IfMatch(t *testing.T) {
 	}), filters).Return(returnedDoc, nil)
 
 	body := []byte(`{"doc":{"status": "read"}, "ifMatch": [{"field": "status", "op": "==", "value": "unread"}]}`)
-	req, _ := http.NewRequest("PATCH", "/v1/rooms/room-1/messages/msg-1", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("PATCH", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -202,7 +202,7 @@ func TestHandleGetDocument_InternalError(t *testing.T) {
 
 	mockService.On("GetDocument", mock.Anything, "rooms/room-1/messages/msg-1").Return(nil, errors.New("boom"))
 
-	req, _ := http.NewRequest("GET", "/v1/rooms/room-1/messages/msg-1", nil)
+	req, _ := http.NewRequest("GET", "/api/v1/rooms/room-1/messages/msg-1", nil)
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -215,7 +215,7 @@ func TestHandleCreateDocument_InvalidCollection(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	req, _ := http.NewRequest("POST", "/v1/Invalid!", bytes.NewBufferString(`{"id":"1"}`))
+	req, _ := http.NewRequest("POST", "/api/v1/Invalid!", bytes.NewBufferString(`{"id":"1"}`))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -227,7 +227,7 @@ func TestHandleCreateDocument_BadBody(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	req, _ := http.NewRequest("POST", "/v1/rooms/room-1/messages", bytes.NewBufferString("{invalid"))
+	req, _ := http.NewRequest("POST", "/api/v1/rooms/room-1/messages", bytes.NewBufferString("{invalid"))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -239,7 +239,7 @@ func TestHandleCreateDocument_ValidationError(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	req, _ := http.NewRequest("POST", "/v1/rooms/room-1/messages", bytes.NewBufferString(`{"id":""}`))
+	req, _ := http.NewRequest("POST", "/api/v1/rooms/room-1/messages", bytes.NewBufferString(`{"id":""}`))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -253,7 +253,7 @@ func TestHandleCreateDocument_Conflict(t *testing.T) {
 
 	mockService.On("CreateDocument", mock.Anything, mock.AnythingOfType("common.Document")).Return(storage.ErrExists)
 
-	req, _ := http.NewRequest("POST", "/v1/rooms/room-1/messages", bytes.NewBufferString(`{"id":"msg-1"}`))
+	req, _ := http.NewRequest("POST", "/api/v1/rooms/room-1/messages", bytes.NewBufferString(`{"id":"msg-1"}`))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -269,7 +269,7 @@ func TestHandleCreateDocument_GetError(t *testing.T) {
 	mockService.On("CreateDocument", mock.Anything, mock.AnythingOfType("common.Document")).Return(nil)
 	mockService.On("GetDocument", mock.Anything, "rooms/room-1/messages/msg-1").Return(nil, errors.New("fetch"))
 
-	req, _ := http.NewRequest("POST", "/v1/rooms/room-1/messages", bytes.NewBufferString(`{"id":"msg-1"}`))
+	req, _ := http.NewRequest("POST", "/api/v1/rooms/room-1/messages", bytes.NewBufferString(`{"id":"msg-1"}`))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -282,7 +282,7 @@ func TestHandleReplaceDocument_InvalidPath(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	req, _ := http.NewRequest("PUT", "/v1/rooms", bytes.NewBufferString(`{"doc":{}}`))
+	req, _ := http.NewRequest("PUT", "/api/v1/rooms", bytes.NewBufferString(`{"doc":{}}`))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -294,7 +294,7 @@ func TestHandleReplaceDocument_InvalidBody(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	req, _ := http.NewRequest("PUT", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString("{invalid"))
+	req, _ := http.NewRequest("PUT", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString("{invalid"))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -306,7 +306,7 @@ func TestHandleReplaceDocument_ValidationError(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	req, _ := http.NewRequest("PUT", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"id":""}}`))
+	req, _ := http.NewRequest("PUT", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"id":""}}`))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -318,7 +318,7 @@ func TestHandleReplaceDocument_IDMismatch(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	req, _ := http.NewRequest("PUT", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"id":"msg-2"}}`))
+	req, _ := http.NewRequest("PUT", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"id":"msg-2"}}`))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -332,7 +332,7 @@ func TestHandleReplaceDocument_VersionConflict(t *testing.T) {
 
 	mockService.On("ReplaceDocument", mock.Anything, mock.AnythingOfType("common.Document"), mock.Anything).Return(nil, storage.ErrPreconditionFailed)
 
-	req, _ := http.NewRequest("PUT", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"id":"msg-1"}}`))
+	req, _ := http.NewRequest("PUT", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"id":"msg-1"}}`))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -345,7 +345,7 @@ func TestHandlePatchDocument_InvalidBody(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	req, _ := http.NewRequest("PATCH", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString("{invalid"))
+	req, _ := http.NewRequest("PATCH", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString("{invalid"))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -370,7 +370,7 @@ func TestHandlePatchDocument_NoData(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	req, _ := http.NewRequest("PATCH", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"id":"msg-1"}}`))
+	req, _ := http.NewRequest("PATCH", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"id":"msg-1"}}`))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -384,7 +384,7 @@ func TestHandlePatchDocument_NotFound(t *testing.T) {
 
 	mockService.On("PatchDocument", mock.Anything, mock.AnythingOfType("common.Document"), mock.Anything).Return(nil, storage.ErrNotFound)
 
-	req, _ := http.NewRequest("PATCH", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"status":"read"}}`))
+	req, _ := http.NewRequest("PATCH", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"status":"read"}}`))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -399,7 +399,7 @@ func TestHandlePatchDocument_VersionConflict(t *testing.T) {
 
 	mockService.On("PatchDocument", mock.Anything, mock.AnythingOfType("common.Document"), mock.Anything).Return(nil, storage.ErrPreconditionFailed)
 
-	req, _ := http.NewRequest("PATCH", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"status":"read"}}`))
+	req, _ := http.NewRequest("PATCH", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"status":"read"}}`))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -414,7 +414,7 @@ func TestHandlePatchDocument_InternalError(t *testing.T) {
 
 	mockService.On("PatchDocument", mock.Anything, mock.AnythingOfType("common.Document"), mock.Anything).Return(nil, errors.New("boom"))
 
-	req, _ := http.NewRequest("PATCH", "/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"status":"read"}}`))
+	req, _ := http.NewRequest("PATCH", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"status":"read"}}`))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -429,7 +429,7 @@ func TestHandleDeleteDocument_NotFound(t *testing.T) {
 
 	mockService.On("DeleteDocument", mock.Anything, "rooms/room-1/messages/msg-1").Return(storage.ErrNotFound)
 
-	req, _ := http.NewRequest("DELETE", "/v1/rooms/room-1/messages/msg-1", nil)
+	req, _ := http.NewRequest("DELETE", "/api/v1/rooms/room-1/messages/msg-1", nil)
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -444,7 +444,7 @@ func TestHandleDeleteDocument_InternalError(t *testing.T) {
 
 	mockService.On("DeleteDocument", mock.Anything, "rooms/room-1/messages/msg-1").Return(errors.New("boom"))
 
-	req, _ := http.NewRequest("DELETE", "/v1/rooms/room-1/messages/msg-1", nil)
+	req, _ := http.NewRequest("DELETE", "/api/v1/rooms/room-1/messages/msg-1", nil)
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)

@@ -5,7 +5,7 @@
 
 ## 1. REST API Specification
 
-Base URL: `/v1`
+Base URL: `/api/v1`
 
 ### 1.1 Document Operations
 
@@ -26,7 +26,7 @@ This is the business layer Document type, visible to the API.
 
 #### Get Document
 
-`GET /v1/{collectionPath}/{docID}`
+`GET /api/v1/{collectionPath}/{docID}`
 
 **Response (200 OK):**
 
@@ -44,7 +44,7 @@ This is the business layer Document type, visible to the API.
 
 #### Create Document
 
-`POST /v1/{collectionPath}`
+`POST /api/v1/{collectionPath}`
 
 **Request:**
 
@@ -71,7 +71,7 @@ This is the business layer Document type, visible to the API.
 
 #### Create/Replace Document (Upsert)
 
-`PUT /v1/{collectionPath}/{docID}`
+`PUT /api/v1/{collectionPath}/{docID}`
 
 **Request:**
 
@@ -84,7 +84,7 @@ This is the business layer Document type, visible to the API.
 
 #### Update Document (Patch)
 
-`PATCH /v1/{collectionPath}/{docID}`
+`PATCH /api/v1/{collectionPath}/{docID}`
 
 **Request:**
 
@@ -96,7 +96,7 @@ This is the business layer Document type, visible to the API.
 
 #### Delete Document
 
-`DELETE /v1/{collectionPath}/{docID}`
+`DELETE /api/v1/{collectionPath}/{docID}`
 
 Response (204 No Content)
 
@@ -104,7 +104,7 @@ Response (204 No Content)
 
 #### Execute Query
 
-`POST /v1/query`
+`POST /api/v1/query`
 
 **Request:**
 

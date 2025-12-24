@@ -23,7 +23,7 @@ func TestAuthorized_NoAuthzPassThrough(t *testing.T) {
 		w.WriteHeader(http.StatusTeapot)
 	}, "read")
 
-	req := httptest.NewRequest("GET", "/v1/foo", nil)
+	req := httptest.NewRequest("GET", "/api/v1/foo", nil)
 	req.SetPathValue("path", "col/doc")
 	w := httptest.NewRecorder()
 
@@ -40,7 +40,7 @@ func TestAuthorized_EvaluateError(t *testing.T) {
 	engine.On("GetDocument", mock.Anything, "col/doc").Return(nil, storage.ErrNotFound)
 	authzSvc.On("Evaluate", mock.Anything, "col/doc", "read", mock.Anything, (*authz.Resource)(nil)).Return(false, errors.New("eval error"))
 
-	req := httptest.NewRequest("GET", "/v1/foo", nil)
+	req := httptest.NewRequest("GET", "/api/v1/foo", nil)
 	req.SetPathValue("path", "col/doc")
 	ctx := context.WithValue(req.Context(), "userID", "user-1")
 	ctx = context.WithValue(ctx, "roles", []string{"admin", "user"})
@@ -62,7 +62,7 @@ func TestAuthorized_Denied(t *testing.T) {
 	engine.On("GetDocument", mock.Anything, "col/doc").Return(nil, storage.ErrNotFound)
 	authzSvc.On("Evaluate", mock.Anything, "col/doc", "read", mock.Anything, (*authz.Resource)(nil)).Return(false, nil)
 
-	req := httptest.NewRequest("GET", "/v1/foo", nil)
+	req := httptest.NewRequest("GET", "/api/v1/foo", nil)
 	req.SetPathValue("path", "col/doc")
 	w := httptest.NewRecorder()
 
@@ -97,7 +97,7 @@ func TestAuthorized_AllowedWithExistingAndNewData(t *testing.T) {
 		return res != nil && res.ID == "123" && res.Data["field"] == "old" && res.Data["version"] == nil && res.Data["collection"] == nil
 	})).Return(true, nil)
 
-	req := httptest.NewRequest("PUT", "/v1/col/doc", strings.NewReader(`{"field":"new"}`))
+	req := httptest.NewRequest("PUT", "/api/v1/col/doc", strings.NewReader(`{"field":"new"}`))
 	req.SetPathValue("path", "col/doc")
 	ctx := context.WithValue(req.Context(), "userID", "user-1")
 	ctx = context.WithValue(ctx, "roles", []string{"admin"})

@@ -4,7 +4,7 @@ This document describes the REST API provided by Syntrix.
 
 ## Base URL
 
-All API endpoints are prefixed with `/v1`, except for the health check.
+All API endpoints are prefixed with `/api/v1`, except for the health check.
 
 ## Authentication
 
@@ -14,7 +14,7 @@ Syntrix uses JWT (JSON Web Tokens) for authentication.
 
 Authenticate a user and receive a token pair (Access Token and Refresh Token).
 
-**Endpoint:** `POST /v1/auth/login`
+**Endpoint:** `POST /api/v1/auth/login`
 
 **Request Body:**
 
@@ -39,7 +39,7 @@ Authenticate a user and receive a token pair (Access Token and Refresh Token).
 
 Get a new Access Token using a valid Refresh Token.
 
-**Endpoint:** `POST /v1/auth/refresh`
+**Endpoint:** `POST /api/v1/auth/refresh`
 
 **Request Body:**
 
@@ -63,7 +63,7 @@ Get a new Access Token using a valid Refresh Token.
 
 Invalidate a Refresh Token.
 
-**Endpoint:** `POST /v1/auth/logout`
+**Endpoint:** `POST /api/v1/auth/logout`
 
 **Request Body:**
 
@@ -91,9 +91,9 @@ These endpoints allow you to perform CRUD operations on documents.
 
 Retrieve a document by its full path.
 
-**Endpoint:** `GET /v1/{path...}`
+**Endpoint:** `GET /api/v1/{path...}`
 
-**Example:** `GET /v1/rooms/room-1/messages/msg-1`
+**Example:** `GET /api/v1/rooms/room-1/messages/msg-1`
 
 **Response (200 OK):**
 
@@ -113,9 +113,9 @@ Retrieve a document by its full path.
 
 Create a new document in a collection. The ID is automatically generated if not provided.
 
-**Endpoint:** `POST /v1/{collection_path...}`
+**Endpoint:** `POST /api/v1/{collection_path...}`
 
-**Example:** `POST /v1/rooms/room-1/messages`
+**Example:** `POST /api/v1/rooms/room-1/messages`
 
 **Request Body:**
 
@@ -132,9 +132,9 @@ Create a new document in a collection. The ID is automatically generated if not 
 
 Replace an existing document or create it if it doesn't exist.
 
-**Endpoint:** `PUT /v1/{document_path...}`
+**Endpoint:** `PUT /api/v1/{document_path...}`
 
-**Example:** `PUT /v1/rooms/room-1/messages/msg-1`
+**Example:** `PUT /api/v1/rooms/room-1/messages/msg-1`
 
 **Request Body:**
 
@@ -155,9 +155,9 @@ Replace an existing document or create it if it doesn't exist.
 
 Update specific fields of an existing document.
 
-**Endpoint:** `PATCH /v1/{document_path...}`
+**Endpoint:** `PATCH /api/v1/{document_path...}`
 
-**Example:** `PATCH /v1/rooms/room-1/messages/msg-1`
+**Example:** `PATCH /api/v1/rooms/room-1/messages/msg-1`
 
 **Request Body:**
 
@@ -176,9 +176,9 @@ Update specific fields of an existing document.
 
 Delete a document.
 
-**Endpoint:** `DELETE /v1/{document_path...}`
+**Endpoint:** `DELETE /api/v1/{document_path...}`
 
-**Example:** `DELETE /v1/rooms/room-1/messages/msg-1`
+**Example:** `DELETE /api/v1/rooms/room-1/messages/msg-1`
 
 **Response (204 No Content):** Empty body.
 
@@ -186,7 +186,7 @@ Delete a document.
 
 Execute complex queries against a collection.
 
-**Endpoint:** `POST /v1/query`
+**Endpoint:** `POST /api/v1/query`
 
 * Filters: [filters](./filters.md)
 

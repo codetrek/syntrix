@@ -34,7 +34,7 @@ func TestHandlePull(t *testing.T) {
 
 	mockService.On("Pull", mock.Anything, mock.AnythingOfType("storage.ReplicationPullRequest")).Return(resp, nil)
 
-	req, _ := http.NewRequest("GET", "/v1/replication/pull?collection=rooms/room-1/messages&checkpoint=0&limit=10", nil)
+	req, _ := http.NewRequest("GET", "/replication/v1/pull?collection=rooms/room-1/messages&checkpoint=0&limit=10", nil)
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -66,7 +66,7 @@ func TestHandlePush(t *testing.T) {
 		},
 	}
 	body, _ := json.Marshal(pushReq)
-	req, _ := http.NewRequest("POST", "/v1/replication/push", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("POST", "/replication/v1/push", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -78,7 +78,7 @@ func TestHandlePull_InvalidQuery(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	req, _ := http.NewRequest("GET", "/v1/replication/pull?limit=abc", nil)
+	req, _ := http.NewRequest("GET", "/replication/v1/pull?limit=abc", nil)
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -90,7 +90,7 @@ func TestHandlePull_MissingCollection(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	req, _ := http.NewRequest("GET", "/v1/replication/pull?checkpoint=0", nil)
+	req, _ := http.NewRequest("GET", "/replication/v1/pull?checkpoint=0", nil)
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -102,7 +102,7 @@ func TestHandlePull_InvalidCheckpoint(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	req, _ := http.NewRequest("GET", "/v1/replication/pull?collection=rooms&checkpoint=abc", nil)
+	req, _ := http.NewRequest("GET", "/replication/v1/pull?collection=rooms&checkpoint=abc", nil)
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -114,7 +114,7 @@ func TestHandlePull_ValidateError(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	req, _ := http.NewRequest("GET", "/v1/replication/pull?collection=rooms&checkpoint=0&limit=2001", nil)
+	req, _ := http.NewRequest("GET", "/replication/v1/pull?collection=rooms&checkpoint=0&limit=2001", nil)
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -128,7 +128,7 @@ func TestHandlePull_EngineError(t *testing.T) {
 
 	mockService.On("Pull", mock.Anything, mock.AnythingOfType("storage.ReplicationPullRequest")).Return(nil, errors.New("boom"))
 
-	req, _ := http.NewRequest("GET", "/v1/replication/pull?collection=rooms&checkpoint=0&limit=1", nil)
+	req, _ := http.NewRequest("GET", "/replication/v1/pull?collection=rooms&checkpoint=0&limit=1", nil)
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -141,7 +141,7 @@ func TestHandlePush_InvalidBody(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	req, _ := http.NewRequest("POST", "/v1/replication/push", bytes.NewBufferString("{invalid"))
+	req, _ := http.NewRequest("POST", "/replication/v1/push", bytes.NewBufferString("{invalid"))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -155,7 +155,7 @@ func TestHandlePush_MissingCollection(t *testing.T) {
 
 	reqBody := ReplicaPushRequest{Collection: "", Changes: []ReplicaChange{{Doc: common.Document{"id": "1"}}}}
 	body, _ := json.Marshal(reqBody)
-	req, _ := http.NewRequest("POST", "/v1/replication/push", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("POST", "/replication/v1/push", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -169,7 +169,7 @@ func TestHandlePush_InvalidCollection(t *testing.T) {
 
 	reqBody := ReplicaPushRequest{Collection: "rooms!", Changes: []ReplicaChange{{Doc: common.Document{"id": "1"}}}}
 	body, _ := json.Marshal(reqBody)
-	req, _ := http.NewRequest("POST", "/v1/replication/push", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("POST", "/replication/v1/push", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -183,7 +183,7 @@ func TestHandlePush_DocValidationFail(t *testing.T) {
 
 	reqBody := ReplicaPushRequest{Collection: "rooms", Changes: []ReplicaChange{{Doc: common.Document{"id": ""}}}}
 	body, _ := json.Marshal(reqBody)
-	req, _ := http.NewRequest("POST", "/v1/replication/push", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("POST", "/replication/v1/push", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -197,7 +197,7 @@ func TestHandlePush_MissingDocID(t *testing.T) {
 
 	reqBody := ReplicaPushRequest{Collection: "rooms", Changes: []ReplicaChange{{Doc: common.Document{"name": "Bob"}}}}
 	body, _ := json.Marshal(reqBody)
-	req, _ := http.NewRequest("POST", "/v1/replication/push", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("POST", "/replication/v1/push", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -211,7 +211,7 @@ func TestHandlePush_NoChanges(t *testing.T) {
 
 	reqBody := ReplicaPushRequest{Collection: "rooms", Changes: []ReplicaChange{}}
 	body, _ := json.Marshal(reqBody)
-	req, _ := http.NewRequest("POST", "/v1/replication/push", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("POST", "/replication/v1/push", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -227,7 +227,7 @@ func TestHandlePush_EngineError(t *testing.T) {
 
 	reqBody := ReplicaPushRequest{Collection: "rooms", Changes: []ReplicaChange{{Doc: common.Document{"id": "1"}}}}
 	body, _ := json.Marshal(reqBody)
-	req, _ := http.NewRequest("POST", "/v1/replication/push", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("POST", "/replication/v1/push", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)

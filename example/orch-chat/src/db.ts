@@ -316,7 +316,7 @@ class RealtimeManager {
     }
 }
 
-const realtimeManager = new RealtimeManager(RT_URL.replace('http', 'ws') + '/v1/realtime');
+const realtimeManager = new RealtimeManager(RT_URL.replace('http', 'ws') + '/api/v1/realtime');
 
 // Helper to create a replication state for a collection
 const setupReplication = async (collection: RxCollection, remoteCollectionPath: string, options: { readOnly?: boolean } = {}) => {
@@ -333,7 +333,7 @@ const setupReplication = async (collection: RxCollection, remoteCollectionPath: 
                 };
             });
 
-            const response = await fetchWithAuth(`${API_URL}/v1/replication/push`, {
+            const response = await fetchWithAuth(`${API_URL}/replication/v1/push`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -355,7 +355,7 @@ const setupReplication = async (collection: RxCollection, remoteCollectionPath: 
         pull: {
             handler: async (checkpoint: any, batchSize: number) => {
                 const updatedAt = checkpoint ? checkpoint.updatedAt : 0;
-                const response = await fetchWithAuth(`${API_URL}/v1/replication/pull?collection=${encodeURIComponent(remoteCollectionPath)}&checkpoint=${updatedAt}&limit=${batchSize}`);
+                const response = await fetchWithAuth(`${API_URL}/replication/v1/pull?collection=${encodeURIComponent(remoteCollectionPath)}&checkpoint=${updatedAt}&limit=${batchSize}`);
                 const data = await response.json();
                 return {
                     documents: data.documents.map((doc: any) => ({

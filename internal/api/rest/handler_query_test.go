@@ -32,7 +32,7 @@ func TestHandleQuery(t *testing.T) {
 		},
 	}
 	body, _ := json.Marshal(query)
-	req, _ := http.NewRequest("POST", "/v1/query", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("POST", "/api/v1/query", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -49,7 +49,7 @@ func TestHandleQuery_BadJSON(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	req := httptest.NewRequest("POST", "/v1/query", bytes.NewReader([]byte("{bad")))
+	req := httptest.NewRequest("POST", "/api/v1/query", bytes.NewReader([]byte("{bad")))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -63,7 +63,7 @@ func TestHandleQuery_ValidateError(t *testing.T) {
 
 	q := storage.Query{} // missing collection triggers validation error
 	body, _ := json.Marshal(q)
-	req := httptest.NewRequest("POST", "/v1/query", bytes.NewReader(body))
+	req := httptest.NewRequest("POST", "/api/v1/query", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -79,7 +79,7 @@ func TestHandleQuery_EngineError(t *testing.T) {
 	mockService.On("ExecuteQuery", mock.Anything, q).Return(nil, assert.AnError)
 
 	body, _ := json.Marshal(q)
-	req := httptest.NewRequest("POST", "/v1/query", bytes.NewReader(body))
+	req := httptest.NewRequest("POST", "/api/v1/query", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)

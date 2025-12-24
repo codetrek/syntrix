@@ -82,14 +82,14 @@ func TestTriggerAuth(t *testing.T) {
 	systemToken, _ := tokenService.GenerateSystemToken("trigger-worker")
 
 	t.Run("Reject No Token", func(t *testing.T) {
-		req := httptest.NewRequest("POST", "/v1/trigger/get", nil)
+		req := httptest.NewRequest("POST", "/api/v1/trigger/get", nil)
 		w := httptest.NewRecorder()
 		server.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
 
 	t.Run("Reject User Token", func(t *testing.T) {
-		req := httptest.NewRequest("POST", "/v1/trigger/get", nil)
+		req := httptest.NewRequest("POST", "/api/v1/trigger/get", nil)
 		req.Header.Set("Authorization", "Bearer "+userToken.AccessToken)
 		w := httptest.NewRecorder()
 		server.ServeHTTP(w, req)
@@ -101,7 +101,7 @@ func TestTriggerAuth(t *testing.T) {
 		mockEngine.On("GetDocument", mock.Anything, "test/doc").Return(common.Document{"id": "doc1", "collection": "test", "version": int64(1)}, nil).Once()
 
 		reqBody := `{"paths": ["test/doc"]}`
-		req := httptest.NewRequest("POST", "/v1/trigger/get", bytes.NewBufferString(reqBody))
+		req := httptest.NewRequest("POST", "/api/v1/trigger/get", bytes.NewBufferString(reqBody))
 		req.Header.Set("Authorization", "Bearer "+systemToken)
 		w := httptest.NewRecorder()
 		server.ServeHTTP(w, req)

@@ -100,9 +100,9 @@ Header: `X-Syntrix-Signature: t=1697041234,v1=hex(hmac_sha256(secret, t + "." + 
 
 ### **Endpoints (internal-only)**
 
-- `POST /v1/trigger/get`: batch document reads by concrete paths.
-- `POST /v1/trigger/query`: single query (same shape as public query API).
-- `POST /v1/trigger/write`: one or more write ops in a single request.
+- `POST /api/v1/trigger/get`: batch document reads by concrete paths.
+- `POST /api/v1/trigger/query`: single query (same shape as public query API).
+- `POST /api/v1/trigger/write`: one or more write ops in a single request.
 
 ### **Parameters & Response**
 
@@ -121,7 +121,7 @@ Header: `X-Syntrix-Signature: t=1697041234,v1=hex(hmac_sha256(secret, t + "." + 
   - `roles`: `["system", "service:trigger-worker"]`
 - **Validation**:
   - Standard JWT signature validation.
-  - Middleware checks for `system` role for `/v1/trigger/*` endpoints.
+  - Middleware checks for `system` role for `/api/v1/trigger/*` endpoints.
   - Regular user tokens (without `system` role) are rejected with 403 Forbidden.
     - Order matches input `paths`.
     - Missing doc returns a placeholder `{ "path": "<input>", "missing": true }` (HTTP 200 overall); if caller prefers hard fail, use `/trigger/query` with filters.
@@ -137,7 +137,7 @@ Header: `X-Syntrix-Signature: t=1697041234,v1=hex(hmac_sha256(secret, t + "." + 
 ### **Request shape (examples)**
 
 - Get: `{ "paths": ["/rooms/room-123/messages/msg-9"] }`
-- Query: `{ "query": { "collection": "rooms/room-123/messages", "filters": [...], "orderBy": [...], "limit": 20, "startAfter": "cursor" } }` (structure identical to `POST /v1/query`)
+- Query: `{ "query": { "collection": "rooms/room-123/messages", "filters": [...], "orderBy": [...], "limit": 20, "startAfter": "cursor" } }` (structure identical to `POST /api/v1/query`)
 - Write: `{ "ops": [ { "type": "create|set|update|patch|delete", "path": "/rooms/room-123/messages/msg-9", "data": {...}, "precondition": [{"field": "version", "op": "==", "value": 7}] }, { "type": "delete", "path": "/rooms/room-123/messages/msg-10" } ], "idempotencyKey": "..." }`
 
 Notes:
@@ -147,8 +147,8 @@ Notes:
 
 ### **Response shape alignment**
 
-- `/trigger/get`: array of documents mirroring `GET /v1/{path}` shape per item.
-- `/trigger/query`: same as `POST /v1/query` (`documents`, `nextCursor`).
+- `/trigger/get`: array of documents mirroring `GET /api/v1/{path}` shape per item.
+- `/trigger/query`: same as `POST /api/v1/query` (`documents`, `nextCursor`).
 - `/trigger/write`: transactional; either all ops succeed with per-op results, or none are applied and an error with per-op details is returned.
 - Document payloads use the same flattened shape as public API (i.e., `flattenDocument`: user fields plus `id`, `collection`, `version`, `updatedAt`).
 
@@ -290,7 +290,7 @@ Collection matching uses `path.Match`, supporting shell file name patterns.
 
 ### 8.5 Internal API & Security
 
-The internal trigger endpoints (`/v1/trigger/...`) are protected by a system role check.
+The internal trigger endpoints (`/api/v1/trigger/...`) are protected by a system role check.
 
 - **Middleware**: `triggerProtected` ensures the caller has `role: system`.
 - **Worker Authentication**: The delivery worker generates a system token (signed with internal key) to authenticate against these endpoints if needed, or to authenticate itself to the webhook destination (current behavior).

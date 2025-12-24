@@ -29,29 +29,29 @@ func NewHandler(engine query.Service, auth auth.Service, authz authz.Engine) *Ha
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// Document Operations
-	mux.HandleFunc("GET /v1/{path...}", h.maybeProtected(h.authorized(h.handleGetDocument, "read")))
-	mux.HandleFunc("POST /v1/{path...}", h.maybeProtected(h.authorized(h.handleCreateDocument, "create")))
-	mux.HandleFunc("PUT /v1/{path...}", h.maybeProtected(h.authorized(h.handleReplaceDocument, "update")))
-	mux.HandleFunc("PATCH /v1/{path...}", h.maybeProtected(h.authorized(h.handlePatchDocument, "update")))
-	mux.HandleFunc("DELETE /v1/{path...}", h.maybeProtected(h.authorized(h.handleDeleteDocument, "delete")))
+	mux.HandleFunc("GET /api/v1/{path...}", h.maybeProtected(h.authorized(h.handleGetDocument, "read")))
+	mux.HandleFunc("POST /api/v1/{path...}", h.maybeProtected(h.authorized(h.handleCreateDocument, "create")))
+	mux.HandleFunc("PUT /api/v1/{path...}", h.maybeProtected(h.authorized(h.handleReplaceDocument, "update")))
+	mux.HandleFunc("PATCH /api/v1/{path...}", h.maybeProtected(h.authorized(h.handlePatchDocument, "update")))
+	mux.HandleFunc("DELETE /api/v1/{path...}", h.maybeProtected(h.authorized(h.handleDeleteDocument, "delete")))
 
 	// Query Operations
-	mux.HandleFunc("POST /v1/query", h.protected(h.handleQuery))
+	mux.HandleFunc("POST /api/v1/query", h.protected(h.handleQuery))
 
 	// Replication Operations
-	mux.HandleFunc("GET /v1/replication/pull", h.protected(h.handlePull))
-	mux.HandleFunc("POST /v1/replication/push", h.protected(h.handlePush))
+	mux.HandleFunc("GET /replication/v1/pull", h.protected(h.handlePull))
+	mux.HandleFunc("POST /replication/v1/push", h.protected(h.handlePush))
 
 	// Trigger Internal Operations
-	mux.HandleFunc("POST /v1/trigger/get", h.triggerProtected(h.handleTriggerGet))
-	mux.HandleFunc("POST /v1/trigger/query", h.triggerProtected(h.handleQuery))
-	mux.HandleFunc("POST /v1/trigger/write", h.triggerProtected(h.handleTriggerWrite))
+	mux.HandleFunc("POST /api/v1/trigger/get", h.triggerProtected(h.handleTriggerGet))
+	mux.HandleFunc("POST /api/v1/trigger/query", h.triggerProtected(h.handleQuery))
+	mux.HandleFunc("POST /api/v1/trigger/write", h.triggerProtected(h.handleTriggerWrite))
 
 	// Auth Operations
 	if h.auth != nil {
-		mux.HandleFunc("POST /v1/auth/login", h.handleLogin)
-		mux.HandleFunc("POST /v1/auth/refresh", h.handleRefresh)
-		mux.HandleFunc("POST /v1/auth/logout", h.handleLogout)
+		mux.HandleFunc("POST /api/v1/auth/login", h.handleLogin)
+		mux.HandleFunc("POST /api/v1/auth/refresh", h.handleRefresh)
+		mux.HandleFunc("POST /api/v1/auth/logout", h.handleLogout)
 
 		// Admin Operations
 		mux.HandleFunc("GET /admin/users", h.adminOnly(h.handleAdminListUsers))

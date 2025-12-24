@@ -3,7 +3,7 @@
 ## 1. Context & Requirements
 
 While the public API of Syntrix is designed to be non-transactional (single-document atomicity only) to maximize scalability, the internal Trigger system requires multi-document ACID transactions.
-Specifically, the `/v1/trigger/write` endpoint allows Trigger Workers to perform complex side-effects (e.g., "create a notification AND update a counter") which must succeed or fail as a unit.
+Specifically, the `/api/v1/trigger/write` endpoint allows Trigger Workers to perform complex side-effects (e.g., "create a notification AND update a counter") which must succeed or fail as a unit.
 
 ## 2. Architecture
 
@@ -33,7 +33,7 @@ func (e *Engine) RunTransaction(ctx context.Context, fn func(ctx context.Context
 
 ### 2.3 API Layer (`internal/api`)
 
-The `/v1/trigger/write` handler wraps the entire batch of operations in `engine.RunTransaction`.
+The `/api/v1/trigger/write` handler wraps the entire batch of operations in `engine.RunTransaction`.
 
 ## 3. Testing Strategy
 
