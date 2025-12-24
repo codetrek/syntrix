@@ -2,8 +2,10 @@ package trigger
 
 import (
 	"context"
-	"syntrix/internal/storage"
 	"testing"
+
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -104,22 +106,22 @@ func (m *MockStorageBackend) Create(ctx context.Context, doc *storage.Document) 
 	return args.Error(0)
 }
 
-func (m *MockStorageBackend) Update(ctx context.Context, path string, data map[string]interface{}, pred storage.Filters) error {
+func (m *MockStorageBackend) Update(ctx context.Context, path string, data map[string]interface{}, pred model.Filters) error {
 	args := m.Called(ctx, path, data, pred)
 	return args.Error(0)
 }
 
-func (m *MockStorageBackend) Patch(ctx context.Context, path string, data map[string]interface{}, pred storage.Filters) error {
+func (m *MockStorageBackend) Patch(ctx context.Context, path string, data map[string]interface{}, pred model.Filters) error {
 	args := m.Called(ctx, path, data, pred)
 	return args.Error(0)
 }
 
-func (m *MockStorageBackend) Delete(ctx context.Context, path string, pred storage.Filters) error {
+func (m *MockStorageBackend) Delete(ctx context.Context, path string, pred model.Filters) error {
 	args := m.Called(ctx, path, pred)
 	return args.Error(0)
 }
 
-func (m *MockStorageBackend) Query(ctx context.Context, q storage.Query) ([]*storage.Document, error) {
+func (m *MockStorageBackend) Query(ctx context.Context, q model.Query) ([]*storage.Document, error) {
 	args := m.Called(ctx, q)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -133,10 +135,6 @@ func (m *MockStorageBackend) Watch(ctx context.Context, collection string, resum
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(<-chan storage.Event), args.Error(1)
-}
-
-func (m *MockStorageBackend) Transaction(ctx context.Context, fn func(ctx context.Context, tx storage.StorageBackend) error) error {
-	return fn(ctx, m)
 }
 
 func (m *MockStorageBackend) Close(ctx context.Context) error {
@@ -155,14 +153,14 @@ func TestWatch(t *testing.T) {
 	defer cancel()
 
 	// 1. Mock Checkpoint Get (Not Found)
-	backend.On("Get", ctx, "sys/checkpoints/trigger_evaluator").Return(nil, storage.ErrNotFound)
+	backend.On("Get", ctx, "sys/checkpoints/trigger_evaluator").Return(nil, model.ErrNotFound)
 
 	// 2. Mock Watch
 	eventChan := make(chan storage.Event, 1)
 	backend.On("Watch", ctx, "", nil, storage.WatchOptions{IncludeBefore: true}).Return((<-chan storage.Event)(eventChan), nil)
 
 	// 3. Mock Update Checkpoint (after processing event)
-	backend.On("Update", ctx, "sys/checkpoints/trigger_evaluator", mock.Anything, storage.Filters{}).Return(nil)
+	backend.On("Update", ctx, "sys/checkpoints/trigger_evaluator", mock.Anything, model.Filters{}).Return(nil)
 
 	// 4. Start Watch in Goroutine
 	errChan := make(chan error)

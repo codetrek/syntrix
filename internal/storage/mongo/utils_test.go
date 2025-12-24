@@ -3,13 +3,12 @@ package mongo
 import (
 	"testing"
 
-	"syntrix/internal/storage"
-
+	"github.com/codetrek/syntrix/pkg/model"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestMakeFilterBSON_FieldAndOpMapping(t *testing.T) {
-	filters := storage.Filters{
+	filters := model.Filters{
 		{Field: "path", Op: "==", Value: "users/1"},
 		{Field: "collection", Op: "!=", Value: "users"},
 		{Field: "updatedAt", Op: ">", Value: int64(10)},
@@ -44,7 +43,7 @@ func TestMakeFilterBSON_Defaults(t *testing.T) {
 	bsonFilter := makeFilterBSON(nil)
 	assert.Empty(t, bsonFilter)
 
-	filters := storage.Filters{{Field: "custom", Op: "", Value: 1}}
+	filters := model.Filters{{Field: "custom", Op: "", Value: 1}}
 	bsonFilter = makeFilterBSON(filters)
 	// default op becomes $eq even if empty
 	if m, ok := bsonFilter["data.custom"].(map[string]interface{}); ok {

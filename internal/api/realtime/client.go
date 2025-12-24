@@ -11,8 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"syntrix/internal/query"
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/query"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/google/cel-go/cel"
 	"github.com/gorilla/websocket"
@@ -74,7 +75,7 @@ type Client struct {
 }
 
 type Subscription struct {
-	Query       storage.Query
+	Query       model.Query
 	IncludeData bool
 	CelProgram  cel.Program
 }
@@ -285,7 +286,7 @@ func ServeSSE(hub *Hub, qs query.Service, w http.ResponseWriter, r *http.Request
 	// If not provided, we subscribe to everything (empty string matches all in Hub).
 	// We use "default" as the subscription ID.
 	client.subscriptions["default"] = Subscription{
-		Query:       storage.Query{Collection: collection},
+		Query:       model.Query{Collection: collection},
 		IncludeData: true, // SSE clients typically expect data
 	}
 	log.Printf("[Info][SSE] connection established. Subscribed to collection=%s", collection)

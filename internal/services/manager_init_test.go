@@ -7,11 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"syntrix/internal/auth"
-	"syntrix/internal/common"
-	"syntrix/internal/config"
-	"syntrix/internal/query"
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/auth"
+	"github.com/codetrek/syntrix/internal/config"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -215,9 +214,9 @@ func TestManager_Init_RunCSPPath(t *testing.T) {
 func TestManager_Init_RunRealtimePath(t *testing.T) {
 	cfg := config.LoadConfig()
 	cfg.Gateway.Port = 0
-	
+
 	cfg.Auth.RulesFile = ""
-	mgr := NewManager(cfg, Options{RunAPI: true, })
+	mgr := NewManager(cfg, Options{RunAPI: true})
 
 	err := mgr.Init(context.Background())
 	assert.NoError(t, err)
@@ -236,23 +235,20 @@ func (f *fakeStorageBackend) Get(ctx context.Context, path string) (*storage.Doc
 	return nil, nil
 }
 func (f *fakeStorageBackend) Create(ctx context.Context, doc *storage.Document) error { return nil }
-func (f *fakeStorageBackend) Update(ctx context.Context, path string, data map[string]interface{}, pred storage.Filters) error {
+func (f *fakeStorageBackend) Update(ctx context.Context, path string, data map[string]interface{}, pred model.Filters) error {
 	return nil
 }
-func (f *fakeStorageBackend) Patch(ctx context.Context, path string, data map[string]interface{}, pred storage.Filters) error {
+func (f *fakeStorageBackend) Patch(ctx context.Context, path string, data map[string]interface{}, pred model.Filters) error {
 	return nil
 }
-func (f *fakeStorageBackend) Delete(ctx context.Context, path string, pred storage.Filters) error {
+func (f *fakeStorageBackend) Delete(ctx context.Context, path string, pred model.Filters) error {
 	return nil
 }
-func (f *fakeStorageBackend) Query(ctx context.Context, q storage.Query) ([]*storage.Document, error) {
+func (f *fakeStorageBackend) Query(ctx context.Context, q model.Query) ([]*storage.Document, error) {
 	return nil, nil
 }
 func (f *fakeStorageBackend) Watch(ctx context.Context, collection string, resumeToken interface{}, opts storage.WatchOptions) (<-chan storage.Event, error) {
 	return nil, nil
-}
-func (f *fakeStorageBackend) Transaction(ctx context.Context, fn func(ctx context.Context, tx storage.StorageBackend) error) error {
-	return fn(ctx, f)
 }
 func (f *fakeStorageBackend) Close(ctx context.Context) error { return nil }
 
@@ -291,27 +287,27 @@ func (f *fakeAuthStorage) EnsureIndexes(ctx context.Context) error {
 
 type stubQueryService struct{}
 
-func (s *stubQueryService) GetDocument(context.Context, string) (common.Document, error) {
-	return common.Document{}, nil
+func (s *stubQueryService) GetDocument(context.Context, string) (model.Document, error) {
+	return model.Document{}, nil
 }
 
-func (s *stubQueryService) CreateDocument(context.Context, common.Document) error {
+func (s *stubQueryService) CreateDocument(context.Context, model.Document) error {
 	return nil
 }
 
-func (s *stubQueryService) ReplaceDocument(context.Context, common.Document, storage.Filters) (common.Document, error) {
-	return common.Document{}, nil
+func (s *stubQueryService) ReplaceDocument(context.Context, model.Document, model.Filters) (model.Document, error) {
+	return model.Document{}, nil
 }
 
-func (s *stubQueryService) PatchDocument(context.Context, common.Document, storage.Filters) (common.Document, error) {
-	return common.Document{}, nil
+func (s *stubQueryService) PatchDocument(context.Context, model.Document, model.Filters) (model.Document, error) {
+	return model.Document{}, nil
 }
 
-func (s *stubQueryService) DeleteDocument(context.Context, string) error {
+func (s *stubQueryService) DeleteDocument(context.Context, string, model.Filters) error {
 	return nil
 }
 
-func (s *stubQueryService) ExecuteQuery(context.Context, storage.Query) ([]common.Document, error) {
+func (s *stubQueryService) ExecuteQuery(context.Context, model.Query) ([]model.Document, error) {
 	return nil, nil
 }
 
@@ -325,8 +321,4 @@ func (s *stubQueryService) Pull(context.Context, storage.ReplicationPullRequest)
 
 func (s *stubQueryService) Push(context.Context, storage.ReplicationPushRequest) (*storage.ReplicationPushResponse, error) {
 	return nil, nil
-}
-
-func (s *stubQueryService) RunTransaction(ctx context.Context, fn func(ctx context.Context, tx query.Service) error) error {
-	return fn(ctx, s)
 }

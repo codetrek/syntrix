@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"syntrix/internal/common"
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -61,7 +61,7 @@ func TestHandlePush(t *testing.T) {
 		Collection: "rooms/room-1/messages",
 		Changes: []ReplicaChange{
 			{
-				Doc: common.Document{"id": "msg-1", "name": "Bob", "version": float64(1)},
+				Doc: model.Document{"id": "msg-1", "name": "Bob", "version": float64(1)},
 			},
 		},
 	}
@@ -153,7 +153,7 @@ func TestHandlePush_MissingCollection(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	reqBody := ReplicaPushRequest{Collection: "", Changes: []ReplicaChange{{Doc: common.Document{"id": "1"}}}}
+	reqBody := ReplicaPushRequest{Collection: "", Changes: []ReplicaChange{{Doc: model.Document{"id": "1"}}}}
 	body, _ := json.Marshal(reqBody)
 	req, _ := http.NewRequest("POST", "/replication/v1/push", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
@@ -167,7 +167,7 @@ func TestHandlePush_InvalidCollection(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	reqBody := ReplicaPushRequest{Collection: "rooms!", Changes: []ReplicaChange{{Doc: common.Document{"id": "1"}}}}
+	reqBody := ReplicaPushRequest{Collection: "rooms!", Changes: []ReplicaChange{{Doc: model.Document{"id": "1"}}}}
 	body, _ := json.Marshal(reqBody)
 	req, _ := http.NewRequest("POST", "/replication/v1/push", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
@@ -181,7 +181,7 @@ func TestHandlePush_DocValidationFail(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	reqBody := ReplicaPushRequest{Collection: "rooms", Changes: []ReplicaChange{{Doc: common.Document{"id": ""}}}}
+	reqBody := ReplicaPushRequest{Collection: "rooms", Changes: []ReplicaChange{{Doc: model.Document{"id": ""}}}}
 	body, _ := json.Marshal(reqBody)
 	req, _ := http.NewRequest("POST", "/replication/v1/push", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
@@ -195,7 +195,7 @@ func TestHandlePush_MissingDocID(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	reqBody := ReplicaPushRequest{Collection: "rooms", Changes: []ReplicaChange{{Doc: common.Document{"name": "Bob"}}}}
+	reqBody := ReplicaPushRequest{Collection: "rooms", Changes: []ReplicaChange{{Doc: model.Document{"name": "Bob"}}}}
 	body, _ := json.Marshal(reqBody)
 	req, _ := http.NewRequest("POST", "/replication/v1/push", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
@@ -225,7 +225,7 @@ func TestHandlePush_EngineError(t *testing.T) {
 
 	mockService.On("Push", mock.Anything, mock.AnythingOfType("storage.ReplicationPushRequest")).Return(nil, errors.New("boom"))
 
-	reqBody := ReplicaPushRequest{Collection: "rooms", Changes: []ReplicaChange{{Doc: common.Document{"id": "1"}}}}
+	reqBody := ReplicaPushRequest{Collection: "rooms", Changes: []ReplicaChange{{Doc: model.Document{"id": "1"}}}}
 	body, _ := json.Marshal(reqBody)
 	req, _ := http.NewRequest("POST", "/replication/v1/push", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()

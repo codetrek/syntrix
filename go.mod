@@ -1,4 +1,4 @@
-module syntrix
+module github.com/codetrek/syntrix
 
 go 1.24.0
 

@@ -1,12 +1,11 @@
 package mongo
 
 import (
-	"syntrix/internal/storage"
-
+	"github.com/codetrek/syntrix/pkg/model"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
-func makeFilterBSON(filters storage.Filters) bson.M {
+func makeFilterBSON(filters model.Filters) bson.M {
 	bsonFilter := bson.M{}
 
 	for _, f := range filters {

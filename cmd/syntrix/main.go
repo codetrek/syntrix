@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"syntrix/internal/config"
-	"syntrix/internal/services"
+	"github.com/codetrek/syntrix/internal/config"
+	"github.com/codetrek/syntrix/internal/services"
 )
 
 func main() {

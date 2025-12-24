@@ -7,9 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"syntrix/internal/common"
-	"syntrix/internal/query"
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/query"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/checker/decls"
@@ -265,7 +264,7 @@ func (l *authzLib) exists(arg ref.Val) ref.Val {
 	internalPath := stripDatabasePrefix(string(path))
 
 	_, err := l.query.GetDocument(context.Background(), internalPath)
-	if err == storage.ErrNotFound {
+	if err == model.ErrNotFound {
 		return types.Bool(false)
 	}
 	if err != nil {
@@ -286,7 +285,7 @@ func (l *authzLib) get(arg ref.Val) ref.Val {
 		return types.NewErr("error in get: %v", err)
 	}
 
-	data := common.Document{}
+	data := model.Document{}
 	for k, v := range doc {
 		data[k] = v
 	}

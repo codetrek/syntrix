@@ -3,8 +3,10 @@ package trigger
 import (
 	"context"
 	"errors"
-	"syntrix/internal/storage"
 	"testing"
+
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -97,14 +99,14 @@ func TestWatch_CheckpointSave_Create(t *testing.T) {
 	defer cancel()
 
 	// 1. Mock Checkpoint Get (Not Found)
-	backend.On("Get", ctx, "sys/checkpoints/trigger_evaluator").Return(nil, storage.ErrNotFound)
+	backend.On("Get", ctx, "sys/checkpoints/trigger_evaluator").Return(nil, model.ErrNotFound)
 
 	// 2. Mock Watch
 	eventChan := make(chan storage.Event, 1)
 	backend.On("Watch", ctx, "", nil, storage.WatchOptions{IncludeBefore: true}).Return((<-chan storage.Event)(eventChan), nil)
 
 	// 3. Mock Update Checkpoint -> ErrNotFound
-	backend.On("Update", ctx, "sys/checkpoints/trigger_evaluator", mock.Anything, storage.Filters{}).Return(storage.ErrNotFound)
+	backend.On("Update", ctx, "sys/checkpoints/trigger_evaluator", mock.Anything, model.Filters{}).Return(model.ErrNotFound)
 
 	// 4. Mock Create Checkpoint
 	backend.On("Create", ctx, mock.MatchedBy(func(doc *storage.Document) bool {
@@ -142,13 +144,13 @@ func TestWatch_CheckpointSave_Error(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	backend.On("Get", ctx, "sys/checkpoints/trigger_evaluator").Return(nil, storage.ErrNotFound)
+	backend.On("Get", ctx, "sys/checkpoints/trigger_evaluator").Return(nil, model.ErrNotFound)
 
 	eventChan := make(chan storage.Event, 1)
 	backend.On("Watch", ctx, "", nil, storage.WatchOptions{IncludeBefore: true}).Return((<-chan storage.Event)(eventChan), nil)
 
 	// Mock Update Checkpoint -> Error
-	backend.On("Update", ctx, "sys/checkpoints/trigger_evaluator", mock.Anything, storage.Filters{}).Return(errors.New("update error"))
+	backend.On("Update", ctx, "sys/checkpoints/trigger_evaluator", mock.Anything, model.Filters{}).Return(errors.New("update error"))
 
 	event := storage.Event{
 		Type:        storage.EventCreate,

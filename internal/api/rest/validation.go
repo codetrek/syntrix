@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"syntrix/internal/storage"
+
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 )
 
 var (
@@ -72,7 +74,7 @@ func validateCollection(collection string) error {
 	return errors.New("invalid collection path: must have odd number of segments (e.g. collection or collection/doc/subcollection)")
 }
 
-func validateQuery(q storage.Query) error {
+func validateQuery(q model.Query) error {
 	if err := validateCollection(q.Collection); err != nil {
 		return fmt.Errorf("invalid collection: %w", err)
 	}

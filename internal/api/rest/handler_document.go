@@ -3,9 +3,10 @@ package rest
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
-	"syntrix/internal/common"
-	"syntrix/internal/storage"
+
+	"github.com/codetrek/syntrix/pkg/model"
 )
 
 func (h *Handler) handleGetDocument(w http.ResponseWriter, r *http.Request) {
@@ -18,7 +19,7 @@ func (h *Handler) handleGetDocument(w http.ResponseWriter, r *http.Request) {
 
 	doc, err := h.engine.GetDocument(r.Context(), path)
 	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
+		if errors.Is(err, model.ErrNotFound) {
 			http.Error(w, "Document not found", http.StatusNotFound)
 			return
 		}
@@ -38,7 +39,7 @@ func (h *Handler) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var data common.Document
+	var data model.Document
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -49,13 +50,14 @@ func (h *Handler) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	data.StripProtectedFields()
 	data.GenerateIDIfEmpty()
 	data.SetCollection(collection)
 
 	path := collection + "/" + data.GetID()
 
 	if err := h.engine.CreateDocument(r.Context(), data); err != nil {
-		if errors.Is(err, storage.ErrExists) {
+		if errors.Is(err, model.ErrExists) {
 			http.Error(w, "Document already exists", http.StatusConflict)
 		} else {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -98,6 +100,8 @@ func (h *Handler) handleReplaceDocument(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	data.Doc.StripProtectedFields()
+
 	if id := data.Doc.GetID(); id != "" && id != docID {
 		http.Error(w, "Document ID cannot be changed", http.StatusBadRequest)
 		return
@@ -108,7 +112,7 @@ func (h *Handler) handleReplaceDocument(w http.ResponseWriter, r *http.Request) 
 
 	doc, err := h.engine.ReplaceDocument(r.Context(), data.Doc, data.IfMatch)
 	if err != nil {
-		if errors.Is(err, storage.ErrPreconditionFailed) {
+		if errors.Is(err, model.ErrPreconditionFailed) {
 			http.Error(w, "Version conflict", http.StatusPreconditionFailed)
 			return
 		}
@@ -144,6 +148,8 @@ func (h *Handler) handlePatchDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	data.Doc.StripProtectedFields()
+
 	if id := data.Doc.GetID(); id != "" && id != docID {
 		http.Error(w, "Document ID cannot be changed", http.StatusBadRequest)
 		return
@@ -153,15 +159,16 @@ func (h *Handler) handlePatchDocument(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No data to update", http.StatusBadRequest)
 		return
 	}
+
 	data.Doc.SetID(docID)
 	data.Doc.SetCollection(collection)
 	doc, err := h.engine.PatchDocument(r.Context(), data.Doc, data.IfMatch)
 	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
+		if errors.Is(err, model.ErrNotFound) {
 			http.Error(w, "Document not found", http.StatusNotFound)
 			return
 		}
-		if errors.Is(err, storage.ErrPreconditionFailed) {
+		if errors.Is(err, model.ErrPreconditionFailed) {
 			http.Error(w, "Version conflict", http.StatusPreconditionFailed)
 			return
 		}
@@ -181,9 +188,23 @@ func (h *Handler) handleDeleteDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.engine.DeleteDocument(r.Context(), path); err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
+	var data DeleteDocumentRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+			if !errors.Is(err, io.EOF) {
+				http.Error(w, "Invalid request body", http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
+	if err := h.engine.DeleteDocument(r.Context(), path, data.IfMatch); err != nil {
+		if errors.Is(err, model.ErrNotFound) {
 			http.Error(w, "Document not found", http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, model.ErrPreconditionFailed) {
+			http.Error(w, "Version conflict", http.StatusPreconditionFailed)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)

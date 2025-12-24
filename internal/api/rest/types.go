@@ -1,8 +1,7 @@
 package rest
 
 import (
-	"syntrix/internal/common"
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 )
 
 type ReplicaChange struct {
@@ -12,7 +11,7 @@ type ReplicaChange struct {
 	//
 	//	"id" field is reserved for document ID.
 	//	"version" field is reserved for document version.
-	Doc common.Document `json:"document"`
+	Doc model.Document `json:"document"`
 }
 
 type ReplicaPushRequest struct {
@@ -21,7 +20,7 @@ type ReplicaPushRequest struct {
 }
 
 type ReplicaPushResponse struct {
-	Conflicts []common.Document `json:"conflicts"`
+	Conflicts []model.Document `json:"conflicts"`
 }
 
 type ReplicaPullRequest struct {
@@ -31,11 +30,15 @@ type ReplicaPullRequest struct {
 }
 
 type ReplicaPullResponse struct {
-	Documents  []common.Document `json:"documents"`
-	Checkpoint string            `json:"checkpoint"`
+	Documents  []model.Document `json:"documents"`
+	Checkpoint string           `json:"checkpoint"`
 }
 
 type UpdateDocumentRequest struct {
-	Doc     common.Document `json:"doc"`
-	IfMatch storage.Filters `json:"ifMatch,omitempty"`
+	Doc     model.Document  `json:"doc"`
+	IfMatch model.Filters `json:"ifMatch,omitempty"`
+}
+
+type DeleteDocumentRequest struct {
+	IfMatch model.Filters `json:"ifMatch,omitempty"`
 }

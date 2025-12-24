@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"testing"
 
-	"syntrix/internal/api/rest"
+	"github.com/codetrek/syntrix/internal/api/rest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

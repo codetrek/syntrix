@@ -9,9 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"syntrix/internal/authz"
-	"syntrix/internal/common"
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/authz"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -37,7 +36,7 @@ func TestAuthorized_EvaluateError(t *testing.T) {
 	authzSvc := new(MockAuthzService)
 	s := &Handler{engine: engine, authz: authzSvc}
 
-	engine.On("GetDocument", mock.Anything, "col/doc").Return(nil, storage.ErrNotFound)
+	engine.On("GetDocument", mock.Anything, "col/doc").Return(nil, model.ErrNotFound)
 	authzSvc.On("Evaluate", mock.Anything, "col/doc", "read", mock.Anything, (*authz.Resource)(nil)).Return(false, errors.New("eval error"))
 
 	req := httptest.NewRequest("GET", "/api/v1/foo", nil)
@@ -59,7 +58,7 @@ func TestAuthorized_Denied(t *testing.T) {
 	authzSvc := new(MockAuthzService)
 	s := &Handler{engine: engine, authz: authzSvc}
 
-	engine.On("GetDocument", mock.Anything, "col/doc").Return(nil, storage.ErrNotFound)
+	engine.On("GetDocument", mock.Anything, "col/doc").Return(nil, model.ErrNotFound)
 	authzSvc.On("Evaluate", mock.Anything, "col/doc", "read", mock.Anything, (*authz.Resource)(nil)).Return(false, nil)
 
 	req := httptest.NewRequest("GET", "/api/v1/foo", nil)
@@ -78,7 +77,7 @@ func TestAuthorized_AllowedWithExistingAndNewData(t *testing.T) {
 	authzSvc := new(MockAuthzService)
 	s := &Handler{engine: engine, authz: authzSvc}
 
-	existing := common.Document{"id": "123", "field": "old", "version": 1, "collection": "c"}
+	existing := model.Document{"id": "123", "field": "old", "version": 1, "collection": "c"}
 	engine.On("GetDocument", mock.Anything, "col/doc").Return(existing, nil)
 
 	authzSvc.On("Evaluate", mock.Anything, "col/doc", "update", mock.MatchedBy(func(req authz.Request) bool {

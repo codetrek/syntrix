@@ -6,8 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"syntrix/internal/common"
-
+	"github.com/codetrek/syntrix/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -182,7 +181,7 @@ match:
 				Auth: Auth{UID: "user1"},
 			},
 			mockSetup: func(m *MockQueryService) {
-				m.On("GetDocument", mock.Anything, "users/user1").Return(common.Document{
+				m.On("GetDocument", mock.Anything, "users/user1").Return(model.Document{
 					"id": "user1",
 					"collection": "users",
 					"role": "admin",
@@ -199,7 +198,7 @@ match:
 				Auth: Auth{UID: "user2"},
 			},
 			mockSetup: func(m *MockQueryService) {
-				m.On("GetDocument", mock.Anything, "users/user2").Return(common.Document{
+				m.On("GetDocument", mock.Anything, "users/user2").Return(model.Document{
 					"id": "user2",
 					"collection": "users",
 					"role": "user",

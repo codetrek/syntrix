@@ -7,9 +7,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"syntrix/internal/auth"
-	"syntrix/internal/authz"
 	"testing"
+
+	"github.com/codetrek/syntrix/internal/auth"
+	"github.com/codetrek/syntrix/internal/authz"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

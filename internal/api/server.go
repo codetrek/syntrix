@@ -2,11 +2,12 @@ package api
 
 import (
 	"net/http"
-	"syntrix/internal/api/realtime"
-	"syntrix/internal/api/rest"
-	"syntrix/internal/auth"
-	"syntrix/internal/authz"
-	"syntrix/internal/query"
+
+	"github.com/codetrek/syntrix/internal/api/realtime"
+	"github.com/codetrek/syntrix/internal/api/rest"
+	"github.com/codetrek/syntrix/internal/auth"
+	"github.com/codetrek/syntrix/internal/authz"
+	"github.com/codetrek/syntrix/internal/query"
 )
 
 type Server struct {

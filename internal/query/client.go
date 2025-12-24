@@ -7,8 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"syntrix/internal/common"
-	"syntrix/internal/storage"
+
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 )
 
 // Client is a remote client for the Query Service.
@@ -25,7 +26,7 @@ func NewClient(baseURL string) *Client {
 	}
 }
 
-func (c *Client) GetDocument(ctx context.Context, path string) (common.Document, error) {
+func (c *Client) GetDocument(ctx context.Context, path string) (model.Document, error) {
 	reqBody := map[string]string{"path": path}
 	resp, err := c.post(ctx, "/internal/v1/document/get", reqBody)
 	if err != nil {
@@ -34,20 +35,20 @@ func (c *Client) GetDocument(ctx context.Context, path string) (common.Document,
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, storage.ErrNotFound
+		return nil, model.ErrNotFound
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	var doc common.Document
+	var doc model.Document
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
 		return nil, err
 	}
 	return doc, nil
 }
 
-func (c *Client) CreateDocument(ctx context.Context, doc common.Document) error {
+func (c *Client) CreateDocument(ctx context.Context, doc model.Document) error {
 	resp, err := c.post(ctx, "/internal/v1/document/create", doc)
 	if err != nil {
 		return err
@@ -60,7 +61,7 @@ func (c *Client) CreateDocument(ctx context.Context, doc common.Document) error 
 	return nil
 }
 
-func (c *Client) ReplaceDocument(ctx context.Context, data common.Document, pred storage.Filters) (common.Document, error) {
+func (c *Client) ReplaceDocument(ctx context.Context, data model.Document, pred model.Filters) (model.Document, error) {
 	reqBody := map[string]interface{}{
 		"data": data,
 		"pred": pred,
@@ -75,14 +76,14 @@ func (c *Client) ReplaceDocument(ctx context.Context, data common.Document, pred
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	var doc common.Document
+	var doc model.Document
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
 		return nil, err
 	}
 	return doc, nil
 }
 
-func (c *Client) PatchDocument(ctx context.Context, data common.Document, pred storage.Filters) (common.Document, error) {
+func (c *Client) PatchDocument(ctx context.Context, data model.Document, pred model.Filters) (model.Document, error) {
 	resp, err := c.post(ctx, "/internal/v1/document/patch", map[string]interface{}{
 		"data": data,
 		"pred": pred,
@@ -93,21 +94,21 @@ func (c *Client) PatchDocument(ctx context.Context, data common.Document, pred s
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, storage.ErrNotFound
+		return nil, model.ErrNotFound
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	var doc common.Document
+	var doc model.Document
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
 		return nil, err
 	}
 	return doc, nil
 }
 
-func (c *Client) DeleteDocument(ctx context.Context, path string) error {
-	reqBody := map[string]string{"path": path}
+func (c *Client) DeleteDocument(ctx context.Context, path string, pred model.Filters) error {
+	reqBody := map[string]interface{}{"path": path, "pred": pred}
 	resp, err := c.post(ctx, "/internal/v1/document/delete", reqBody)
 	if err != nil {
 		return err
@@ -115,7 +116,10 @@ func (c *Client) DeleteDocument(ctx context.Context, path string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return storage.ErrNotFound
+		return model.ErrNotFound
+	}
+	if resp.StatusCode == http.StatusPreconditionFailed {
+		return model.ErrPreconditionFailed
 	}
 	if resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
@@ -123,7 +127,7 @@ func (c *Client) DeleteDocument(ctx context.Context, path string) error {
 	return nil
 }
 
-func (c *Client) ExecuteQuery(ctx context.Context, q storage.Query) ([]common.Document, error) {
+func (c *Client) ExecuteQuery(ctx context.Context, q model.Query) ([]model.Document, error) {
 	resp, err := c.post(ctx, "/internal/v1/query/execute", q)
 	if err != nil {
 		return nil, err
@@ -134,7 +138,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, q storage.Query) ([]common.Do
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	var docs []common.Document
+	var docs []model.Document
 	if err := json.NewDecoder(resp.Body).Decode(&docs); err != nil {
 		return nil, err
 	}
@@ -225,10 +229,6 @@ func (c *Client) Push(ctx context.Context, req storage.ReplicationPushRequest) (
 		return nil, err
 	}
 	return &result, nil
-}
-
-func (c *Client) RunTransaction(ctx context.Context, fn func(ctx context.Context, tx Service) error) error {
-	return fmt.Errorf("remote transactions not supported")
 }
 
 func (c *Client) post(ctx context.Context, endpoint string, body interface{}) (*http.Response, error) {

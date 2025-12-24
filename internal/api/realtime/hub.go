@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
-	"syntrix/internal/storage"
 	"time"
+
+	"github.com/codetrek/syntrix/internal/storage"
 )
 
 // Hub maintains the set of active clients and broadcasts messages to the

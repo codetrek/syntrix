@@ -5,7 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -34,7 +35,7 @@ func TestMongoBackend_Watch(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 
-		filters := storage.Filters{
+		filters := model.Filters{
 			{Field: "version", Op: "==", Value: doc.Version},
 		}
 		// Update

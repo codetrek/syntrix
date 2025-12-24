@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,7 +29,7 @@ func TestHub_Broadcast(t *testing.T) {
 
 	// Add a subscription
 	client.subscriptions["sub1"] = Subscription{
-		Query:       storage.Query{Collection: "users"},
+		Query:       model.Query{Collection: "users"},
 		IncludeData: true,
 	}
 
@@ -100,14 +101,14 @@ func TestHub_Broadcast_WithFilter(t *testing.T) {
 	}
 
 	// Add a subscription with filter: age > 20
-	filters := []storage.Filter{
+	filters := []model.Filter{
 		{Field: "age", Op: ">", Value: 20},
 	}
 	prg, err := compileFiltersToCEL(filters)
 	assert.NoError(t, err)
 
 	client.subscriptions["sub1"] = Subscription{
-		Query: storage.Query{
+		Query: model.Query{
 			Collection: "users",
 			Filters:    filters,
 		},
@@ -175,7 +176,7 @@ func TestHub_Broadcast_WaitsForSlowClient(t *testing.T) {
 	client := &Client{
 		hub:           hub,
 		send:          make(chan BaseMessage, 1),
-		subscriptions: map[string]Subscription{"sub": {Query: storage.Query{Collection: "users"}, IncludeData: true}},
+		subscriptions: map[string]Subscription{"sub": {Query: model.Query{Collection: "users"}, IncludeData: true}},
 	}
 
 	hub.Register(client)
@@ -215,7 +216,7 @@ func TestHub_Run_CancelsGracefully(t *testing.T) {
 	client := &Client{
 		hub:           hub,
 		send:          make(chan BaseMessage, 1),
-		subscriptions: map[string]Subscription{"sub": {Query: storage.Query{Collection: "users"}, IncludeData: true}},
+		subscriptions: map[string]Subscription{"sub": {Query: model.Query{Collection: "users"}, IncludeData: true}},
 	}
 
 	require.True(t, hub.Register(client))

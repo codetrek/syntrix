@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"path"
 	"sync"
-	"syntrix/internal/storage"
 
+	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/google/cel-go/cel"
 )
 

@@ -22,8 +22,8 @@
 - **Complex Queries**: Support filtering, sorting, and pagination (e.g., "Get last 50 messages in collection `rooms/room-X/messages` where timestamp < Y").
 - **Batch Operations**: Bulk insert/update/delete (e.g., "Mark all messages as read").
 - **Transactions**:
-  - **Public API**: Multi-document transactions are **NOT** required. Single-document atomicity is sufficient.
-  - **Internal Trigger API**: Multi-document transactions **ARE** required for the `/api/v1/trigger/write` endpoint to ensure atomic side-effects.
+  - **Cross-document transactions are not supported**. Only single-document atomicity is guaranteed.
+  - **Trigger workers must be idempotent/compensating** to handle partial successes when issuing multi-write batches.
 
 ### 2.2 Realtime
 
@@ -69,8 +69,8 @@
 ## 5. Implications on Design
 
 1. **Limited Transactions**:
-    - Public API remains non-transactional to simplify scaling.
-    - Internal Trigger API requires a transactional storage interface (e.g., MongoDB Transactions) to support atomic side-effects.
+   - System supports only single-document atomicity to maximize throughput and simplify scaling.
+   - Internal Trigger API relies on idempotent operations or higher-level compensation instead of cross-document ACID transactions.
 2. **Chat Scenario**:
     - **Write Heavy**: Storage engine must handle high write throughput.
     - **Append Only**: Messages are mostly immutable (except edits/deletes).

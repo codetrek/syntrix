@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"syntrix/internal/config"
-	"syntrix/internal/storage"
-	"syntrix/internal/trigger"
+	"github.com/codetrek/syntrix/internal/config"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/trigger"
 
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"

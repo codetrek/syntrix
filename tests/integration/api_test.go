@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -72,9 +72,9 @@ func TestAPIIntegration(t *testing.T) {
 	assert.Equal(t, float64(43), patchedDoc["age"])         // Should be updated
 
 	// 5. Scenario: Query Document
-	query := storage.Query{
+	query := model.Query{
 		Collection: collection,
-		Filters: []storage.Filter{
+		Filters: []model.Filter{
 			{Field: "name", Op: "==", Value: "Integration User"},
 		},
 	}

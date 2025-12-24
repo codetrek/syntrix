@@ -5,7 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"syntrix/internal/auth"
+
+	"github.com/codetrek/syntrix/internal/auth"
 )
 
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {

@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"syntrix/internal/config"
-	"syntrix/internal/services"
+	"github.com/codetrek/syntrix/internal/config"
+	"github.com/codetrek/syntrix/internal/services"
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/mongo"

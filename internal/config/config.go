@@ -22,22 +22,9 @@ type Config struct {
 }
 
 type GatewayConfig struct {
-	Port            int                      `yaml:"port"`
-	QueryServiceURL string                   `yaml:"query_service_url"`
-	TLS             GatewayTLSConfig         `yaml:"tls"`
-	Auth            GatewayAuthConfig        `yaml:"auth"`
-	Limits          GatewayLimitsConfig      `yaml:"limits"`
-	Timeouts        GatewayTimeoutsConfig    `yaml:"timeouts"`
-	CORS            GatewayCORSConfig        `yaml:"cors"`
-	Gzip            bool                     `yaml:"gzip"`
-	Realtime        GatewayRealtimeConfig    `yaml:"realtime"`
-	Replication     GatewayReplicationConfig `yaml:"replication"`
-}
-
-type GatewayTLSConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	CertFile string `yaml:"cert_file"`
-	KeyFile  string `yaml:"key_file"`
+	Port            int               `yaml:"port"`
+	QueryServiceURL string            `yaml:"query_service_url"`
+	Auth            GatewayAuthConfig `yaml:"auth"`
 }
 
 type GatewayAuthConfig struct {
@@ -45,42 +32,6 @@ type GatewayAuthConfig struct {
 	Audience string        `yaml:"audience"`
 	JWKSURL  string        `yaml:"jwks_url"`
 	CacheTTL time.Duration `yaml:"cache_ttl"`
-}
-
-type GatewayLimitsConfig struct {
-	HTTPPerTenantQPS   int `yaml:"http_per_tenant_qps"`
-	HTTPPerTenantBurst int `yaml:"http_per_tenant_burst"`
-	HTTPPerIPQPS       int `yaml:"http_per_ip_qps"`
-	HTTPPerIPBurst     int `yaml:"http_per_ip_burst"`
-	WSMaxConnections   int `yaml:"ws_max_connections"`
-	WSMaxSubsPerConn   int `yaml:"ws_max_subs_per_conn"`
-}
-
-type GatewayTimeoutsConfig struct {
-	HTTPRead         time.Duration `yaml:"http_read"`
-	HTTPWrite        time.Duration `yaml:"http_write"`
-	HTTPIdle         time.Duration `yaml:"http_idle"`
-	WSPingInterval   time.Duration `yaml:"ws_ping_interval"`
-	WSIdleTimeout    time.Duration `yaml:"ws_idle_timeout"`
-	WSWriteWait      time.Duration `yaml:"ws_write_wait"`
-	WSMaxMessageSize int64         `yaml:"ws_max_message_size"`
-}
-
-type GatewayCORSConfig struct {
-	AllowedOrigins []string `yaml:"allowed_origins"`
-	AllowedMethods []string `yaml:"allowed_methods"`
-	AllowedHeaders []string `yaml:"allowed_headers"`
-}
-
-type GatewayRealtimeConfig struct {
-	Transport         string `yaml:"transport"` // "ws", "sse", "both"
-	PerMessageDeflate bool   `yaml:"per_message_deflate"`
-}
-
-type GatewayReplicationConfig struct {
-	PullRate  int `yaml:"pull_rate"`
-	PushRate  int `yaml:"push_rate"`
-	BatchSize int `yaml:"batch_size"`
 }
 
 type QueryConfig struct {
@@ -136,44 +87,6 @@ func LoadConfig() *Config {
 		Gateway: GatewayConfig{
 			Port:            8080,
 			QueryServiceURL: "http://localhost:8082",
-			TLS: GatewayTLSConfig{
-				Enabled: false,
-			},
-			Auth: GatewayAuthConfig{
-				CacheTTL: 5 * time.Minute,
-			},
-			Limits: GatewayLimitsConfig{
-				HTTPPerTenantQPS:   100,
-				HTTPPerTenantBurst: 200,
-				HTTPPerIPQPS:       50,
-				HTTPPerIPBurst:     100,
-				WSMaxConnections:   10000,
-				WSMaxSubsPerConn:   100,
-			},
-			Timeouts: GatewayTimeoutsConfig{
-				HTTPRead:         10 * time.Second,
-				HTTPWrite:        10 * time.Second,
-				HTTPIdle:         60 * time.Second,
-				WSPingInterval:   30 * time.Second,
-				WSIdleTimeout:    90 * time.Second,
-				WSWriteWait:      10 * time.Second,
-				WSMaxMessageSize: 1024 * 1024, // 1MB
-			},
-			CORS: GatewayCORSConfig{
-				AllowedOrigins: []string{"*"},
-				AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-				AllowedHeaders: []string{"Authorization", "Content-Type"},
-			},
-			Gzip: true,
-			Realtime: GatewayRealtimeConfig{
-				Transport:         "both",
-				PerMessageDeflate: true,
-			},
-			Replication: GatewayReplicationConfig{
-				PullRate:  10,
-				PushRate:  10,
-				BatchSize: 100,
-			},
 		},
 		Query: QueryConfig{
 			Port:          8082,

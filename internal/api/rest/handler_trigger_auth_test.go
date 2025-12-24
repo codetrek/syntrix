@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"syntrix/internal/auth"
-	"syntrix/internal/common"
+	"github.com/codetrek/syntrix/internal/auth"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -98,7 +98,7 @@ func TestTriggerAuth(t *testing.T) {
 
 	t.Run("Accept System Token", func(t *testing.T) {
 		// Mock Engine call because auth should pass
-		mockEngine.On("GetDocument", mock.Anything, "test/doc").Return(common.Document{"id": "doc1", "collection": "test", "version": int64(1)}, nil).Once()
+		mockEngine.On("GetDocument", mock.Anything, "test/doc").Return(model.Document{"id": "doc1", "collection": "test", "version": int64(1)}, nil).Once()
 
 		reqBody := `{"paths": ["test/doc"]}`
 		req := httptest.NewRequest("POST", "/api/v1/trigger/get", bytes.NewBufferString(reqBody))

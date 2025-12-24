@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage"
 
 	"github.com/stretchr/testify/assert"
 )

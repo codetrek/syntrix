@@ -2,16 +2,8 @@ package storage
 
 import (
 	"context"
-	"errors"
-)
 
-var (
-	// ErrNotFound is returned when a document is not found
-	ErrNotFound = errors.New("document not found")
-	// ErrExists is returned when trying to create a document that already exists
-	ErrExists = errors.New("document already exists")
-	// ErrPreconditionFailed is returned when a CAS operation fails due to unmet preconditions
-	ErrPreconditionFailed = errors.New("precondition failed")
+	"github.com/codetrek/syntrix/pkg/model"
 )
 
 // Document represents a stored document in the database
@@ -59,25 +51,21 @@ type StorageBackend interface {
 
 	// Update updates an existing document.
 	// If pred is provided, it performs a CAS (Compare-And-Swap) operation.
-	Update(ctx context.Context, path string, data map[string]interface{}, pred Filters) error
+	Update(ctx context.Context, path string, data map[string]interface{}, pred model.Filters) error
 
 	// Patch updates specific fields of an existing document.
 	// If pred is provided, it performs a CAS (Compare-And-Swap) operation.
-	Patch(ctx context.Context, path string, data map[string]interface{}, pred Filters) error
+	Patch(ctx context.Context, path string, data map[string]interface{}, pred model.Filters) error
 
 	// Delete removes a document by its path
-	Delete(ctx context.Context, path string, pred Filters) error
+	Delete(ctx context.Context, path string, pred model.Filters) error
 
 	// Query executes a complex query
-	Query(ctx context.Context, q Query) ([]*Document, error)
+	Query(ctx context.Context, q model.Query) ([]*Document, error)
 
 	// Watch returns a channel of events for a given collection (or all if empty).
 	// resumeToken can be nil to start from now.
 	Watch(ctx context.Context, collection string, resumeToken interface{}, opts WatchOptions) (<-chan Event, error)
-
-	// Transaction executes a function within a transaction.
-	// The function receives a StorageBackend that is bound to the transaction.
-	Transaction(ctx context.Context, fn func(ctx context.Context, tx StorageBackend) error) error
 
 	// Close closes the connection to the backend
 	Close(ctx context.Context) error
@@ -85,8 +73,6 @@ type StorageBackend interface {
 
 // EventType represents the type of change
 type EventType string
-
-type Filters []Filter
 
 const (
 	EventCreate EventType = "create"
@@ -102,29 +88,6 @@ type Event struct {
 	Before      *Document   `json:"before,omitempty"`   // Previous state, if available
 	Timestamp   int64       `json:"timestamp"`
 	ResumeToken interface{} `json:"-"` // Opaque token for resuming watch
-}
-
-// Query represents a database query
-type Query struct {
-	Collection  string  `json:"collection"`
-	Filters     Filters `json:"filters"`
-	OrderBy     []Order `json:"orderBy"`
-	Limit       int     `json:"limit"`
-	StartAfter  string  `json:"startAfter"` // Cursor (usually the last document ID or sort key)
-	ShowDeleted bool    `json:"showDeleted"`
-}
-
-// Filter represents a query filter
-type Filter struct {
-	Field string      `json:"field"`
-	Op    string      `json:"op"`
-	Value interface{} `json:"value"`
-}
-
-// Order represents a sort order
-type Order struct {
-	Field     string `json:"field"`
-	Direction string `json:"direction"` // "asc" or "desc"
 }
 
 // ReplicationPullRequest represents a request to pull changes

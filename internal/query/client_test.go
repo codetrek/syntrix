@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"syntrix/internal/common"
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,7 +22,7 @@ func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 func TestClient_GetDocument(t *testing.T) {
-	expectedDoc := common.Document{"id": "1", "collection": "test", "foo": "bar", "version": float64(1)}
+	expectedDoc := model.Document{"id": "1", "collection": "test", "foo": "bar", "version": float64(1)}
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/internal/v1/document/get", r.URL.Path)
@@ -49,7 +49,7 @@ func TestClient_CreateDocument(t *testing.T) {
 	defer ts.Close()
 
 	client := NewClient(ts.URL)
-	doc := common.Document{"id": "1", "collection": "test"}
+	doc := model.Document{"id": "1", "collection": "test"}
 	err := client.CreateDocument(context.Background(), doc)
 	assert.NoError(t, err)
 }
@@ -108,7 +108,7 @@ func TestClient_GetDocument_NotFound(t *testing.T) {
 
 	client := NewClient(ts.URL)
 	_, err := client.GetDocument(context.Background(), "test/1")
-	assert.ErrorIs(t, err, storage.ErrNotFound)
+	assert.ErrorIs(t, err, model.ErrNotFound)
 }
 
 func TestClient_GetDocument_DecodeError(t *testing.T) {
@@ -131,7 +131,7 @@ func TestClient_CreateDocument_BadStatus(t *testing.T) {
 	defer ts.Close()
 
 	client := NewClient(ts.URL)
-	err := client.CreateDocument(context.Background(), common.Document{"collection": "c"})
+	err := client.CreateDocument(context.Background(), model.Document{"collection": "c"})
 	assert.Error(t, err)
 }
 
@@ -142,7 +142,7 @@ func TestClient_ReplaceDocument_BadStatus(t *testing.T) {
 	defer ts.Close()
 
 	client := NewClient(ts.URL)
-	res, err := client.ReplaceDocument(context.Background(), common.Document{"collection": "c", "id": "1"}, nil)
+	res, err := client.ReplaceDocument(context.Background(), model.Document{"collection": "c", "id": "1"}, nil)
 	assert.Error(t, err)
 	assert.Nil(t, res)
 }
@@ -155,8 +155,8 @@ func TestClient_PatchDocument_Statuses(t *testing.T) {
 		defer ts.Close()
 
 		client := NewClient(ts.URL)
-		res, err := client.PatchDocument(context.Background(), common.Document{"collection": "c", "id": "1"}, nil)
-		assert.ErrorIs(t, err, storage.ErrNotFound)
+		res, err := client.PatchDocument(context.Background(), model.Document{"collection": "c", "id": "1"}, nil)
+		assert.ErrorIs(t, err, model.ErrNotFound)
 		assert.Nil(t, res)
 	})
 
@@ -167,7 +167,7 @@ func TestClient_PatchDocument_Statuses(t *testing.T) {
 		defer ts.Close()
 
 		client := NewClient(ts.URL)
-		res, err := client.PatchDocument(context.Background(), common.Document{"collection": "c", "id": "1"}, nil)
+		res, err := client.PatchDocument(context.Background(), model.Document{"collection": "c", "id": "1"}, nil)
 		assert.Error(t, err)
 		assert.Nil(t, res)
 	})
@@ -181,8 +181,8 @@ func TestClient_DeleteDocument_Statuses(t *testing.T) {
 		defer ts.Close()
 
 		client := NewClient(ts.URL)
-		err := client.DeleteDocument(context.Background(), "c/1")
-		assert.ErrorIs(t, err, storage.ErrNotFound)
+		err := client.DeleteDocument(context.Background(), "c/1", nil)
+		assert.ErrorIs(t, err, model.ErrNotFound)
 	})
 
 	t.Run("bad status", func(t *testing.T) {
@@ -192,8 +192,19 @@ func TestClient_DeleteDocument_Statuses(t *testing.T) {
 		defer ts.Close()
 
 		client := NewClient(ts.URL)
-		err := client.DeleteDocument(context.Background(), "c/1")
+		err := client.DeleteDocument(context.Background(), "c/1", nil)
 		assert.Error(t, err)
+	})
+
+	t.Run("precondition failed", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusPreconditionFailed)
+		}))
+		defer ts.Close()
+
+		client := NewClient(ts.URL)
+		err := client.DeleteDocument(context.Background(), "c/1", nil)
+		assert.ErrorIs(t, err, model.ErrPreconditionFailed)
 	})
 }
 
@@ -204,7 +215,7 @@ func TestClient_ExecuteQuery_StatusError(t *testing.T) {
 	defer ts.Close()
 
 	client := NewClient(ts.URL)
-	res, err := client.ExecuteQuery(context.Background(), storage.Query{Collection: "c"})
+	res, err := client.ExecuteQuery(context.Background(), model.Query{Collection: "c"})
 	assert.Error(t, err)
 	assert.Nil(t, res)
 }
@@ -238,7 +249,7 @@ func TestClient_Post_DoError(t *testing.T) {
 }
 
 func TestClient_ReplaceDocument_Success(t *testing.T) {
-	expected := common.Document{"id": "1", "collection": "c", "v": float64(2)}
+	expected := model.Document{"id": "1", "collection": "c", "v": float64(2)}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/internal/v1/document/replace", r.URL.Path)
 		var body map[string]interface{}
@@ -256,7 +267,7 @@ func TestClient_ReplaceDocument_Success(t *testing.T) {
 }
 
 func TestClient_PatchDocument_Success(t *testing.T) {
-	expected := common.Document{"id": "1", "collection": "c", "v": float64(3)}
+	expected := model.Document{"id": "1", "collection": "c", "v": float64(3)}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/internal/v1/document/patch", r.URL.Path)
 		w.WriteHeader(http.StatusOK)
@@ -271,7 +282,7 @@ func TestClient_PatchDocument_Success(t *testing.T) {
 }
 
 func TestClient_ExecuteQuery_Success(t *testing.T) {
-	expected := []common.Document{{"id": "1", "collection": "c"}}
+	expected := []model.Document{{"id": "1", "collection": "c"}}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/internal/v1/query/execute", r.URL.Path)
 		w.WriteHeader(http.StatusOK)
@@ -280,7 +291,7 @@ func TestClient_ExecuteQuery_Success(t *testing.T) {
 	defer ts.Close()
 
 	client := NewClient(ts.URL)
-	res, err := client.ExecuteQuery(context.Background(), storage.Query{Collection: "c"})
+	res, err := client.ExecuteQuery(context.Background(), model.Query{Collection: "c"})
 	assert.NoError(t, err)
 	assert.Equal(t, expected, res)
 }
@@ -313,12 +324,6 @@ func TestClient_Push_Success(t *testing.T) {
 	res, err := client.Push(context.Background(), storage.ReplicationPushRequest{Collection: "c"})
 	assert.NoError(t, err)
 	assert.Equal(t, &expected, res)
-}
-
-func TestClient_RunTransaction_Unsupported(t *testing.T) {
-	client := NewClient("http://example.com")
-	err := client.RunTransaction(context.Background(), func(ctx context.Context, tx Service) error { return nil })
-	assert.Error(t, err)
 }
 
 func TestClient_WatchCollection_CancelCloses(t *testing.T) {

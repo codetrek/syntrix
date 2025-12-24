@@ -5,7 +5,7 @@ import (
 	"log"
 	"net/http"
 
-	"syntrix/internal/query"
+	"github.com/codetrek/syntrix/internal/query"
 )
 
 type Server struct {

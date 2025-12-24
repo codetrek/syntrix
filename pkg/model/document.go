@@ -1,4 +1,4 @@
-package common
+package model
 
 import (
 	"errors"
@@ -76,6 +76,7 @@ func (doc Document) StripProtectedFields() {
 	delete(doc, "updatedAt")
 	delete(doc, "createdAt")
 	delete(doc, "collection")
+	delete(doc, "deleted")
 }
 
 func (doc Document) IsEmpty() bool {
@@ -103,8 +104,6 @@ func (doc Document) ValidateDocument() error {
 			return errors.New("data field 'id' must be a string or integer")
 		}
 	}
-
-	doc.StripProtectedFields()
 
 	return nil
 }

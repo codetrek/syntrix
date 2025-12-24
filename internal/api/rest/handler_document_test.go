@@ -8,8 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"syntrix/internal/common"
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -19,7 +18,7 @@ func TestHandleGetDocument(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	doc := common.Document{"id": "msg-1", "collection": "rooms/room-1/messages", "name": "Alice", "version": 1}
+	doc := model.Document{"id": "msg-1", "collection": "rooms/room-1/messages", "name": "Alice", "version": 1}
 
 	mockService.On("GetDocument", mock.Anything, "rooms/room-1/messages/msg-1").Return(doc, nil)
 
@@ -43,11 +42,11 @@ func TestHandleCreateDocument(t *testing.T) {
 
 	// Note: The API server might be calling CreateDocument or ReplaceDocument depending on implementation.
 	// Assuming it calls CreateDocument for POST /api/v1/collection
-	mockService.On("CreateDocument", mock.Anything, mock.MatchedBy(func(doc common.Document) bool {
+	mockService.On("CreateDocument", mock.Anything, mock.MatchedBy(func(doc model.Document) bool {
 		return doc.GetCollection() == "rooms/room-1/messages" && doc.GetID() == "msg-1" && doc["name"] == "Bob"
 	})).Return(nil)
 
-	createdDoc := common.Document{"id": "msg-1", "collection": "rooms/room-1/messages", "name": "Bob", "version": 1}
+	createdDoc := model.Document{"id": "msg-1", "collection": "rooms/room-1/messages", "name": "Bob", "version": 1}
 	mockService.On("GetDocument", mock.Anything, "rooms/room-1/messages/msg-1").Return(createdDoc, nil)
 
 	body := []byte(`{"id":"msg-1","name": "Bob"}`)
@@ -63,7 +62,7 @@ func TestHandleGetDocument_NotFound(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	mockService.On("GetDocument", mock.Anything, "rooms/room-1/messages/unknown").Return(nil, storage.ErrNotFound)
+	mockService.On("GetDocument", mock.Anything, "rooms/room-1/messages/unknown").Return(nil, model.ErrNotFound)
 
 	req, _ := http.NewRequest("GET", "/api/v1/rooms/room-1/messages/unknown", nil)
 	rr := httptest.NewRecorder()
@@ -77,9 +76,9 @@ func TestHandleReplaceDocument(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	returnedDoc := common.Document{"name": "Bob", "id": "msg-1", "collection": "rooms/room-1/messages", "version": 2}
+	returnedDoc := model.Document{"name": "Bob", "id": "msg-1", "collection": "rooms/room-1/messages", "version": 2}
 
-	mockService.On("ReplaceDocument", mock.Anything, mock.MatchedBy(func(doc common.Document) bool {
+	mockService.On("ReplaceDocument", mock.Anything, mock.MatchedBy(func(doc model.Document) bool {
 		return doc.GetCollection() == "rooms/room-1/messages" && doc.GetID() == "msg-1" && doc["name"] == "Bob"
 	}), mock.Anything).Return(returnedDoc, nil)
 
@@ -99,9 +98,9 @@ func TestHandleUpdateDocument(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	returnedDoc := common.Document{"name": "Alice", "status": "read", "id": "msg-1", "collection": "rooms/room-1/messages", "version": 2}
+	returnedDoc := model.Document{"name": "Alice", "status": "read", "id": "msg-1", "collection": "rooms/room-1/messages", "version": 2}
 
-	mockService.On("PatchDocument", mock.Anything, mock.MatchedBy(func(doc common.Document) bool {
+	mockService.On("PatchDocument", mock.Anything, mock.MatchedBy(func(doc model.Document) bool {
 		return doc.GetCollection() == "rooms/room-1/messages" && doc.GetID() == "msg-1" && doc["status"] == "read"
 	}), mock.Anything).Return(returnedDoc, nil)
 
@@ -121,9 +120,25 @@ func TestHandleDeleteDocument(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	mockService.On("DeleteDocument", mock.Anything, "rooms/room-1/messages/msg-1").Return(nil)
+	mockService.On("DeleteDocument", mock.Anything, "rooms/room-1/messages/msg-1", model.Filters(nil)).Return(nil)
 
 	req, _ := http.NewRequest("DELETE", "/api/v1/rooms/room-1/messages/msg-1", nil)
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusNoContent, rr.Code)
+}
+
+func TestHandleDeleteDocument_IfMatch(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := createTestServer(mockService, nil, nil)
+
+	pred := model.Filters{{Field: "version", Op: "==", Value: float64(1)}}
+	mockService.On("DeleteDocument", mock.Anything, "rooms/room-1/messages/msg-1", pred).Return(nil)
+
+	body := []byte(`{"ifMatch": [{"field": "version", "op": "==", "value": 1}]}`)
+	req, _ := http.NewRequest("DELETE", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 
 	server.ServeHTTP(rr, req)
@@ -135,13 +150,13 @@ func TestHandleReplaceDocument_IfMatch(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	filters := storage.Filters{
+	filters := model.Filters{
 		{Field: "version", Op: "==", Value: float64(1)},
 	}
 
-	returnedDoc := common.Document{"name": "Bob", "id": "msg-1", "collection": "rooms/room-1/messages", "version": 2}
+	returnedDoc := model.Document{"name": "Bob", "id": "msg-1", "collection": "rooms/room-1/messages", "version": 2}
 
-	mockService.On("ReplaceDocument", mock.Anything, mock.MatchedBy(func(doc common.Document) bool {
+	mockService.On("ReplaceDocument", mock.Anything, mock.MatchedBy(func(doc model.Document) bool {
 		return doc.GetCollection() == "rooms/room-1/messages" && doc.GetID() == "msg-1" && doc["name"] == "Bob"
 	}), filters).Return(returnedDoc, nil)
 
@@ -161,13 +176,13 @@ func TestHandlePatchDocument_IfMatch(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	returnedDoc := common.Document{"name": "Alice", "status": "read", "id": "msg-1", "collection": "rooms/room-1/messages", "version": 2}
+	returnedDoc := model.Document{"name": "Alice", "status": "read", "id": "msg-1", "collection": "rooms/room-1/messages", "version": 2}
 
-	filters := storage.Filters{
+	filters := model.Filters{
 		{Field: "status", Op: "==", Value: "unread"},
 	}
 
-	mockService.On("PatchDocument", mock.Anything, mock.MatchedBy(func(doc common.Document) bool {
+	mockService.On("PatchDocument", mock.Anything, mock.MatchedBy(func(doc model.Document) bool {
 		return doc.GetCollection() == "rooms/room-1/messages" && doc.GetID() == "msg-1" && doc["status"] == "read"
 	}), filters).Return(returnedDoc, nil)
 
@@ -251,7 +266,7 @@ func TestHandleCreateDocument_Conflict(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	mockService.On("CreateDocument", mock.Anything, mock.AnythingOfType("common.Document")).Return(storage.ErrExists)
+	mockService.On("CreateDocument", mock.Anything, mock.AnythingOfType("model.Document")).Return(model.ErrExists)
 
 	req, _ := http.NewRequest("POST", "/api/v1/rooms/room-1/messages", bytes.NewBufferString(`{"id":"msg-1"}`))
 	rr := httptest.NewRecorder()
@@ -266,7 +281,7 @@ func TestHandleCreateDocument_GetError(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	mockService.On("CreateDocument", mock.Anything, mock.AnythingOfType("common.Document")).Return(nil)
+	mockService.On("CreateDocument", mock.Anything, mock.AnythingOfType("model.Document")).Return(nil)
 	mockService.On("GetDocument", mock.Anything, "rooms/room-1/messages/msg-1").Return(nil, errors.New("fetch"))
 
 	req, _ := http.NewRequest("POST", "/api/v1/rooms/room-1/messages", bytes.NewBufferString(`{"id":"msg-1"}`))
@@ -330,7 +345,7 @@ func TestHandleReplaceDocument_VersionConflict(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	mockService.On("ReplaceDocument", mock.Anything, mock.AnythingOfType("common.Document"), mock.Anything).Return(nil, storage.ErrPreconditionFailed)
+	mockService.On("ReplaceDocument", mock.Anything, mock.AnythingOfType("model.Document"), mock.Anything).Return(nil, model.ErrPreconditionFailed)
 
 	req, _ := http.NewRequest("PUT", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"id":"msg-1"}}`))
 	rr := httptest.NewRecorder()
@@ -382,7 +397,7 @@ func TestHandlePatchDocument_NotFound(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	mockService.On("PatchDocument", mock.Anything, mock.AnythingOfType("common.Document"), mock.Anything).Return(nil, storage.ErrNotFound)
+	mockService.On("PatchDocument", mock.Anything, mock.AnythingOfType("model.Document"), mock.Anything).Return(nil, model.ErrNotFound)
 
 	req, _ := http.NewRequest("PATCH", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"status":"read"}}`))
 	rr := httptest.NewRecorder()
@@ -397,7 +412,7 @@ func TestHandlePatchDocument_VersionConflict(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	mockService.On("PatchDocument", mock.Anything, mock.AnythingOfType("common.Document"), mock.Anything).Return(nil, storage.ErrPreconditionFailed)
+	mockService.On("PatchDocument", mock.Anything, mock.AnythingOfType("model.Document"), mock.Anything).Return(nil, model.ErrPreconditionFailed)
 
 	req, _ := http.NewRequest("PATCH", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"status":"read"}}`))
 	rr := httptest.NewRecorder()
@@ -412,7 +427,7 @@ func TestHandlePatchDocument_InternalError(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	mockService.On("PatchDocument", mock.Anything, mock.AnythingOfType("common.Document"), mock.Anything).Return(nil, errors.New("boom"))
+	mockService.On("PatchDocument", mock.Anything, mock.AnythingOfType("model.Document"), mock.Anything).Return(nil, errors.New("boom"))
 
 	req, _ := http.NewRequest("PATCH", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"doc":{"status":"read"}}`))
 	rr := httptest.NewRecorder()
@@ -427,7 +442,7 @@ func TestHandleDeleteDocument_NotFound(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	mockService.On("DeleteDocument", mock.Anything, "rooms/room-1/messages/msg-1").Return(storage.ErrNotFound)
+	mockService.On("DeleteDocument", mock.Anything, "rooms/room-1/messages/msg-1", model.Filters(nil)).Return(model.ErrNotFound)
 
 	req, _ := http.NewRequest("DELETE", "/api/v1/rooms/room-1/messages/msg-1", nil)
 	rr := httptest.NewRecorder()
@@ -442,7 +457,7 @@ func TestHandleDeleteDocument_InternalError(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	mockService.On("DeleteDocument", mock.Anything, "rooms/room-1/messages/msg-1").Return(errors.New("boom"))
+	mockService.On("DeleteDocument", mock.Anything, "rooms/room-1/messages/msg-1", model.Filters(nil)).Return(errors.New("boom"))
 
 	req, _ := http.NewRequest("DELETE", "/api/v1/rooms/room-1/messages/msg-1", nil)
 	rr := httptest.NewRecorder()
@@ -450,5 +465,21 @@ func TestHandleDeleteDocument_InternalError(t *testing.T) {
 	server.ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	mockService.AssertExpectations(t)
+}
+
+func TestHandleDeleteDocument_PreconditionFailed(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := createTestServer(mockService, nil, nil)
+
+	pred := model.Filters{{Field: "version", Op: "==", Value: float64(2)}}
+	mockService.On("DeleteDocument", mock.Anything, "rooms/room-1/messages/msg-1", pred).Return(model.ErrPreconditionFailed)
+
+	req, _ := http.NewRequest("DELETE", "/api/v1/rooms/room-1/messages/msg-1", bytes.NewBufferString(`{"ifMatch":[{"field":"version","op":"==","value":2}]}`))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusPreconditionFailed, rr.Code)
 	mockService.AssertExpectations(t)
 }

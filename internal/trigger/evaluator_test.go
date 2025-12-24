@@ -2,8 +2,9 @@ package trigger
 
 import (
 	"context"
-	"syntrix/internal/storage"
 	"testing"
+
+	"github.com/codetrek/syntrix/internal/storage"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

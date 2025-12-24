@@ -4,7 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,9 +31,9 @@ func TestMongoBackend_Query(t *testing.T) {
 	}
 
 	// Test 1: Simple Filter
-	q1 := storage.Query{
+	q1 := model.Query{
 		Collection: "users",
-		Filters: []storage.Filter{
+		Filters: []model.Filter{
 			{Field: "age", Op: ">", Value: 28},
 		},
 	}
@@ -41,9 +42,9 @@ func TestMongoBackend_Query(t *testing.T) {
 	assert.Len(t, docs, 2) // Alice (30), Charlie (35)
 
 	// Test 2: Multiple Filters
-	q2 := storage.Query{
+	q2 := model.Query{
 		Collection: "users",
-		Filters: []storage.Filter{
+		Filters: []model.Filter{
 			{Field: "age", Op: ">", Value: 20},
 			{Field: "active", Op: "==", Value: true},
 		},
@@ -53,9 +54,9 @@ func TestMongoBackend_Query(t *testing.T) {
 	assert.Len(t, docs, 2) // Alice, Bob
 
 	// Test 3: Sorting
-	q3 := storage.Query{
+	q3 := model.Query{
 		Collection: "users",
-		OrderBy: []storage.Order{
+		OrderBy: []model.Order{
 			{Field: "age", Direction: "desc"},
 		},
 	}
@@ -67,9 +68,9 @@ func TestMongoBackend_Query(t *testing.T) {
 	assert.Equal(t, "Bob", docs[2].Data["name"])
 
 	// Test 4: Limit
-	q4 := storage.Query{
+	q4 := model.Query{
 		Collection: "users",
-		OrderBy: []storage.Order{
+		OrderBy: []model.Order{
 			{Field: "age", Direction: "asc"},
 		},
 		Limit: 2,
@@ -81,9 +82,9 @@ func TestMongoBackend_Query(t *testing.T) {
 	assert.Equal(t, "Alice", docs[1].Data["name"])
 
 	// Test 5: Field mapping (version and custom) with multi-filter and IN
-	docs, err = backend.Query(ctx, storage.Query{
+	docs, err = backend.Query(ctx, model.Query{
 		Collection: "users",
-		Filters: []storage.Filter{
+		Filters: []model.Filter{
 			{Field: "version", Op: ">=", Value: int64(1)},
 			{Field: "active", Op: "==", Value: true},
 			{Field: "name", Op: "in", Value: []string{"Alice", "Charlie"}},

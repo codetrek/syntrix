@@ -3,8 +3,8 @@ package rest
 import (
 	"testing"
 
-	"syntrix/internal/common"
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -89,10 +89,10 @@ func TestValidateCollection(t *testing.T) {
 func TestValidateData(t *testing.T) {
 	tests := []struct {
 		name    string
-		data    common.Document
+		data    model.Document
 		wantErr bool
 	}{
-		{"valid data", common.Document{"key": "value"}, false},
+		{"valid data", model.Document{"key": "value"}, false},
 		{"nil data", nil, true},
 	}
 
@@ -111,52 +111,52 @@ func TestValidateData(t *testing.T) {
 func TestValidateQuery(t *testing.T) {
 	tests := []struct {
 		name    string
-		query   storage.Query
+		query   model.Query
 		wantErr bool
 	}{
 		{
 			"valid query",
-			storage.Query{
+			model.Query{
 				Collection: "users",
 				Limit:      10,
-				Filters:    []storage.Filter{{Field: "age", Op: ">", Value: 18}},
-				OrderBy:    []storage.Order{{Field: "age", Direction: "asc"}},
+				Filters:    []model.Filter{{Field: "age", Op: ">", Value: 18}},
+				OrderBy:    []model.Order{{Field: "age", Direction: "asc"}},
 			},
 			false,
 		},
 		{
 			"invalid collection",
-			storage.Query{Collection: "users/alice"},
+			model.Query{Collection: "users/alice"},
 			true,
 		},
 		{
 			"negative limit",
-			storage.Query{Collection: "users", Limit: -1},
+			model.Query{Collection: "users", Limit: -1},
 			true,
 		},
 		{
 			"limit too high",
-			storage.Query{Collection: "users", Limit: 1001},
+			model.Query{Collection: "users", Limit: 1001},
 			true,
 		},
 		{
 			"empty filter field",
-			storage.Query{Collection: "users", Filters: []storage.Filter{{Field: "", Op: ">", Value: 18}}},
+			model.Query{Collection: "users", Filters: []model.Filter{{Field: "", Op: ">", Value: 18}}},
 			true,
 		},
 		{
 			"empty filter op",
-			storage.Query{Collection: "users", Filters: []storage.Filter{{Field: "age", Op: "", Value: 18}}},
+			model.Query{Collection: "users", Filters: []model.Filter{{Field: "age", Op: "", Value: 18}}},
 			true,
 		},
 		{
 			"empty orderby field",
-			storage.Query{Collection: "users", OrderBy: []storage.Order{{Field: "", Direction: "asc"}}},
+			model.Query{Collection: "users", OrderBy: []model.Order{{Field: "", Direction: "asc"}}},
 			true,
 		},
 		{
 			"invalid orderby direction",
-			storage.Query{Collection: "users", OrderBy: []storage.Order{{Field: "age", Direction: "up"}}},
+			model.Query{Collection: "users", OrderBy: []model.Order{{Field: "age", Direction: "up"}}},
 			true,
 		},
 	}

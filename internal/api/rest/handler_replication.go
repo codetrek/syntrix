@@ -5,8 +5,9 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"syntrix/internal/common"
-	"syntrix/internal/storage"
+
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/gorilla/schema"
 )
@@ -54,7 +55,7 @@ func (h *Handler) handlePull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flatDocs := make([]common.Document, len(resp.Documents))
+	flatDocs := make([]model.Document, len(resp.Documents))
 	for i, doc := range resp.Documents {
 		flatDocs[i] = flattenDocument(doc)
 	}
@@ -100,6 +101,8 @@ func (h *Handler) handlePush(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Invalid document in changes: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+
+		docData.StripProtectedFields()
 
 		if docData.GetID() == "" {
 			log.Println("[Warning][Push] change document missing ID, skipping")
@@ -158,7 +161,7 @@ func (h *Handler) handlePush(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Flatten conflicts
-	flatConflicts := make([]common.Document, len(resp.Conflicts))
+	flatConflicts := make([]model.Document, len(resp.Conflicts))
 	for i, doc := range resp.Conflicts {
 		flatConflicts[i] = flattenDocument(doc)
 	}

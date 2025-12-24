@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"syntrix/internal/storage"
-	internalmongo "syntrix/internal/storage/mongo"
+	"github.com/codetrek/syntrix/internal/storage"
+	internalmongo "github.com/codetrek/syntrix/internal/storage/mongo"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

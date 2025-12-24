@@ -9,8 +9,9 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"syntrix/internal/common"
-	"syntrix/internal/storage"
+
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 )
 
 // Engine handles all business logic and coordinates with the storage backend.
@@ -30,7 +31,7 @@ func NewEngine(storage storage.StorageBackend, cspURL string) *Engine {
 }
 
 // GetDocument retrieves a document by path.
-func (e *Engine) GetDocument(ctx context.Context, path string) (common.Document, error) {
+func (e *Engine) GetDocument(ctx context.Context, path string) (model.Document, error) {
 	// Future: Add authorization check here
 	stored, err := e.storage.Get(ctx, path)
 	if err != nil {
@@ -40,7 +41,7 @@ func (e *Engine) GetDocument(ctx context.Context, path string) (common.Document,
 }
 
 // CreateDocument creates a new document.
-func (e *Engine) CreateDocument(ctx context.Context, doc common.Document) error {
+func (e *Engine) CreateDocument(ctx context.Context, doc model.Document) error {
 	if doc == nil {
 		return errors.New("document cannot be nil")
 	}
@@ -57,11 +58,11 @@ func (e *Engine) CreateDocument(ctx context.Context, doc common.Document) error 
 	return e.storage.Create(ctx, storage.NewDocument(fullpath, collection, doc))
 }
 
-func flattenStorageDocument(doc *storage.Document) common.Document {
+func flattenStorageDocument(doc *storage.Document) model.Document {
 	if doc == nil {
 		return nil
 	}
-	out := make(common.Document)
+	out := make(model.Document)
 	for k, v := range doc.Data {
 		out[k] = v
 	}
@@ -85,7 +86,7 @@ func extractIDFromFullpath(fullpath string) string {
 }
 
 // ReplaceDocument replaces a document or creates it if it doesn't exist (Upsert).
-func (e *Engine) ReplaceDocument(ctx context.Context, doc common.Document, pred storage.Filters) (common.Document, error) {
+func (e *Engine) ReplaceDocument(ctx context.Context, doc model.Document, pred model.Filters) (model.Document, error) {
 	if doc == nil {
 		return nil, errors.New("document cannot be nil")
 	}
@@ -106,7 +107,7 @@ func (e *Engine) ReplaceDocument(ctx context.Context, doc common.Document, pred 
 	// Try Get first
 	_, err := e.storage.Get(ctx, fullpath)
 	if err != nil {
-		if err == storage.ErrNotFound {
+		if err == model.ErrNotFound {
 			// Create
 			storedDoc := storage.NewDocument(fullpath, collection, doc)
 			if err := e.storage.Create(ctx, storedDoc); err != nil {
@@ -132,7 +133,7 @@ func (e *Engine) ReplaceDocument(ctx context.Context, doc common.Document, pred 
 }
 
 // PatchDocument updates specific fields of a document (Merge + CAS).
-func (e *Engine) PatchDocument(ctx context.Context, doc common.Document, pred storage.Filters) (common.Document, error) {
+func (e *Engine) PatchDocument(ctx context.Context, doc model.Document, pred model.Filters) (model.Document, error) {
 	if doc == nil {
 		return nil, errors.New("document cannot be nil")
 	}
@@ -164,20 +165,20 @@ func (e *Engine) PatchDocument(ctx context.Context, doc common.Document, pred st
 }
 
 // DeleteDocument deletes a document.
-func (e *Engine) DeleteDocument(ctx context.Context, path string) error {
+func (e *Engine) DeleteDocument(ctx context.Context, path string, pred model.Filters) error {
 	// Future: Add authorization check here
-	return e.storage.Delete(ctx, path, nil)
+	return e.storage.Delete(ctx, path, pred)
 }
 
 // ExecuteQuery executes a structured query.
-func (e *Engine) ExecuteQuery(ctx context.Context, q storage.Query) ([]common.Document, error) {
+func (e *Engine) ExecuteQuery(ctx context.Context, q model.Query) ([]model.Document, error) {
 	// Future: Add query validation and optimization here
 	storedDocs, err := e.storage.Query(ctx, q)
 	if err != nil {
 		return nil, err
 	}
 
-	flatDocs := make([]common.Document, len(storedDocs))
+	flatDocs := make([]model.Document, len(storedDocs))
 	for i, d := range storedDocs {
 		flatDocs[i] = flattenStorageDocument(d)
 	}
@@ -237,16 +238,16 @@ func (e *Engine) WatchCollection(ctx context.Context, collection string) (<-chan
 
 // Pull handles replication pull requests.
 func (e *Engine) Pull(ctx context.Context, req storage.ReplicationPullRequest) (*storage.ReplicationPullResponse, error) {
-	q := storage.Query{
+	q := model.Query{
 		Collection: req.Collection,
-		Filters: []storage.Filter{
+		Filters: []model.Filter{
 			{
 				Field: "updatedAt",
 				Op:    ">",
 				Value: req.Checkpoint,
 			},
 		},
-		OrderBy: []storage.Order{
+		OrderBy: []model.Order{
 			{
 				Field:     "updatedAt",
 				Direction: "asc",
@@ -304,7 +305,7 @@ func (e *Engine) Push(ctx context.Context, req storage.ReplicationPushRequest) (
 
 		existing, err := e.storage.Get(ctx, doc.Fullpath)
 		if err != nil {
-			if err == storage.ErrNotFound {
+			if err == model.ErrNotFound {
 				if err := e.storage.Create(ctx, doc); err != nil {
 					// If create fails (race condition), treat as conflict
 					conflicts = append(conflicts, doc)
@@ -323,9 +324,9 @@ func (e *Engine) Push(ctx context.Context, req storage.ReplicationPushRequest) (
 			continue
 		}
 
-		filters := storage.Filters{}
+		filters := model.Filters{}
 		if change.BaseVersion != nil {
-			filters = append(filters, storage.Filter{
+			filters = append(filters, model.Filter{
 				Field: "version",
 				Op:    "==",
 				Value: *change.BaseVersion,
@@ -335,13 +336,13 @@ func (e *Engine) Push(ctx context.Context, req storage.ReplicationPushRequest) (
 		// Handle Delete
 		if doc.Deleted {
 			if err := e.storage.Delete(ctx, doc.Fullpath, filters); err != nil {
-				if err == storage.ErrPreconditionFailed {
+				if err == model.ErrPreconditionFailed {
 					// Fetch latest to return as conflict
 					latest, _ := e.storage.Get(ctx, doc.Fullpath)
 					if latest != nil {
 						conflicts = append(conflicts, latest)
 					}
-				} else if err == storage.ErrNotFound {
+				} else if err == model.ErrNotFound {
 					// Already deleted or not found, which is fine for delete
 					// But if we had a base version, it might be a conflict?
 					// If client wants to delete v1, but it's already deleted (v2), is it a conflict?
@@ -359,7 +360,7 @@ func (e *Engine) Push(ctx context.Context, req storage.ReplicationPushRequest) (
 
 		// Update
 		if err := e.storage.Update(ctx, doc.Id, doc.Data, filters); err != nil {
-			if err == storage.ErrPreconditionFailed {
+			if err == model.ErrPreconditionFailed {
 				// Fetch latest to return as conflict
 				latest, _ := e.storage.Get(ctx, doc.Id)
 				if latest != nil {
@@ -374,16 +375,4 @@ func (e *Engine) Push(ctx context.Context, req storage.ReplicationPushRequest) (
 	return &storage.ReplicationPushResponse{
 		Conflicts: conflicts,
 	}, nil
-}
-
-// RunTransaction executes a function within a transaction.
-func (e *Engine) RunTransaction(ctx context.Context, fn func(ctx context.Context, tx Service) error) error {
-	return e.storage.Transaction(ctx, func(txCtx context.Context, txStorage storage.StorageBackend) error {
-		txEngine := &Engine{
-			storage: txStorage,
-			cspURL:  e.cspURL,
-			client:  e.client,
-		}
-		return fn(txCtx, txEngine)
-	})
 }

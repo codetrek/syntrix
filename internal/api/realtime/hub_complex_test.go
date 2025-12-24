@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -25,14 +26,14 @@ func TestHub_Broadcast_ComplexFilters(t *testing.T) {
 	}
 
 	// Test "in" operator
-	filtersIn := []storage.Filter{
+	filtersIn := []model.Filter{
 		{Field: "role", Op: "in", Value: []interface{}{"admin", "editor"}},
 	}
 	prgIn, err := compileFiltersToCEL(filtersIn)
 	assert.NoError(t, err)
 
 	client.subscriptions["sub_in"] = Subscription{
-		Query: storage.Query{
+		Query: model.Query{
 			Collection: "users",
 			Filters:    filtersIn,
 		},
@@ -41,14 +42,14 @@ func TestHub_Broadcast_ComplexFilters(t *testing.T) {
 	}
 
 	// Test "array-contains" operator
-	filtersContains := []storage.Filter{
+	filtersContains := []model.Filter{
 		{Field: "tags", Op: "array-contains", Value: "golang"},
 	}
 	prgContains, err := compileFiltersToCEL(filtersContains)
 	assert.NoError(t, err)
 
 	client.subscriptions["sub_contains"] = Subscription{
-		Query: storage.Query{
+		Query: model.Query{
 			Collection: "posts",
 			Filters:    filtersContains,
 		},

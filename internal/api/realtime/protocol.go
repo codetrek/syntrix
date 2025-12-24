@@ -2,7 +2,9 @@ package realtime
 
 import (
 	"encoding/json"
-	"syntrix/internal/storage"
+
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 )
 
 // Message types
@@ -32,9 +34,9 @@ type AuthPayload struct {
 
 // SubscribePayload
 type SubscribePayload struct {
-	Query        storage.Query `json:"query"`
-	IncludeData  bool          `json:"includeData"`  // If true, events will include the full document
-	SendSnapshot bool          `json:"sendSnapshot"` // If true, sends current state immediately
+	Query        model.Query `json:"query"`
+	IncludeData  bool        `json:"includeData"`  // If true, events will include the full document
+	SendSnapshot bool        `json:"sendSnapshot"` // If true, sends current state immediately
 }
 
 // UnsubscribePayload

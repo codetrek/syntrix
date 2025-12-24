@@ -9,8 +9,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"syntrix/internal/auth"
 	"time"
+
+	"github.com/codetrek/syntrix/internal/auth"
 )
 
 // Worker defines the interface for processing delivery tasks.

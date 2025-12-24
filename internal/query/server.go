@@ -5,8 +5,8 @@ import (
 	"errors"
 	"net/http"
 
-	"syntrix/internal/common"
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 )
 
 // Server exposes the Query Engine via HTTP (Internal API).
@@ -61,7 +61,7 @@ func (s *Server) handleGetDocument(w http.ResponseWriter, r *http.Request) {
 
 	doc, err := s.engine.GetDocument(r.Context(), req.Path)
 	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
+		if errors.Is(err, model.ErrNotFound) {
 			http.Error(w, "Document not found", http.StatusNotFound)
 			return
 		}
@@ -74,7 +74,7 @@ func (s *Server) handleGetDocument(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
-	var doc common.Document
+	var doc model.Document
 	if err := json.NewDecoder(r.Body).Decode(&doc); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -90,8 +90,8 @@ func (s *Server) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReplaceDocument(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Data common.Document `json:"data"`
-		Pred storage.Filters `json:"pred"`
+		Data model.Document  `json:"data"`
+		Pred model.Filters `json:"pred"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -110,8 +110,8 @@ func (s *Server) handleReplaceDocument(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePatchDocument(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Data common.Document `json:"data"`
-		Pred storage.Filters `json:"pred"`
+		Data model.Document  `json:"data"`
+		Pred model.Filters `json:"pred"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -120,7 +120,7 @@ func (s *Server) handlePatchDocument(w http.ResponseWriter, r *http.Request) {
 
 	doc, err := s.engine.PatchDocument(r.Context(), req.Data, req.Pred)
 	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
+		if errors.Is(err, model.ErrNotFound) {
 			http.Error(w, "Document not found", http.StatusNotFound)
 			return
 		}
@@ -134,16 +134,21 @@ func (s *Server) handlePatchDocument(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteDocument(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Path string `json:"path"`
+		Path string          `json:"path"`
+		Pred model.Filters `json:"pred"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	if err := s.engine.DeleteDocument(r.Context(), req.Path); err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
+	if err := s.engine.DeleteDocument(r.Context(), req.Path, req.Pred); err != nil {
+		if errors.Is(err, model.ErrNotFound) {
 			http.Error(w, "Document not found", http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, model.ErrPreconditionFailed) {
+			http.Error(w, "Version conflict", http.StatusPreconditionFailed)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -154,7 +159,7 @@ func (s *Server) handleDeleteDocument(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleExecuteQuery(w http.ResponseWriter, r *http.Request) {
-	var q storage.Query
+	var q model.Query
 	if err := json.NewDecoder(r.Body).Decode(&q); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return

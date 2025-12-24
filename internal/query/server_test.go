@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"syntrix/internal/common"
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -37,7 +37,7 @@ func TestServer_GetDocument(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	var respDoc common.Document
+	var respDoc model.Document
 	err := json.Unmarshal(w.Body.Bytes(), &respDoc)
 	assert.NoError(t, err)
 	assert.Equal(t, "1", respDoc.GetID())
@@ -46,7 +46,7 @@ func TestServer_GetDocument(t *testing.T) {
 func TestServer_CreateDocument(t *testing.T) {
 	server, mockStorage := setupTestServer()
 
-	doc := common.Document{"id": "1", "collection": "test", "foo": "bar"}
+	doc := model.Document{"id": "1", "collection": "test", "foo": "bar"}
 	mockStorage.On("Create", mock.Anything, mock.AnythingOfType("*storage.Document")).Return(nil)
 
 	reqBody, _ := json.Marshal(doc)
@@ -76,7 +76,7 @@ func TestServer_CreateDocument_Errors(t *testing.T) {
 		mockStorage.Calls = nil
 		mockStorage.On("Create", mock.Anything, mock.AnythingOfType("*storage.Document")).Return(assert.AnError)
 
-		reqBody, _ := json.Marshal(common.Document{"id": "1", "collection": "test"})
+		reqBody, _ := json.Marshal(model.Document{"id": "1", "collection": "test"})
 		req := httptest.NewRequest("POST", "/internal/v1/document/create", bytes.NewBuffer(reqBody))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -90,7 +90,7 @@ func TestServer_DeleteDocument(t *testing.T) {
 	server, mockStorage := setupTestServer()
 
 	path := "test/1"
-	mockStorage.On("Delete", mock.Anything, path, storage.Filters(nil)).Return(nil)
+	mockStorage.On("Delete", mock.Anything, path, model.Filters(nil)).Return(nil)
 
 	reqBody, _ := json.Marshal(map[string]string{"path": path})
 	req := httptest.NewRequest("POST", "/internal/v1/document/delete", bytes.NewBuffer(reqBody))
@@ -117,7 +117,7 @@ func TestServer_DeleteDocument_Errors(t *testing.T) {
 	t.Run("not found", func(t *testing.T) {
 		mockStorage.ExpectedCalls = nil
 		mockStorage.Calls = nil
-		mockStorage.On("Delete", mock.Anything, "test/1", storage.Filters(nil)).Return(storage.ErrNotFound)
+		mockStorage.On("Delete", mock.Anything, "test/1", model.Filters(nil)).Return(model.ErrNotFound)
 
 		reqBody, _ := json.Marshal(map[string]string{"path": "test/1"})
 		req := httptest.NewRequest("POST", "/internal/v1/document/delete", bytes.NewBuffer(reqBody))
@@ -131,7 +131,7 @@ func TestServer_DeleteDocument_Errors(t *testing.T) {
 	t.Run("delete error", func(t *testing.T) {
 		mockStorage.ExpectedCalls = nil
 		mockStorage.Calls = nil
-		mockStorage.On("Delete", mock.Anything, "test/1", storage.Filters(nil)).Return(assert.AnError)
+		mockStorage.On("Delete", mock.Anything, "test/1", model.Filters(nil)).Return(assert.AnError)
 
 		reqBody, _ := json.Marshal(map[string]string{"path": "test/1"})
 		req := httptest.NewRequest("POST", "/internal/v1/document/delete", bytes.NewBuffer(reqBody))
@@ -140,6 +140,21 @@ func TestServer_DeleteDocument_Errors(t *testing.T) {
 
 		server.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
+	})
+
+	t.Run("precondition failed", func(t *testing.T) {
+		mockStorage.ExpectedCalls = nil
+		mockStorage.Calls = nil
+		pred := model.Filters{{Field: "version", Op: "==", Value: float64(1)}}
+		mockStorage.On("Delete", mock.Anything, "test/1", pred).Return(model.ErrPreconditionFailed)
+
+		reqBody, _ := json.Marshal(map[string]interface{}{"path": "test/1", "pred": pred})
+		req := httptest.NewRequest("POST", "/internal/v1/document/delete", bytes.NewBuffer(reqBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		server.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusPreconditionFailed, w.Code)
 	})
 }
 
@@ -157,7 +172,7 @@ func TestServer_GetDocument_Errors(t *testing.T) {
 	t.Run("not found", func(t *testing.T) {
 		mockStorage.ExpectedCalls = nil
 		mockStorage.Calls = nil
-		mockStorage.On("Get", mock.Anything, "missing").Return(nil, storage.ErrNotFound)
+		mockStorage.On("Get", mock.Anything, "missing").Return(nil, model.ErrNotFound)
 
 		reqBody, _ := json.Marshal(map[string]string{"path": "missing"})
 		req := httptest.NewRequest("POST", "/internal/v1/document/get", bytes.NewBuffer(reqBody))
@@ -195,10 +210,10 @@ func TestServer_ReplaceDocument_Errors(t *testing.T) {
 	t.Run("engine error", func(t *testing.T) {
 		mockStorage.ExpectedCalls = nil
 		mockStorage.Calls = nil
-		mockStorage.On("Get", mock.Anything, "test/1").Return(nil, storage.ErrNotFound)
+		mockStorage.On("Get", mock.Anything, "test/1").Return(nil, model.ErrNotFound)
 		mockStorage.On("Create", mock.Anything, mock.AnythingOfType("*storage.Document")).Return(assert.AnError)
 
-		reqBody, _ := json.Marshal(map[string]interface{}{"data": common.Document{"id": "1", "collection": "test"}})
+		reqBody, _ := json.Marshal(map[string]interface{}{"data": model.Document{"id": "1", "collection": "test"}})
 		req := httptest.NewRequest("POST", "/internal/v1/document/replace", bytes.NewBuffer(reqBody))
 		w := httptest.NewRecorder()
 
@@ -221,9 +236,9 @@ func TestServer_PatchDocument_Errors(t *testing.T) {
 	t.Run("not found", func(t *testing.T) {
 		mockStorage.ExpectedCalls = nil
 		mockStorage.Calls = nil
-		mockStorage.On("Patch", mock.Anything, "test/1", mock.Anything, storage.Filters(nil)).Return(storage.ErrNotFound)
+		mockStorage.On("Patch", mock.Anything, "test/1", mock.Anything, model.Filters(nil)).Return(model.ErrNotFound)
 
-		reqBody, _ := json.Marshal(map[string]interface{}{"data": common.Document{"id": "1", "collection": "test"}})
+		reqBody, _ := json.Marshal(map[string]interface{}{"data": model.Document{"id": "1", "collection": "test"}})
 		req := httptest.NewRequest("POST", "/internal/v1/document/patch", bytes.NewBuffer(reqBody))
 		w := httptest.NewRecorder()
 
@@ -234,9 +249,9 @@ func TestServer_PatchDocument_Errors(t *testing.T) {
 	t.Run("engine error", func(t *testing.T) {
 		mockStorage.ExpectedCalls = nil
 		mockStorage.Calls = nil
-		mockStorage.On("Patch", mock.Anything, "test/1", mock.Anything, storage.Filters(nil)).Return(assert.AnError)
+		mockStorage.On("Patch", mock.Anything, "test/1", mock.Anything, model.Filters(nil)).Return(assert.AnError)
 
-		reqBody, _ := json.Marshal(map[string]interface{}{"data": common.Document{"id": "1", "collection": "test"}})
+		reqBody, _ := json.Marshal(map[string]interface{}{"data": model.Document{"id": "1", "collection": "test"}})
 		req := httptest.NewRequest("POST", "/internal/v1/document/patch", bytes.NewBuffer(reqBody))
 		w := httptest.NewRecorder()
 
@@ -261,7 +276,7 @@ func TestServer_ExecuteQuery_Errors(t *testing.T) {
 		mockStorage.Calls = nil
 		mockStorage.On("Query", mock.Anything, mock.Anything).Return(nil, assert.AnError)
 
-		reqBody, _ := json.Marshal(storage.Query{Collection: "c"})
+		reqBody, _ := json.Marshal(model.Query{Collection: "c"})
 		req := httptest.NewRequest("POST", "/internal/v1/query/execute", bytes.NewBuffer(reqBody))
 		w := httptest.NewRecorder()
 
@@ -343,7 +358,7 @@ func TestServer_PullPush_Errors(t *testing.T) {
 	t.Run("push error", func(t *testing.T) {
 		mockStorage.ExpectedCalls = nil
 		mockStorage.Calls = nil
-		mockStorage.On("Update", mock.Anything, mock.Anything, mock.Anything, storage.Filters{}).Return(assert.AnError)
+		mockStorage.On("Update", mock.Anything, mock.Anything, mock.Anything, model.Filters{}).Return(assert.AnError)
 		mockStorage.On("Get", mock.Anything, mock.Anything).Return(&storage.Document{Id: "c/1", Version: 1}, nil)
 
 		body, _ := json.Marshal(storage.ReplicationPushRequest{Collection: "c", Changes: []storage.ReplicationPushChange{{Doc: &storage.Document{Id: "c/1", Fullpath: "c/1", Data: map[string]interface{}{}}}}})

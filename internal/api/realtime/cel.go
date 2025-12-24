@@ -3,12 +3,12 @@ package realtime
 import (
 	"fmt"
 	"strings"
-	"syntrix/internal/storage"
 
+	"github.com/codetrek/syntrix/pkg/model"
 	"github.com/google/cel-go/cel"
 )
 
-func compileFiltersToCEL(filters []storage.Filter) (cel.Program, error) {
+func compileFiltersToCEL(filters []model.Filter) (cel.Program, error) {
 	if len(filters) == 0 {
 		return nil, nil
 	}
@@ -44,7 +44,7 @@ func compileFiltersToCEL(filters []storage.Filter) (cel.Program, error) {
 	return prg, nil
 }
 
-func filterToExpression(f storage.Filter) (string, error) {
+func filterToExpression(f model.Filter) (string, error) {
 	valStr, err := formatValue(f.Value)
 	if err != nil {
 		return "", err

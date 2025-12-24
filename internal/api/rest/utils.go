@@ -2,15 +2,16 @@ package rest
 
 import (
 	"strings"
-	"syntrix/internal/common"
-	"syntrix/internal/storage"
+
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 )
 
-func flattenDocument(doc *storage.Document) common.Document {
+func flattenDocument(doc *storage.Document) model.Document {
 	if doc == nil {
 		return nil
 	}
-	flat := make(common.Document)
+	flat := make(model.Document)
 
 	// Copy data
 	for k, v := range doc.Data {

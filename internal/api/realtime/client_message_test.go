@@ -9,9 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"syntrix/internal/common"
-	"syntrix/internal/query"
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
@@ -19,20 +18,22 @@ import (
 
 type mockQueryForClient struct{}
 
-func (m *mockQueryForClient) GetDocument(ctx context.Context, path string) (common.Document, error) {
+func (m *mockQueryForClient) GetDocument(ctx context.Context, path string) (model.Document, error) {
 	return nil, nil
 }
-func (m *mockQueryForClient) CreateDocument(ctx context.Context, doc common.Document) error {
+func (m *mockQueryForClient) CreateDocument(ctx context.Context, doc model.Document) error {
 	return nil
 }
-func (m *mockQueryForClient) ReplaceDocument(ctx context.Context, data common.Document, pred storage.Filters) (common.Document, error) {
+func (m *mockQueryForClient) ReplaceDocument(ctx context.Context, data model.Document, pred model.Filters) (model.Document, error) {
 	return nil, nil
 }
-func (m *mockQueryForClient) PatchDocument(ctx context.Context, data common.Document, pred storage.Filters) (common.Document, error) {
+func (m *mockQueryForClient) PatchDocument(ctx context.Context, data model.Document, pred model.Filters) (model.Document, error) {
 	return nil, nil
 }
-func (m *mockQueryForClient) DeleteDocument(ctx context.Context, path string) error { return nil }
-func (m *mockQueryForClient) ExecuteQuery(ctx context.Context, q storage.Query) ([]common.Document, error) {
+func (m *mockQueryForClient) DeleteDocument(ctx context.Context, path string, pred model.Filters) error {
+	return nil
+}
+func (m *mockQueryForClient) ExecuteQuery(ctx context.Context, q model.Query) ([]model.Document, error) {
 	return nil, nil
 }
 func (m *mockQueryForClient) WatchCollection(ctx context.Context, collection string) (<-chan storage.Event, error) {
@@ -43,9 +44,6 @@ func (m *mockQueryForClient) Pull(ctx context.Context, req storage.ReplicationPu
 }
 func (m *mockQueryForClient) Push(ctx context.Context, req storage.ReplicationPushRequest) (*storage.ReplicationPushResponse, error) {
 	return nil, nil
-}
-func (m *mockQueryForClient) RunTransaction(ctx context.Context, fn func(ctx context.Context, tx query.Service) error) error {
-	return fn(ctx, m)
 }
 
 func TestClientHandleMessage_AuthAck(t *testing.T) {
@@ -63,7 +61,7 @@ func TestClientHandleMessage_AuthAck(t *testing.T) {
 
 func TestClientHandleMessage_SubscribeSnapshot(t *testing.T) {
 	c := &Client{hub: NewHub(), queryService: &mockQueryForClient{}, send: make(chan BaseMessage, 2), subscriptions: make(map[string]Subscription)}
-	payload := SubscribePayload{Query: storage.Query{Collection: "users"}, IncludeData: true, SendSnapshot: true}
+	payload := SubscribePayload{Query: model.Query{Collection: "users"}, IncludeData: true, SendSnapshot: true}
 	b, _ := json.Marshal(payload)
 
 	c.handleMessage(BaseMessage{Type: TypeSubscribe, ID: "sub", Payload: b})
@@ -144,7 +142,7 @@ func TestServeWs_RejectsCrossOrigin(t *testing.T) {
 
 func TestHandleMessage_SubscribeCompileError(t *testing.T) {
 	c := &Client{hub: NewHub(), queryService: &mockQueryForClient{}, send: make(chan BaseMessage, 1), subscriptions: make(map[string]Subscription)}
-	payload := SubscribePayload{Query: storage.Query{Filters: []storage.Filter{{Field: "age", Op: "!", Value: 1}}}}
+	payload := SubscribePayload{Query: model.Query{Filters: []model.Filter{{Field: "age", Op: "!", Value: 1}}}}
 	b, _ := json.Marshal(payload)
 
 	c.handleMessage(BaseMessage{Type: TypeSubscribe, ID: "sub-err", Payload: b})
@@ -284,7 +282,7 @@ func TestServeWs_ReadWriteCycle(t *testing.T) {
 	assert.Equal(t, "auth-1", resp.ID)
 
 	// Subscribe with snapshot -> expect ack then snapshot
-	subPayload := SubscribePayload{Query: storage.Query{Collection: "users"}, IncludeData: true, SendSnapshot: true}
+	subPayload := SubscribePayload{Query: model.Query{Collection: "users"}, IncludeData: true, SendSnapshot: true}
 	body, _ := json.Marshal(subPayload)
 	assert.NoError(t, conn.WriteJSON(BaseMessage{Type: TypeSubscribe, ID: "sub-1", Payload: body}))
 

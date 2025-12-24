@@ -3,11 +3,12 @@ package rest
 import (
 	"encoding/json"
 	"net/http"
-	"syntrix/internal/storage"
+
+	"github.com/codetrek/syntrix/pkg/model"
 )
 
 func (h *Handler) handleQuery(w http.ResponseWriter, r *http.Request) {
-	var q storage.Query
+	var q model.Query
 	if err := json.NewDecoder(r.Body).Decode(&q); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return

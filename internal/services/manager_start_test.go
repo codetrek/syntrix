@@ -9,12 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"syntrix/internal/api/realtime"
-	"syntrix/internal/common"
-	"syntrix/internal/config"
-	"syntrix/internal/query"
-	"syntrix/internal/storage"
-	"syntrix/internal/trigger"
+	"github.com/codetrek/syntrix/internal/api/realtime"
+	"github.com/codetrek/syntrix/internal/config"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/trigger"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -101,17 +100,17 @@ type storageBackendStub struct {
 }
 
 func (s *storageBackendStub) Get(context.Context, string) (*storage.Document, error) {
-	return nil, storage.ErrNotFound
+	return nil, model.ErrNotFound
 }
 func (s *storageBackendStub) Create(context.Context, *storage.Document) error { return nil }
-func (s *storageBackendStub) Update(context.Context, string, map[string]interface{}, storage.Filters) error {
+func (s *storageBackendStub) Update(context.Context, string, map[string]interface{}, model.Filters) error {
 	return nil
 }
-func (s *storageBackendStub) Patch(context.Context, string, map[string]interface{}, storage.Filters) error {
+func (s *storageBackendStub) Patch(context.Context, string, map[string]interface{}, model.Filters) error {
 	return nil
 }
-func (s *storageBackendStub) Delete(context.Context, string, storage.Filters) error { return nil }
-func (s *storageBackendStub) Query(context.Context, storage.Query) ([]*storage.Document, error) {
+func (s *storageBackendStub) Delete(context.Context, string, model.Filters) error { return nil }
+func (s *storageBackendStub) Query(context.Context, model.Query) ([]*storage.Document, error) {
 	return nil, nil
 }
 func (s *storageBackendStub) Watch(context.Context, string, interface{}, storage.WatchOptions) (<-chan storage.Event, error) {
@@ -119,9 +118,6 @@ func (s *storageBackendStub) Watch(context.Context, string, interface{}, storage
 	ch := make(chan storage.Event)
 	close(ch)
 	return ch, nil
-}
-func (s *storageBackendStub) Transaction(context.Context, func(ctx context.Context, tx storage.StorageBackend) error) error {
-	return nil
 }
 func (s *storageBackendStub) Close(context.Context) error { return nil }
 func (s *storageBackendStub) DB() *mongo.Database         { return nil }
@@ -175,18 +171,20 @@ type rtQueryStub struct {
 	failAlways bool
 }
 
-func (s *rtQueryStub) GetDocument(context.Context, string) (common.Document, error) {
-	return common.Document{}, nil
+func (s *rtQueryStub) GetDocument(context.Context, string) (model.Document, error) {
+	return model.Document{}, nil
 }
-func (s *rtQueryStub) CreateDocument(context.Context, common.Document) error { return nil }
-func (s *rtQueryStub) ReplaceDocument(context.Context, common.Document, storage.Filters) (common.Document, error) {
-	return common.Document{}, nil
+func (s *rtQueryStub) CreateDocument(context.Context, model.Document) error { return nil }
+func (s *rtQueryStub) ReplaceDocument(context.Context, model.Document, model.Filters) (model.Document, error) {
+	return model.Document{}, nil
 }
-func (s *rtQueryStub) PatchDocument(context.Context, common.Document, storage.Filters) (common.Document, error) {
-	return common.Document{}, nil
+func (s *rtQueryStub) PatchDocument(context.Context, model.Document, model.Filters) (model.Document, error) {
+	return model.Document{}, nil
 }
-func (s *rtQueryStub) DeleteDocument(context.Context, string) error { return nil }
-func (s *rtQueryStub) ExecuteQuery(context.Context, storage.Query) ([]common.Document, error) {
+func (s *rtQueryStub) DeleteDocument(context.Context, string, model.Filters) error {
+	return nil
+}
+func (s *rtQueryStub) ExecuteQuery(context.Context, model.Query) ([]model.Document, error) {
 	return nil, nil
 }
 func (s *rtQueryStub) WatchCollection(context.Context, string) (<-chan storage.Event, error) {
@@ -207,9 +205,6 @@ func (s *rtQueryStub) Pull(context.Context, storage.ReplicationPullRequest) (*st
 }
 func (s *rtQueryStub) Push(context.Context, storage.ReplicationPushRequest) (*storage.ReplicationPushResponse, error) {
 	return nil, nil
-}
-func (s *rtQueryStub) RunTransaction(ctx context.Context, fn func(ctx context.Context, tx query.Service) error) error {
-	return fn(ctx, s)
 }
 
 func freeAddr() string {

@@ -7,8 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"syntrix/internal/common"
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -18,16 +17,16 @@ func TestHandleQuery(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	docs := []common.Document{
+	docs := []model.Document{
 		{"id": "msg-1", "collection": "rooms/room-1/messages", "name": "Alice", "version": int64(1)},
 		{"id": "msg-2", "collection": "rooms/room-1/messages", "name": "Bob", "version": int64(1)},
 	}
 
-	mockService.On("ExecuteQuery", mock.Anything, mock.AnythingOfType("storage.Query")).Return(docs, nil)
+	mockService.On("ExecuteQuery", mock.Anything, mock.AnythingOfType("model.Query")).Return(docs, nil)
 
-	query := storage.Query{
+	query := model.Query{
 		Collection: "rooms/room-1/messages",
-		Filters: []storage.Filter{
+		Filters: []model.Filter{
 			{Field: "name", Op: "==", Value: "Alice"},
 		},
 	}
@@ -61,7 +60,7 @@ func TestHandleQuery_ValidateError(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	q := storage.Query{} // missing collection triggers validation error
+	q := model.Query{} // missing collection triggers validation error
 	body, _ := json.Marshal(q)
 	req := httptest.NewRequest("POST", "/api/v1/query", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
@@ -75,7 +74,7 @@ func TestHandleQuery_EngineError(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	q := storage.Query{Collection: "rooms"}
+	q := model.Query{Collection: "rooms"}
 	mockService.On("ExecuteQuery", mock.Anything, q).Return(nil, assert.AnError)
 
 	body, _ := json.Marshal(q)

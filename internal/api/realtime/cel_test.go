@@ -3,14 +3,13 @@ package realtime
 import (
 	"testing"
 
-	"syntrix/internal/storage"
-
+	"github.com/codetrek/syntrix/pkg/model"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCEL_TypeMismatch(t *testing.T) {
 	// Filter: age > 20
-	filters := []storage.Filter{
+	filters := []model.Filter{
 		{Field: "age", Op: ">", Value: 20},
 	}
 	prg, err := compileFiltersToCEL(filters)
@@ -34,7 +33,7 @@ func TestCEL_TypeMismatch(t *testing.T) {
 }
 
 func TestFilterToExpression_AllOperators(t *testing.T) {
-	cases := []storage.Filter{
+	cases := []model.Filter{
 		{Field: "age", Op: "==", Value: 10},
 		{Field: "age", Op: ">", Value: 1},
 		{Field: "age", Op: ">=", Value: 1},
@@ -53,7 +52,7 @@ func TestFilterToExpression_AllOperators(t *testing.T) {
 }
 
 func TestFilterToExpression_Unsupported(t *testing.T) {
-	_, err := filterToExpression(storage.Filter{Field: "age", Op: "!=", Value: 1})
+	_, err := filterToExpression(model.Filter{Field: "age", Op: "!=", Value: 1})
 	assert.Error(t, err)
 }
 

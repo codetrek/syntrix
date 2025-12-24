@@ -5,11 +5,11 @@ import (
 	"net/http"
 	"sync"
 
-	"syntrix/internal/api/realtime"
-	"syntrix/internal/auth"
-	"syntrix/internal/config"
-	"syntrix/internal/storage"
-	"syntrix/internal/trigger"
+	"github.com/codetrek/syntrix/internal/api/realtime"
+	"github.com/codetrek/syntrix/internal/auth"
+	"github.com/codetrek/syntrix/internal/config"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/trigger"
 
 	"go.mongodb.org/mongo-driver/mongo"
 

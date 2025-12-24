@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"syntrix/internal/auth"
-	"syntrix/internal/authz"
-	"syntrix/internal/common"
-	"syntrix/internal/query"
-	"syntrix/internal/storage"
 	"time"
+
+	"github.com/codetrek/syntrix/internal/auth"
+	"github.com/codetrek/syntrix/internal/authz"
+	"github.com/codetrek/syntrix/internal/query"
+	"github.com/codetrek/syntrix/pkg/model"
 )
 
 type Handler struct {
@@ -117,7 +117,7 @@ func (h *Handler) authorized(handler http.HandlerFunc, action string) http.Handl
 		if action != "create" {
 			doc, err := h.engine.GetDocument(r.Context(), path)
 			if err == nil {
-				data := common.Document{}
+				data := model.Document{}
 				for k, v := range doc {
 					data[k] = v
 				}
@@ -126,7 +126,7 @@ func (h *Handler) authorized(handler http.HandlerFunc, action string) http.Handl
 					Data: data,
 					ID:   doc.GetID(),
 				}
-			} else if err != storage.ErrNotFound {
+			} else if err != model.ErrNotFound {
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 				return
 			}

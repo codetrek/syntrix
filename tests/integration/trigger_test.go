@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"syntrix/internal/config"
+	"github.com/codetrek/syntrix/internal/config"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"

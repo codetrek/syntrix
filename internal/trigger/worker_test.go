@@ -6,9 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"syntrix/internal/auth"
 	"testing"
 	"time"
+
+	"github.com/codetrek/syntrix/internal/auth"
 
 	"github.com/stretchr/testify/assert"
 )

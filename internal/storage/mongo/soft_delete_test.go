@@ -4,7 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,12 +31,12 @@ func TestMongoBackend_SoftDelete(t *testing.T) {
 
 	// 3. Verify Get returns NotFound
 	_, err = backend.Get(ctx, docPath)
-	assert.ErrorIs(t, err, storage.ErrNotFound)
+	assert.ErrorIs(t, err, model.ErrNotFound)
 
 	// 4. Verify Query excludes deleted by default
-	q := storage.Query{
+	q := model.Query{
 		Collection: "users",
-		Filters:    storage.Filters{},
+		Filters:    model.Filters{},
 	}
 	docs, err := backend.Query(ctx, q)
 	require.NoError(t, err)

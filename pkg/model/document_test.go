@@ -1,4 +1,4 @@
-package common
+package model
 
 import (
 	"testing"
@@ -63,15 +63,18 @@ func TestValidateDocument(t *testing.T) {
 	})
 
 	t.Run("int id converted", func(t *testing.T) {
-		doc := Document{"id": int64(5), "collection": "c", "version": int64(1), "updatedAt": int64(2), "createdAt": int64(3)}
+		doc := Document{"id": int64(5), "collection": "c", "version": int64(1), "updatedAt": int64(2), "createdAt": int64(3), "deleted": true}
 		err := doc.ValidateDocument()
 		assert.NoError(t, err)
 		assert.Equal(t, "5", doc.GetID())
+
 		// protected fields stripped
+		doc.StripProtectedFields()
 		assert.False(t, doc.HasKey("version"))
 		assert.False(t, doc.HasKey("updatedAt"))
 		assert.False(t, doc.HasKey("createdAt"))
 		assert.False(t, doc.HasKey("collection"))
+		assert.False(t, doc.HasKey("deleted"))
 	})
 
 	t.Run("empty id string", func(t *testing.T) {

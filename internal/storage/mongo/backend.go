@@ -6,7 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -64,7 +65,7 @@ func (m *MongoBackend) Get(ctx context.Context, fullpath string) (*storage.Docum
 	err := collection.FindOne(ctx, bson.M{"_id": id, "deleted": bson.M{"$ne": true}}).Decode(&doc)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
-			return nil, storage.ErrNotFound
+			return nil, model.ErrNotFound
 		}
 		return nil, err
 	}
@@ -90,12 +91,12 @@ func (m *MongoBackend) Create(ctx context.Context, doc *storage.Document) error 
 				return replaceErr
 			}
 		}
-		return storage.ErrExists
+		return model.ErrExists
 	}
 	return err
 }
 
-func (m *MongoBackend) Update(ctx context.Context, path string, data map[string]interface{}, precond storage.Filters) error {
+func (m *MongoBackend) Update(ctx context.Context, path string, data map[string]interface{}, precond model.Filters) error {
 	collection := m.getCollection(path)
 	id := storage.CalculateID(path)
 
@@ -121,15 +122,15 @@ func (m *MongoBackend) Update(ctx context.Context, path string, data map[string]
 	if result.MatchedCount == 0 {
 		count, _ := collection.CountDocuments(ctx, bson.M{"_id": id})
 		if count == 0 {
-			return storage.ErrNotFound
+			return model.ErrNotFound
 		}
-		return storage.ErrPreconditionFailed
+		return model.ErrPreconditionFailed
 	}
 
 	return nil
 }
 
-func (m *MongoBackend) Patch(ctx context.Context, path string, data map[string]interface{}, precond storage.Filters) error {
+func (m *MongoBackend) Patch(ctx context.Context, path string, data map[string]interface{}, precond model.Filters) error {
 	collection := m.getCollection(path)
 	id := storage.CalculateID(path)
 
@@ -159,15 +160,15 @@ func (m *MongoBackend) Patch(ctx context.Context, path string, data map[string]i
 	if result.MatchedCount == 0 {
 		count, _ := collection.CountDocuments(ctx, bson.M{"_id": id})
 		if count == 0 {
-			return storage.ErrNotFound
+			return model.ErrNotFound
 		}
-		return storage.ErrPreconditionFailed
+		return model.ErrPreconditionFailed
 	}
 
 	return nil
 }
 
-func (m *MongoBackend) Delete(ctx context.Context, path string, precond storage.Filters) error {
+func (m *MongoBackend) Delete(ctx context.Context, path string, precond model.Filters) error {
 	collection := m.getCollection(path)
 	id := storage.CalculateID(path)
 
@@ -195,23 +196,23 @@ func (m *MongoBackend) Delete(ctx context.Context, path string, precond storage.
 	if result.MatchedCount == 0 {
 		count, _ := collection.CountDocuments(ctx, bson.M{"_id": id})
 		if count == 0 {
-			return storage.ErrNotFound
+			return model.ErrNotFound
 		}
 		// If document exists but matched count is 0, it means version conflict or already deleted
 		// We can check if it is already deleted
 		var doc storage.Document
 		if err := collection.FindOne(ctx, bson.M{"_id": id}).Decode(&doc); err == nil {
 			if doc.Deleted {
-				return storage.ErrNotFound // Already deleted
+				return model.ErrNotFound // Already deleted
 			}
 		}
-		return storage.ErrPreconditionFailed
+		return model.ErrPreconditionFailed
 	}
 
 	return nil
 }
 
-func (m *MongoBackend) Query(ctx context.Context, q storage.Query) ([]*storage.Document, error) {
+func (m *MongoBackend) Query(ctx context.Context, q model.Query) ([]*storage.Document, error) {
 	collection := m.getCollection(q.Collection)
 
 	filter := makeFilterBSON(q.Filters)
@@ -379,19 +380,4 @@ func (s *MongoBackend) EnsureIndexes(ctx context.Context) error {
 
 func (m *MongoBackend) Close(ctx context.Context) error {
 	return m.client.Disconnect(ctx)
-}
-
-func (m *MongoBackend) Transaction(ctx context.Context, fn func(ctx context.Context, tx storage.StorageBackend) error) error {
-	session, err := m.client.StartSession()
-	if err != nil {
-		return err
-	}
-	defer session.EndSession(ctx)
-
-	callback := func(sessCtx mongo.SessionContext) (interface{}, error) {
-		return nil, fn(sessCtx, m)
-	}
-
-	_, err = session.WithTransaction(ctx, callback)
-	return err
 }

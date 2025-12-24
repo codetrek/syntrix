@@ -8,7 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -19,16 +20,16 @@ func (f *fakeStorage) Get(ctx context.Context, path string) (*storage.Document, 
 	return nil, nil
 }
 func (f *fakeStorage) Create(ctx context.Context, doc *storage.Document) error { return nil }
-func (f *fakeStorage) Update(ctx context.Context, path string, data map[string]interface{}, pred storage.Filters) error {
+func (f *fakeStorage) Update(ctx context.Context, path string, data map[string]interface{}, pred model.Filters) error {
 	return nil
 }
-func (f *fakeStorage) Patch(ctx context.Context, path string, data map[string]interface{}, pred storage.Filters) error {
+func (f *fakeStorage) Patch(ctx context.Context, path string, data map[string]interface{}, pred model.Filters) error {
 	return nil
 }
-func (f *fakeStorage) Delete(ctx context.Context, path string, pred storage.Filters) error {
+func (f *fakeStorage) Delete(ctx context.Context, path string, pred model.Filters) error {
 	return nil
 }
-func (f *fakeStorage) Query(ctx context.Context, q storage.Query) ([]*storage.Document, error) {
+func (f *fakeStorage) Query(ctx context.Context, q model.Query) ([]*storage.Document, error) {
 	return nil, nil
 }
 func (f *fakeStorage) Watch(ctx context.Context, collection string, resumeToken interface{}, opts storage.WatchOptions) (<-chan storage.Event, error) {
@@ -36,9 +37,6 @@ func (f *fakeStorage) Watch(ctx context.Context, collection string, resumeToken 
 	ch <- storage.Event{Id: collection + "/1", Type: storage.EventCreate}
 	close(ch)
 	return ch, nil
-}
-func (f *fakeStorage) Transaction(ctx context.Context, fn func(ctx context.Context, tx storage.StorageBackend) error) error {
-	return fn(ctx, f)
 }
 func (f *fakeStorage) Close(ctx context.Context) error { return nil }
 

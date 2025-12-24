@@ -3,8 +3,10 @@ package trigger
 import (
 	"context"
 	"log"
-	"syntrix/internal/storage"
 	"time"
+
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/pkg/model"
 )
 
 // TriggerService orchestrates trigger evaluation and task publishing.
@@ -39,7 +41,7 @@ func (s *TriggerService) Watch(ctx context.Context, backend storage.StorageBacke
 			resumeToken = token
 			log.Println("Resuming trigger watcher from checkpoint")
 		}
-	} else if err != storage.ErrNotFound {
+	} else if err != model.ErrNotFound {
 		log.Printf("Failed to load checkpoint: %v", err)
 		// Continue without checkpoint? Or fail?
 		// For robustness, maybe we should fail, but for now let's log and continue.
@@ -73,10 +75,10 @@ func (s *TriggerService) Watch(ctx context.Context, backend storage.StorageBacke
 				err := backend.Update(ctx, "sys/checkpoints/trigger_evaluator", map[string]interface{}{
 					"token":      evt.ResumeToken,
 					"updatedAt": time.Now().Unix(),
-				}, storage.Filters{})
+				}, model.Filters{})
 				if err != nil {
 					// If it doesn't exist, create it
-					if err == storage.ErrNotFound {
+					if err == model.ErrNotFound {
 						backend.Create(ctx, &storage.Document{
 							Id:         "sys/checkpoints/trigger_evaluator",
 							Collection: "sys",
