@@ -42,8 +42,12 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     safeCheckOrigin,
 }
 
-// safeCheckOrigin only allows empty origin or origins whose host matches the request host.
-// This mitigates cross-site WebSocket abuse while keeping same-origin clients working.
+// safeCheckOrigin validates WebSocket connection origins.
+// It allows:
+// - Empty origin (non-browser clients)
+// - Same host:port as the request
+// - Same host (ignoring port) for development scenarios
+// This mitigates cross-site WebSocket abuse while keeping same-origin and local dev clients working.
 func safeCheckOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
@@ -56,7 +60,16 @@ func safeCheckOrigin(r *http.Request) bool {
 	}
 
 	// Compare host (includes port) to ensure exact match with request host.
-	return strings.EqualFold(u.Host, r.Host)
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+
+	// Allow same-host connections across different ports for development.
+	// This covers localhost, 127.0.0.1, and LAN IPs like 192.168.x.x.
+	originHost := strings.Split(u.Host, ":")[0]
+	requestHost := strings.Split(r.Host, ":")[0]
+
+	return strings.EqualFold(originHost, requestHost)
 }
 
 // Client is a middleman between the websocket connection and the hub.

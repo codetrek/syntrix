@@ -4,8 +4,9 @@
   "description": "TypeScript client for Syntrix",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "browser": "dist/syntrix-browser.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && bun build ./src/index.ts --outfile dist/syntrix-browser.js --format esm",
     "test": "bun test"
   },
   "dependencies": {

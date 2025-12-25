@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Syntrix Realtime Chat Demo</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 15px; background: #f0f2f5; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 { text-align: center; color: #333; margin: 10px 0 20px; font-size: 1.5rem; }
+        .sdk-badge { display: inline-block; background: #6f42c1; color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-left: 10px; }
+        
+        /* Control Bar */
+        .control-bar { background: white; border-radius: 8px; padding: 15px; margin-bottom: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .control-row { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+        .control-group { display: flex; align-items: center; gap: 8px; }
+        .control-group label { font-weight: 500; color: #666; font-size: 13px; white-space: nowrap; }
+        .control-group input { padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; width: 120px; }
+        .control-group input.wide { width: 200px; }
+        
+        /* Buttons */
+        button { background: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 13px; transition: all 0.2s; }
+        button:hover { background: #0056b3; transform: translateY(-1px); }
+        button.success { background: #28a745; }
+        button.success:hover { background: #1e7e34; }
+        button.danger { background: #dc3545; }
+        button.danger:hover { background: #c82333; }
+        button:disabled { background: #ccc; cursor: not-allowed; transform: none; }
+        button.small { padding: 5px 10px; font-size: 12px; }
+        
+        /* Status */
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+        .status-dot.connected { background: #28a745; }
+        .status-dot.disconnected { background: #dc3545; }
+        .status-dot.connecting { background: #ffc107; }
+        .status-text { font-size: 12px; color: #666; }
+        
+        /* Client Section - Collapsible */
+        .client-section { margin-bottom: 15px; }
+        .client-header { background: white; border-radius: 8px 8px 0 0; padding: 12px 15px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .client-header:hover { background: #f8f9fa; }
+        .client-header h3 { margin: 0; font-size: 14px; color: #007bff; }
+        .client-header .toggle { font-size: 12px; color: #999; }
+        .client-body { background: white; border-radius: 0 0 8px 8px; padding: 15px; display: none; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-top: 1px; }
+        .client-body.open { display: block; }
+        .client-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+        
+        /* Message Input */
+        .message-section { background: white; border-radius: 8px; padding: 15px; margin-bottom: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .message-row { display: flex; gap: 10px; align-items: flex-end; }
+        .message-row .input-group { flex: 1; }
+        .message-row label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }
+        .message-row input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+        .message-row select { padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; background: white; }
+        
+        /* Received Documents - Two Columns */
+        .docs-section { display: flex; gap: 15px; margin-bottom: 15px; }
+        .docs-panel { flex: 1; background: white; border-radius: 8px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); min-height: 300px; }
+        .docs-panel h3 { margin: 0 0 10px; font-size: 14px; color: #333; border-bottom: 2px solid #007bff; padding-bottom: 8px; }
+        .docs-panel h3.client2 { border-bottom-color: #28a745; }
+        .data-list { max-height: 350px; overflow-y: auto; }
+        .data-item { background: #f8f9fa; padding: 8px 12px; margin-bottom: 8px; border-radius: 4px; border-left: 3px solid #007bff; font-size: 13px; }
+        .data-item.client2 { border-left-color: #28a745; }
+        .data-item .sender { font-weight: 600; color: #333; }
+        .data-item .text { color: #555; }
+        .data-item .time { font-size: 11px; color: #999; float: right; }
+        .data-item .type-icon { margin-right: 5px; }
+        
+        /* Event Logs - Collapsible at bottom */
+        .logs-section { background: white; border-radius: 8px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .logs-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+        .logs-header h3 { margin: 0; font-size: 14px; color: #666; }
+        .logs-body { display: none; margin-top: 10px; }
+        .logs-body.open { display: flex; gap: 15px; }
+        .log-panel { flex: 1; }
+        .log-panel h4 { margin: 0 0 8px; font-size: 12px; color: #007bff; }
+        .log-panel h4.client2 { color: #28a745; }
+        .log { background: #f8f9fa; border: 1px solid #eee; border-radius: 4px; padding: 8px; max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 11px; }
+        .log-entry { margin-bottom: 3px; padding: 3px 5px; border-radius: 2px; }
+        .log-entry.info { background: #e7f3ff; }
+        .log-entry.event { background: #d4edda; }
+        .log-entry.error { background: #f8d7da; }
+        .log-entry.send { background: #fff3cd; }
+        
+        /* Empty State */
+        .empty-state { text-align: center; color: #999; padding: 40px; font-size: 13px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔄 Syntrix Realtime Chat <span class="sdk-badge">SDK Demo</span></h1>
+        
+        <!-- Global Control Bar -->
+        <div class="control-bar">
+            <div class="control-row">
+                <div class="control-group">
+                    <label>Collection:</label>
+                    <input type="text" id="collection" value="messages">
+                </div>
+                <div class="control-group">
+                    <span class="status-dot disconnected" id="status1Dot"></span>
+                    <span class="status-text" id="status1Text">Client 1: Offline</span>
+                </div>
+                <div class="control-group">
+                    <span class="status-dot disconnected" id="status2Dot"></span>
+                    <span class="status-text" id="status2Text">Client 2: Offline</span>
+                </div>
+                <button onclick="quickConnect()" id="quickConnectBtn">⚡ Quick Connect Both</button>
+                <button onclick="disconnectAll()" class="danger small">Disconnect All</button>
+            </div>
+        </div>
+
+        <!-- Client 1 Settings (Collapsible) -->
+        <div class="client-section">
+            <div class="client-header" onclick="toggleClient(1)">
+                <h3>👤 Client 1 Settings</h3>
+                <span class="toggle" id="toggle1">▼ Expand</span>
+            </div>
+            <div class="client-body" id="clientBody1">
+                <div class="client-controls">
+                    <div class="control-group">
+                        <label>Username:</label>
+                        <input type="text" id="username1" value="client1">
+                    </div>
+                    <button onclick="login(1)" id="loginBtn1">Login</button>
+                    <button onclick="connectRealtime(1)" id="connectBtn1" disabled>Connect</button>
+                    <button onclick="subscribe(1)" id="subBtn1" disabled>Subscribe</button>
+                    <button onclick="disconnectRealtime(1)" id="disconnectBtn1" disabled class="danger small">Disconnect</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Client 2 Settings (Collapsible) -->
+        <div class="client-section">
+            <div class="client-header" onclick="toggleClient(2)">
+                <h3>👤 Client 2 Settings</h3>
+                <span class="toggle" id="toggle2">▼ Expand</span>
+            </div>
+            <div class="client-body" id="clientBody2">
+                <div class="client-controls">
+                    <div class="control-group">
+                        <label>Username:</label>
+                        <input type="text" id="username2" value="client2">
+                    </div>
+                    <button onclick="login(2)" id="loginBtn2">Login</button>
+                    <button onclick="connectRealtime(2)" id="connectBtn2" disabled>Connect</button>
+                    <button onclick="subscribe(2)" id="subBtn2" disabled>Subscribe</button>
+                    <button onclick="disconnectRealtime(2)" id="disconnectBtn2" disabled class="danger small">Disconnect</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Message Input -->
+        <div class="message-section">
+            <div class="message-row">
+                <div class="input-group">
+                    <label>Message Text</label>
+                    <input type="text" id="messageText" value="Hello World!" placeholder="Type your message...">
+                </div>
+                <div class="control-group">
+                    <label>Send as</label>
+                    <select id="sendAs">
+                        <option value="1">Client 1</option>
+                        <option value="2">Client 2</option>
+                    </select>
+                </div>
+                <button onclick="sendMessage()" class="success">📤 Send Message</button>
+            </div>
+        </div>
+
+        <!-- Received Documents - Two Columns -->
+        <div class="docs-section">
+            <div class="docs-panel">
+                <h3>📥 Client 1 Received</h3>
+                <div class="data-list" id="data1">
+                    <div class="empty-state">No messages yet. Connect and subscribe to see realtime updates.</div>
+                </div>
+            </div>
+            <div class="docs-panel">
+                <h3 class="client2">📥 Client 2 Received</h3>
+                <div class="data-list" id="data2">
+                    <div class="empty-state">No messages yet. Connect and subscribe to see realtime updates.</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Event Logs (Collapsible) -->
+        <div class="logs-section">
+            <div class="logs-header" onclick="toggleLogs()">
+                <h3>📋 Event Logs</h3>
+                <span class="toggle" id="logsToggle">▼ Expand</span>
+            </div>
+            <div class="logs-body" id="logsBody">
+                <div class="log-panel">
+                    <h4>Client 1</h4>
+                    <div class="log" id="log1"></div>
+                </div>
+                <div class="log-panel">
+                    <h4 class="client2">Client 2</h4>
+                    <div class="log" id="log2"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { SyntrixClient } from '../../sdk/syntrix-client-ts/dist/syntrix-browser.js';
+        
+        // Dynamically use the same host as the page, but connect to port 8080
+        const API_BASE = `http://${window.location.hostname}:8080`;
+        const MAX_MESSAGES = 20;
+        
+        const clients = {
+            1: { syntrix: null, connected: false },
+            2: { syntrix: null, connected: false }
+        };
+
+        // Toggle functions
+        window.toggleClient = function(panelId) {
+            const body = document.getElementById(`clientBody${panelId}`);
+            const toggle = document.getElementById(`toggle${panelId}`);
+            body.classList.toggle('open');
+            toggle.textContent = body.classList.contains('open') ? '▲ Collapse' : '▼ Expand';
+        };
+
+        window.toggleLogs = function() {
+            const body = document.getElementById('logsBody');
+            const toggle = document.getElementById('logsToggle');
+            body.classList.toggle('open');
+            toggle.textContent = body.classList.contains('open') ? '▲ Collapse' : '▼ Expand';
+        };
+
+        function updateStatus(panelId, status) {
+            const dot = document.getElementById(`status${panelId}Dot`);
+            const text = document.getElementById(`status${panelId}Text`);
+            dot.className = `status-dot ${status}`;
+            const statusText = status === 'connected' ? 'Online' : status === 'connecting' ? 'Connecting...' : 'Offline';
+            text.textContent = `Client ${panelId}: ${statusText}`;
+        }
+
+        function log(panelId, message, type = 'info') {
+            const logEl = document.getElementById(`log${panelId}`);
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            const time = new Date().toLocaleTimeString();
+            entry.textContent = `[${time}] ${message}`;
+            logEl.insertBefore(entry, logEl.firstChild);
+            // Keep only last 50 entries
+            while (logEl.children.length > 50) {
+                logEl.removeChild(logEl.lastChild);
+            }
+        }
+
+        function addToData(panelId, delta) {
+            const dataEl = document.getElementById(`data${panelId}`);
+            // Remove empty state if exists
+            const emptyState = dataEl.querySelector('.empty-state');
+            if (emptyState) emptyState.remove();
+            
+            const item = document.createElement('div');
+            item.className = `data-item ${panelId === 2 ? 'client2' : ''}`;
+            const doc = delta.document || {};
+            const sender = doc.sender || 'unknown';
+            const text = doc.text || JSON.stringify(doc);
+            const time = new Date().toLocaleTimeString();
+            const typeIcon = delta.type === 'create' ? '🆕' : delta.type === 'update' ? '✏️' : delta.type === 'delete' ? '🗑️' : '📸';
+            
+            item.innerHTML = `<span class="type-icon">${typeIcon}</span><span class="sender">${sender}:</span> <span class="text">${text}</span><span class="time">${time}</span>`;
+            dataEl.insertBefore(item, dataEl.firstChild);
+            
+            while (dataEl.children.length > MAX_MESSAGES) {
+                dataEl.removeChild(dataEl.lastChild);
+            }
+        }
+
+        // Quick connect both clients
+        window.quickConnect = async function() {
+            const collection = document.getElementById('collection').value;
+            document.getElementById('quickConnectBtn').disabled = true;
+            document.getElementById('quickConnectBtn').textContent = '⏳ Connecting...';
+            
+            try {
+                for (const panelId of [1, 2]) {
+                    const username = document.getElementById(`username${panelId}`).value;
+                    const password = 'password_' + username; // Auto-generate password (min 8 chars)
+                    
+                    const syntrix = new SyntrixClient(API_BASE);
+                    await syntrix.login(username, password);
+                    clients[panelId].syntrix = syntrix;
+                    log(panelId, `✅ Logged in as ${username}`, 'event');
+                    
+                    const rt = syntrix.realtime();
+                    
+                    rt.on('onConnect', () => {
+                        updateStatus(panelId, 'connected');
+                        clients[panelId].connected = true;
+                        log(panelId, '✅ Connected', 'event');
+                        
+                        // Auto subscribe
+                        rt.subscribe({
+                            query: { collection, filters: [] },
+                            includeData: true,
+                            sendSnapshot: true
+                        });
+                        log(panelId, `📡 Subscribed to "${collection}"`, 'event');
+                    });
+
+                    rt.on('onDisconnect', () => {
+                        updateStatus(panelId, 'disconnected');
+                        clients[panelId].connected = false;
+                        log(panelId, '🔌 Disconnected', 'info');
+                    });
+
+                    rt.on('onError', (error) => {
+                        log(panelId, `❌ Error: ${error.message}`, 'error');
+                    });
+
+                    rt.on('onEvent', (event) => {
+                        log(panelId, `📥 ${event.delta.type}: ${event.delta.document?.text || event.delta.id}`, 'event');
+                        addToData(panelId, event.delta);
+                    });
+
+                    rt.on('onSnapshot', (snapshot) => {
+                        log(panelId, `📸 Snapshot: ${snapshot.documents.length} docs`, 'event');
+                        snapshot.documents.forEach(doc => {
+                            addToData(panelId, { type: 'snapshot', document: doc });
+                        });
+                    });
+
+                    await rt.connect();
+                }
+            } catch (e) {
+                log(1, `❌ Quick connect failed: ${e.message}`, 'error');
+            }
+            
+            document.getElementById('quickConnectBtn').disabled = false;
+            document.getElementById('quickConnectBtn').textContent = '⚡ Quick Connect Both';
+        };
+
+        window.disconnectAll = function() {
+            for (const panelId of [1, 2]) {
+                if (clients[panelId].syntrix) {
+                    clients[panelId].syntrix.realtime().disconnect();
+                    clients[panelId].syntrix = null;
+                    clients[panelId].connected = false;
+                    updateStatus(panelId, 'disconnected');
+                }
+            }
+        };
+
+        window.login = async function(panelId) {
+            const username = document.getElementById(`username${panelId}`).value;
+            const password = 'password_' + username;
+            
+            try {
+                log(panelId, `Logging in as ${username}...`, 'info');
+                const syntrix = new SyntrixClient(API_BASE);
+                await syntrix.login(username, password);
+                clients[panelId].syntrix = syntrix;
+                log(panelId, `✅ Logged in`, 'event');
+                
+                document.getElementById(`connectBtn${panelId}`).disabled = false;
+            } catch (e) {
+                log(panelId, `❌ Login failed: ${e.message}`, 'error');
+            }
+        };
+
+        window.connectRealtime = async function(panelId) {
+            const syntrix = clients[panelId].syntrix;
+            if (!syntrix) return;
+
+            updateStatus(panelId, 'connecting');
+            const collection = document.getElementById('collection').value;
+
+            try {
+                const rt = syntrix.realtime();
+                
+                rt.on('onConnect', () => {
+                    updateStatus(panelId, 'connected');
+                    clients[panelId].connected = true;
+                    log(panelId, '✅ Connected', 'event');
+                    document.getElementById(`subBtn${panelId}`).disabled = false;
+                    document.getElementById(`disconnectBtn${panelId}`).disabled = false;
+                });
+
+                rt.on('onDisconnect', () => {
+                    updateStatus(panelId, 'disconnected');
+                    clients[panelId].connected = false;
+                    log(panelId, '🔌 Disconnected', 'info');
+                });
+
+                rt.on('onError', (error) => {
+                    log(panelId, `❌ ${error.message}`, 'error');
+                });
+
+                rt.on('onEvent', (event) => {
+                    log(panelId, `📥 ${event.delta.type}`, 'event');
+                    addToData(panelId, event.delta);
+                });
+
+                rt.on('onSnapshot', (snapshot) => {
+                    log(panelId, `📸 ${snapshot.documents.length} docs`, 'event');
+                    snapshot.documents.forEach(doc => {
+                        addToData(panelId, { type: 'snapshot', document: doc });
+                    });
+                });
+
+                await rt.connect();
+            } catch (e) {
+                log(panelId, `❌ Connect failed: ${e.message}`, 'error');
+                updateStatus(panelId, 'disconnected');
+            }
+        };
+
+        window.disconnectRealtime = function(panelId) {
+            if (clients[panelId].syntrix) {
+                clients[panelId].syntrix.realtime().disconnect();
+            }
+        };
+
+        window.subscribe = function(panelId) {
+            const syntrix = clients[panelId].syntrix;
+            if (!syntrix) return;
+
+            const collection = document.getElementById('collection').value;
+            syntrix.realtime().subscribe({
+                query: { collection, filters: [] },
+                includeData: true,
+                sendSnapshot: true
+            });
+            log(panelId, `📡 Subscribed to "${collection}"`, 'event');
+        };
+
+        window.sendMessage = async function() {
+            const panelId = parseInt(document.getElementById('sendAs').value);
+            const syntrix = clients[panelId].syntrix;
+            
+            if (!syntrix) {
+                alert('Please connect Client ' + panelId + ' first!');
+                return;
+            }
+
+            const text = document.getElementById('messageText').value;
+            const sender = document.getElementById(`username${panelId}`).value;
+            const collection = document.getElementById('collection').value;
+
+            try {
+                log(panelId, `📤 Sending: "${text}"`, 'send');
+                await syntrix.collection(collection).add({ text, sender });
+                log(panelId, `✅ Sent`, 'event');
+                document.getElementById('messageText').value = '';
+            } catch (e) {
+                log(panelId, `❌ Send failed: ${e.message}`, 'error');
+            }
+        };
+
+        // Enter key to send
+        document.getElementById('messageText').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+    </script>
+</body>
+</html>

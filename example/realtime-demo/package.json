@@ -1,0 +1,15 @@
+{
+  "name": "realtime-demo",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "cd ../.. && bunx serve -l 3000 -C"
+  },
+  "dependencies": {
+    "@syntrix/client": "file:../../sdk/syntrix-client-ts"
+  },
+  "devDependencies": {
+    "serve": "^14.2.0"
+  }
+}

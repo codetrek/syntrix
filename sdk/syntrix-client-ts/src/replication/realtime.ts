@@ -105,7 +105,7 @@ export class RealtimeClient {
             this.sendMessage({
               id: 'auth-init',
               type: MessageType.Auth,
-              payload: JSON.stringify({ token }),
+              payload: { token },
             });
           }
           this.setState('connected');
