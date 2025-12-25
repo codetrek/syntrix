@@ -32,7 +32,10 @@ func TestNewManager_DefaultListenHost(t *testing.T) {
 
 func TestManager_Init_StorageError(t *testing.T) {
 	cfg := config.LoadConfig()
-	cfg.Storage.Document.Mongo.URI = "mongodb://invalid-host:1"
+	if backend, ok := cfg.Storage.Backends["default_mongo"]; ok {
+		backend.Mongo.URI = "mongodb://invalid-host:1"
+		cfg.Storage.Backends["default_mongo"] = backend
+	}
 	opt := Options{RunQuery: true}
 	mgr := NewManager(cfg, opt)
 
@@ -154,26 +157,23 @@ func TestManager_InitStorage_SkipsWhenNoServices(t *testing.T) {
 
 	err := mgr.initStorage(ctx)
 	assert.NoError(t, err)
-	assert.Nil(t, mgr.docProvider)
-	assert.Nil(t, mgr.authProvider)
+	assert.Nil(t, mgr.storageFactory)
+	assert.Nil(t, mgr.docStore)
+	assert.Nil(t, mgr.userStore)
 }
 
 func TestManager_Init_RunAuthPath(t *testing.T) {
-	origDocFactory := documentProviderFactory
-	origAuthFactory := authProviderFactory
-	defer func() {
-		documentProviderFactory = origDocFactory
-		authProviderFactory = origAuthFactory
-	}()
+	origFactory := storageFactoryFactory
+	defer func() { storageFactoryFactory = origFactory }()
 
 	fakeDocStore := &fakeDocumentStore{}
-	documentProviderFactory = func(ctx context.Context, cfg config.StorageConfig) (storage.DocumentProvider, error) {
-		return &fakeDocumentProvider{store: fakeDocStore}, nil
-	}
-
 	fakeAuth := &fakeAuthStore{}
-	authProviderFactory = func(ctx context.Context, cfg config.StorageConfig) (storage.AuthProvider, error) {
-		return &fakeAuthProvider{users: fakeAuth, revocations: fakeAuth}, nil
+	storageFactoryFactory = func(ctx context.Context, cfg *config.Config) (storage.StorageFactory, error) {
+		return &fakeStorageFactory{
+			docStore: fakeDocStore,
+			usrStore: fakeAuth,
+			revStore: fakeAuth,
+		}, nil
 	}
 
 	cfg := config.LoadConfig()
@@ -193,12 +193,14 @@ func TestManager_Init_RunAuthPath(t *testing.T) {
 }
 
 func TestManager_Init_RunQueryPath(t *testing.T) {
-	origDocFactory := documentProviderFactory
-	defer func() { documentProviderFactory = origDocFactory }()
+	origFactory := storageFactoryFactory
+	defer func() { storageFactoryFactory = origFactory }()
 
 	fakeDocStore := &fakeDocumentStore{}
-	documentProviderFactory = func(ctx context.Context, cfg config.StorageConfig) (storage.DocumentProvider, error) {
-		return &fakeDocumentProvider{store: fakeDocStore}, nil
+	storageFactoryFactory = func(ctx context.Context, cfg *config.Config) (storage.StorageFactory, error) {
+		return &fakeStorageFactory{
+			docStore: fakeDocStore,
+		}, nil
 	}
 
 	cfg := config.LoadConfig()
@@ -207,18 +209,20 @@ func TestManager_Init_RunQueryPath(t *testing.T) {
 
 	err := mgr.Init(context.Background())
 	assert.NoError(t, err)
-	assert.NotNil(t, mgr.docProvider)
+	assert.NotNil(t, mgr.docStore)
 	assert.Len(t, mgr.servers, 1)
 	assert.Equal(t, "Query Service", mgr.serverNames[0])
 }
 
 func TestManager_Init_RunCSPPath(t *testing.T) {
-	origDocFactory := documentProviderFactory
-	defer func() { documentProviderFactory = origDocFactory }()
+	origFactory := storageFactoryFactory
+	defer func() { storageFactoryFactory = origFactory }()
 
 	fakeDocStore := &fakeDocumentStore{}
-	documentProviderFactory = func(ctx context.Context, cfg config.StorageConfig) (storage.DocumentProvider, error) {
-		return &fakeDocumentProvider{store: fakeDocStore}, nil
+	storageFactoryFactory = func(ctx context.Context, cfg *config.Config) (storage.StorageFactory, error) {
+		return &fakeStorageFactory{
+			docStore: fakeDocStore,
+		}, nil
 	}
 
 	cfg := config.LoadConfig()
@@ -227,7 +231,7 @@ func TestManager_Init_RunCSPPath(t *testing.T) {
 
 	err := mgr.Init(context.Background())
 	assert.NoError(t, err)
-	assert.NotNil(t, mgr.docProvider)
+	assert.NotNil(t, mgr.docStore)
 	assert.Len(t, mgr.servers, 1)
 	assert.Equal(t, "CSP Service", mgr.serverNames[0])
 }
@@ -359,3 +363,14 @@ func (s *stubQueryService) Pull(context.Context, storage.ReplicationPullRequest)
 func (s *stubQueryService) Push(context.Context, storage.ReplicationPushRequest) (*storage.ReplicationPushResponse, error) {
 	return nil, nil
 }
+
+type fakeStorageFactory struct {
+	docStore storage.DocumentStore
+	usrStore storage.UserStore
+	revStore storage.TokenRevocationStore
+}
+
+func (f *fakeStorageFactory) Document() storage.DocumentStore          { return f.docStore }
+func (f *fakeStorageFactory) User() storage.UserStore                  { return f.usrStore }
+func (f *fakeStorageFactory) Revocation() storage.TokenRevocationStore { return f.revStore }
+func (f *fakeStorageFactory) Close() error                             { return nil }

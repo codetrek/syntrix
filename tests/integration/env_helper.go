@@ -93,24 +93,37 @@ match:
 			Port: cspPort,
 		},
 		Storage: config.StorageConfig{
-			Document: config.DocumentStorageConfig{
-				Mongo: config.MongoDocConfig{
-					URI:            mongoURI,
-					DatabaseName:   dbName,
+			Backends: map[string]config.BackendConfig{
+				"default": {
+					Type: "mongo",
+					Mongo: config.MongoConfig{
+						URI:          mongoURI,
+						DatabaseName: dbName,
+					},
+				},
+			},
+			Topology: config.TopologyConfig{
+				Document: config.DocumentTopology{
+					BaseTopology: config.BaseTopology{
+						Strategy: "single",
+						Primary:  "default",
+					},
 					DataCollection: "documents",
 					SysCollection:  "sys",
 				},
-			},
-			User: config.UserStorageConfig{
-				Mongo: config.MongoConfig{
-					URI:            mongoURI,
-					DatabaseName:   dbName,
+				User: config.CollectionTopology{
+					BaseTopology: config.BaseTopology{
+						Strategy: "single",
+						Primary:  "default",
+					},
+					Collection: "users",
 				},
-			},
-			Revocation: config.RevocationStorageConfig{
-				Mongo: config.MongoConfig{
-					URI:            mongoURI,
-					DatabaseName:   dbName,
+				Revocation: config.CollectionTopology{
+					BaseTopology: config.BaseTopology{
+						Strategy: "single",
+						Primary:  "default",
+					},
+					Collection: "revocations",
 				},
 			},
 		},

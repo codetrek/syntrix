@@ -59,7 +59,7 @@ func (m *Manager) Start(bgCtx context.Context) {
 		m.wg.Add(1)
 		go func() {
 			defer m.wg.Done()
-			if err := m.triggerService.Watch(bgCtx, m.docProvider.Document()); err != nil {
+			if err := m.triggerService.Watch(bgCtx, m.docStore); err != nil {
 				log.Printf("Failed to start trigger watcher: %v", err)
 			}
 		}()

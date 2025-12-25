@@ -1,21 +1,21 @@
 package storage
 
 import (
-	"context"
-
-	"github.com/codetrek/syntrix/internal/config"
-	"github.com/codetrek/syntrix/internal/storage/internal/mongo"
+	"github.com/codetrek/syntrix/internal/storage/types"
 )
 
-// NewDocumentProvider creates a new document provider
-func NewDocumentProvider(ctx context.Context, cfg config.StorageConfig) (DocumentProvider, error) {
-	// Currently only supports Mongo
-	return mongo.NewDocumentProvider(ctx, cfg.Document.Mongo.URI, cfg.Document.Mongo.DatabaseName, cfg.Document.Mongo.DataCollection, cfg.Document.Mongo.SysCollection, cfg.Document.Mongo.SoftDeleteRetention)
-}
+// StorageFactory defines the interface for creating and retrieving storage stores.
+// It abstracts the underlying topology and provider management.
+type StorageFactory interface {
+	// Document returns the document store.
+	Document() types.DocumentStore
 
-// NewAuthProvider creates a new auth provider
-func NewAuthProvider(ctx context.Context, cfg config.StorageConfig) (AuthProvider, error) {
-	// Currently only supports Mongo
-	// Note: We use User config for both User and Revocation for now as they share the same provider in Mongo implementation
-	return mongo.NewAuthProvider(ctx, cfg.User.Mongo.URI, cfg.User.Mongo.DatabaseName)
+	// User returns the user store.
+	User() types.UserStore
+
+	// Revocation returns the token revocation store.
+	Revocation() types.TokenRevocationStore
+
+	// Close closes all underlying providers and connections.
+	Close() error
 }

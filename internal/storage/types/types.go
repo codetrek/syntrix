@@ -145,10 +145,26 @@ const (
 )
 
 // Router defines the interface for selecting stores based on operation
+// Deprecated: Use specific routers instead
 type Router interface {
 	SelectDocument(op OpKind) DocumentStore
 	SelectUser(op OpKind) UserStore
 	SelectRevocation(op OpKind) TokenRevocationStore
+}
+
+// DocumentRouter routes document operations
+type DocumentRouter interface {
+	Select(op OpKind) DocumentStore
+}
+
+// UserRouter routes user operations
+type UserRouter interface {
+	Select(op OpKind) UserStore
+}
+
+// RevocationRouter routes revocation operations
+type RevocationRouter interface {
+	Select(op OpKind) TokenRevocationStore
 }
 
 // EventType represents the type of change

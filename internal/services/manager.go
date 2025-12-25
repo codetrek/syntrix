@@ -39,8 +39,10 @@ type Manager struct {
 	opts            Options
 	servers         []*http.Server
 	serverNames     []string
-	docProvider     storage.DocumentProvider
-	authProvider    storage.AuthProvider
+	storageFactory  storage.StorageFactory
+	docStore        storage.DocumentStore
+	userStore       storage.UserStore
+	revocationStore storage.TokenRevocationStore
 	authService     auth.Service
 	tokenService    *auth.TokenService
 	rtServer        *realtime.Server

@@ -28,20 +28,20 @@ func NewAuthProvider(ctx context.Context, uri string, dbName string) (types.Auth
 	}
 
 	db := client.Database(dbName)
-	
-	users := NewUserStore(db)
-	revocations := NewRevocationStore(db)
-	
+
+	users := NewUserStore(db, "")
+	revocations := NewRevocationStore(db, "")
+
 	if err := users.EnsureIndexes(ctx); err != nil {
 		client.Disconnect(ctx)
 		return nil, err
 	}
-	
+
 	if err := revocations.EnsureIndexes(ctx); err != nil {
 		client.Disconnect(ctx)
 		return nil, err
 	}
-	
+
 	return &authProvider{
 		client:      client,
 		users:       users,

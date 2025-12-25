@@ -31,7 +31,7 @@ func setupTestRevocationStore(t *testing.T) (types.TokenRevocationStore, func())
 	err = db.Drop(ctx)
 	require.NoError(t, err)
 
-	store := NewRevocationStore(db)
+	store := NewRevocationStore(db, "")
 	err = store.EnsureIndexes(ctx)
 	require.NoError(t, err)
 

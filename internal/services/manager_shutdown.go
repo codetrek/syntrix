@@ -7,17 +7,10 @@ import (
 
 func (m *Manager) Shutdown(ctx context.Context) {
 	// Close storage providers if initialized
-	if m.docProvider != nil {
+	if m.storageFactory != nil {
 		defer func() {
-			if err := m.docProvider.Close(context.Background()); err != nil {
-				log.Printf("Error closing document provider: %v", err)
-			}
-		}()
-	}
-	if m.authProvider != nil {
-		defer func() {
-			if err := m.authProvider.Close(context.Background()); err != nil {
-				log.Printf("Error closing auth provider: %v", err)
+			if err := m.storageFactory.Close(); err != nil {
+				log.Printf("Error closing storage factory: %v", err)
 			}
 		}()
 	}

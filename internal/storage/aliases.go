@@ -21,6 +21,10 @@ type ReplicationPushChange = types.ReplicationPushChange
 type ReplicationPushRequest = types.ReplicationPushRequest
 type ReplicationPushResponse = types.ReplicationPushResponse
 type WatchOptions = types.WatchOptions
+type Router = types.Router
+type DocumentRouter = types.DocumentRouter
+type UserRouter = types.UserRouter
+type RevocationRouter = types.RevocationRouter
 
 const (
 	OpRead    = types.OpRead

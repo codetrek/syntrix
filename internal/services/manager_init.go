@@ -28,12 +28,8 @@ var natsConnector = nats.Connect
 var triggerPublisherFactory = trigger.NewEventPublisher
 var triggerConsumerFactory = trigger.NewConsumer
 var triggerEvaluatorFactory = trigger.NewEvaluator
-var documentProviderFactory = func(ctx context.Context, cfg config.StorageConfig) (storage.DocumentProvider, error) {
-	return storage.NewDocumentProvider(ctx, cfg)
-}
-
-var authProviderFactory = func(ctx context.Context, cfg config.StorageConfig) (storage.AuthProvider, error) {
-	return storage.NewAuthProvider(ctx, cfg)
+var storageFactoryFactory = func(ctx context.Context, cfg *config.Config) (storage.StorageFactory, error) {
+	return storage.NewFactory(ctx, cfg)
 }
 
 func (m *Manager) Init(ctx context.Context) error {
@@ -86,15 +82,14 @@ func (m *Manager) initStorage(ctx context.Context) error {
 	}
 
 	var err error
-	m.docProvider, err = documentProviderFactory(ctx, m.cfg.Storage)
+	m.storageFactory, err = storageFactoryFactory(ctx, m.cfg)
 	if err != nil {
-		return fmt.Errorf("failed to connect to document storage: %w", err)
+		return fmt.Errorf("failed to initialize storage factory: %w", err)
 	}
 
-	m.authProvider, err = authProviderFactory(ctx, m.cfg.Storage)
-	if err != nil {
-		return fmt.Errorf("failed to connect to auth storage: %w", err)
-	}
+	m.docStore = m.storageFactory.Document()
+	m.userStore = m.storageFactory.User()
+	m.revocationStore = m.storageFactory.Revocation()
 
 	log.Println("Connected to Storage successfully.")
 	return nil
@@ -150,7 +145,11 @@ func (m *Manager) initAuthService(ctx context.Context) error {
 		return nil
 	}
 
-	m.authService = auth.NewAuthService(m.authProvider.Users(), m.authProvider.Revocations(), m.tokenService)
+	m.authService = auth.NewAuthService(
+		m.userStore,
+		m.revocationStore,
+		m.tokenService,
+	)
 
 	log.Println("Initialized Auth Service")
 	return nil
@@ -161,7 +160,8 @@ func (m *Manager) initQueryServices() query.Service {
 		return nil
 	}
 
-	engine := query.NewEngine(m.docProvider.Document(), m.cfg.Query.CSPServiceURL)
+	// Use routed store which handles OpRead/OpWrite internally
+	engine := query.NewEngine(m.docStore, m.cfg.Query.CSPServiceURL)
 	m.servers = append(m.servers, &http.Server{
 		Addr:    listenAddr(m.opts.ListenHost, m.cfg.Query.Port),
 		Handler: query.NewServer(engine),
@@ -191,7 +191,7 @@ func (m *Manager) initAPIServer(queryService query.Service) error {
 	}
 
 	// Always initialize realtime server as part of gateway
-	m.rtServer = realtime.NewServer(queryService, m.cfg.Storage.Document.Mongo.DataCollection)
+	m.rtServer = realtime.NewServer(queryService, m.cfg.Storage.Topology.Document.DataCollection)
 
 	apiServer := api.NewServer(queryService, m.authService, authzEngine, m.rtServer)
 	m.servers = append(m.servers, &http.Server{
@@ -204,7 +204,7 @@ func (m *Manager) initAPIServer(queryService query.Service) error {
 }
 
 func (m *Manager) initCSPServer() {
-	cspServer := csp.NewServer(m.docProvider.Document())
+	cspServer := csp.NewServer(m.docStore)
 	m.servers = append(m.servers, &http.Server{
 		Addr:    listenAddr(m.opts.ListenHost, m.cfg.CSP.Port),
 		Handler: cspServer,

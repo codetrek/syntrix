@@ -15,9 +15,12 @@ type revocationStore struct {
 	coll *mongo.Collection
 }
 
-func NewRevocationStore(db *mongo.Database) types.TokenRevocationStore {
+func NewRevocationStore(db *mongo.Database, collectionName string) types.TokenRevocationStore {
+	if collectionName == "" {
+		collectionName = "auth_revocations"
+	}
 	return &revocationStore{
-		coll: db.Collection("auth_revocations"),
+		coll: db.Collection(collectionName),
 	}
 }
 
