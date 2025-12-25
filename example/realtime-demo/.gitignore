@@ -1,2 +1,3 @@
 # Build output
-syntrix-browser.js
+dist/
+node_modules/
