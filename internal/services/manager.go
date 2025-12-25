@@ -20,6 +20,7 @@ type Options struct {
 	RunQuery            bool
 	RunTriggerEvaluator bool
 	RunTriggerWorker    bool
+	ListenHost          string
 
 	ForceQueryClient bool
 }
@@ -50,6 +51,10 @@ type Manager struct {
 }
 
 func NewManager(cfg *config.Config, opts Options) *Manager {
+	if opts.ListenHost == "" {
+		opts.ListenHost = "localhost"
+	}
+
 	return &Manager{
 		cfg:  cfg,
 		opts: opts,

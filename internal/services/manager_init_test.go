@@ -23,6 +23,13 @@ func TestManager_TokenServiceGetter(t *testing.T) {
 	assert.Nil(t, mgr.TokenService())
 }
 
+func TestNewManager_DefaultListenHost(t *testing.T) {
+	cfg := config.LoadConfig()
+	mgr := NewManager(cfg, Options{})
+
+	assert.Equal(t, "localhost", mgr.opts.ListenHost)
+}
+
 func TestManager_Init_StorageError(t *testing.T) {
 	cfg := config.LoadConfig()
 	cfg.Storage.Document.Mongo.URI = "mongodb://invalid-host:1"
@@ -117,6 +124,16 @@ func TestManager_InitAPIServer_WithRealtime(t *testing.T) {
 	assert.NotNil(t, mgr.rtServer)
 	assert.Len(t, mgr.servers, 1)
 	assert.Equal(t, "Unified Gateway", mgr.serverNames[0])
+}
+
+func TestListenAddr_WithHost(t *testing.T) {
+	addr := listenAddr("localhost", 8080)
+	assert.Equal(t, "localhost:8080", addr)
+}
+
+func TestListenAddr_EmptyHost(t *testing.T) {
+	addr := listenAddr("", 8080)
+	assert.Equal(t, ":8080", addr)
 }
 
 func TestManager_InitTriggerServices_NATSFailure(t *testing.T) {
@@ -292,6 +309,7 @@ func (f *fakeAuthStore) Close(ctx context.Context) error { return nil }
 type fakeDocumentProvider struct {
 	store storage.DocumentStore
 }
+
 func (f *fakeDocumentProvider) Document() storage.DocumentStore { return f.store }
 func (f *fakeDocumentProvider) Close(ctx context.Context) error { return nil }
 
@@ -299,9 +317,10 @@ type fakeAuthProvider struct {
 	users       auth.UserStore
 	revocations auth.TokenRevocationStore
 }
-func (f *fakeAuthProvider) Users() auth.UserStore { return f.users }
+
+func (f *fakeAuthProvider) Users() auth.UserStore                  { return f.users }
 func (f *fakeAuthProvider) Revocations() auth.TokenRevocationStore { return f.revocations }
-func (f *fakeAuthProvider) Close(ctx context.Context) error { return nil }
+func (f *fakeAuthProvider) Close(ctx context.Context) error        { return nil }
 
 type stubQueryService struct{}
 

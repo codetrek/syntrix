@@ -15,10 +15,6 @@ run: build
 	@echo "Running $(APP_NAME)..."
 	@./$(BUILD_DIR)/$(APP_NAME) --all
 
-run-realtime: build
-	@echo "Running $(APP_NAME)..."
-	@./$(BUILD_DIR)/$(APP_NAME) --realtime
-
 run-query: build
 	@echo "Running $(APP_NAME)..."
 	@./$(BUILD_DIR)/$(APP_NAME) --query
@@ -31,6 +27,14 @@ run-api: build
 	@echo "Running $(APP_NAME)..."
 	@./$(BUILD_DIR)/$(APP_NAME) --api
 
+run-trigger-evaluator: build
+	@echo "Running $(APP_NAME)..."
+	@./$(BUILD_DIR)/$(APP_NAME) --trigger-evaluator
+
+run-trigger-worker: build
+	@echo "Running $(APP_NAME)..."
+	@./$(BUILD_DIR)/$(APP_NAME) --trigger-worker
+
 run-cli: build
 	@echo "Running $(CLI_APP_NAME)..."
 	@./$(BUILD_DIR)/$(CLI_APP_NAME)
@@ -38,6 +42,11 @@ run-cli: build
 test:
 	@echo "Running tests..."
 	@go test ./... -count=1
+
+coverage:
+	@echo "Running tests with coverage..."
+	@go test ./... -coverprofile=coverage.out
+	@go tool cover -html=coverage.out
 
 clean:
 	@echo "Cleaning..."

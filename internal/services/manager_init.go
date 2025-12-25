@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/codetrek/syntrix/internal/api"
 	"github.com/codetrek/syntrix/internal/api/realtime"
@@ -161,7 +163,7 @@ func (m *Manager) initQueryServices() query.Service {
 
 	engine := query.NewEngine(m.docProvider.Document(), m.cfg.Query.CSPServiceURL)
 	m.servers = append(m.servers, &http.Server{
-		Addr:    fmt.Sprintf(":%d", m.cfg.Query.Port),
+		Addr:    listenAddr(m.opts.ListenHost, m.cfg.Query.Port),
 		Handler: query.NewServer(engine),
 	})
 	m.serverNames = append(m.serverNames, "Query Service")
@@ -193,7 +195,7 @@ func (m *Manager) initAPIServer(queryService query.Service) error {
 
 	apiServer := api.NewServer(queryService, m.authService, authzEngine, m.rtServer)
 	m.servers = append(m.servers, &http.Server{
-		Addr:    fmt.Sprintf(":%d", m.cfg.Gateway.Port),
+		Addr:    listenAddr(m.opts.ListenHost, m.cfg.Gateway.Port),
 		Handler: apiServer,
 	})
 	m.serverNames = append(m.serverNames, "Unified Gateway")
@@ -204,10 +206,18 @@ func (m *Manager) initAPIServer(queryService query.Service) error {
 func (m *Manager) initCSPServer() {
 	cspServer := csp.NewServer(m.docProvider.Document())
 	m.servers = append(m.servers, &http.Server{
-		Addr:    fmt.Sprintf(":%d", m.cfg.CSP.Port),
+		Addr:    listenAddr(m.opts.ListenHost, m.cfg.CSP.Port),
 		Handler: cspServer,
 	})
 	m.serverNames = append(m.serverNames, "CSP Service")
+}
+
+func listenAddr(host string, port int) string {
+	if host == "" {
+		return fmt.Sprintf(":%d", port)
+	}
+
+	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 func (m *Manager) initTriggerServices() error {

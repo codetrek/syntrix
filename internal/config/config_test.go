@@ -11,66 +11,66 @@ import (
 )
 
 func TestLoadConfig_Defaults(t *testing.T) {
-// Ensure no env vars interfere
-os.Unsetenv("MONGO_URI")
-os.Unsetenv("DB_NAME")
-os.Unsetenv("GATEWAY_PORT")
+	// Ensure no env vars interfere
+	os.Unsetenv("MONGO_URI")
+	os.Unsetenv("DB_NAME")
+	os.Unsetenv("GATEWAY_PORT")
 
-cfg := LoadConfig()
+	cfg := LoadConfig()
 
 	assert.Equal(t, "mongodb://localhost:27017", cfg.Storage.Document.Mongo.URI)
 	assert.Equal(t, "syntrix", cfg.Storage.Document.Mongo.DatabaseName)
 }
 
 func TestLoadConfig_EnvVars(t *testing.T) {
-os.Setenv("MONGO_URI", "mongodb://test:27017")
-os.Setenv("DB_NAME", "testdb")
-os.Setenv("GATEWAY_PORT", "9090")
-os.Setenv("GATEWAY_QUERY_SERVICE_URL", "http://api-env")
-os.Setenv("QUERY_PORT", "9092")
-os.Setenv("QUERY_CSP_SERVICE_URL", "http://csp-env")
-os.Setenv("CSP_PORT", "9093")
-os.Setenv("TRIGGER_NATS_URL", "nats://env:4222")
-os.Setenv("TRIGGER_RULES_FILE", "custom.json")
-defer func() {
-os.Unsetenv("MONGO_URI")
-os.Unsetenv("DB_NAME")
-os.Unsetenv("GATEWAY_PORT")
-os.Unsetenv("GATEWAY_QUERY_SERVICE_URL")
-os.Unsetenv("QUERY_PORT")
-os.Unsetenv("QUERY_CSP_SERVICE_URL")
-os.Unsetenv("CSP_PORT")
-os.Unsetenv("TRIGGER_NATS_URL")
-os.Unsetenv("TRIGGER_RULES_FILE")
-}()
+	os.Setenv("MONGO_URI", "mongodb://test:27017")
+	os.Setenv("DB_NAME", "testdb")
+	os.Setenv("GATEWAY_PORT", "9090")
+	os.Setenv("GATEWAY_QUERY_SERVICE_URL", "http://api-env")
+	os.Setenv("QUERY_PORT", "9092")
+	os.Setenv("QUERY_CSP_SERVICE_URL", "http://csp-env")
+	os.Setenv("CSP_PORT", "9093")
+	os.Setenv("TRIGGER_NATS_URL", "nats://env:4222")
+	os.Setenv("TRIGGER_RULES_FILE", "custom.json")
+	defer func() {
+		os.Unsetenv("MONGO_URI")
+		os.Unsetenv("DB_NAME")
+		os.Unsetenv("GATEWAY_PORT")
+		os.Unsetenv("GATEWAY_QUERY_SERVICE_URL")
+		os.Unsetenv("QUERY_PORT")
+		os.Unsetenv("QUERY_CSP_SERVICE_URL")
+		os.Unsetenv("CSP_PORT")
+		os.Unsetenv("TRIGGER_NATS_URL")
+		os.Unsetenv("TRIGGER_RULES_FILE")
+	}()
 
 	cfg := LoadConfig()
 
 	assert.Equal(t, "mongodb://test:27017", cfg.Storage.Document.Mongo.URI)
 	assert.Equal(t, "testdb", cfg.Storage.Document.Mongo.DatabaseName)
-assert.Equal(t, 9090, cfg.Gateway.Port)
-assert.Equal(t, "http://api-env", cfg.Gateway.QueryServiceURL)
-assert.Equal(t, 9092, cfg.Query.Port)
-assert.Equal(t, "http://csp-env", cfg.Query.CSPServiceURL)
-assert.Equal(t, 9093, cfg.CSP.Port)
-assert.Equal(t, "nats://env:4222", cfg.Trigger.NatsURL)
-assert.True(t, strings.HasSuffix(cfg.Trigger.RulesFile, filepath.Join("config", "custom.json")))
+	assert.Equal(t, 9090, cfg.Gateway.Port)
+	assert.Equal(t, "http://api-env", cfg.Gateway.QueryServiceURL)
+	assert.Equal(t, 9092, cfg.Query.Port)
+	assert.Equal(t, "http://csp-env", cfg.Query.CSPServiceURL)
+	assert.Equal(t, 9093, cfg.CSP.Port)
+	assert.Equal(t, "nats://env:4222", cfg.Trigger.NatsURL)
+	assert.True(t, strings.HasSuffix(cfg.Trigger.RulesFile, filepath.Join("config", "custom.json")))
 }
 
 func TestLoadConfig_LoadFileErrors(t *testing.T) {
-require.NoError(t, os.Mkdir("config", 0755))
-defer os.RemoveAll("config")
+	require.NoError(t, os.Mkdir("config", 0755))
+	defer os.RemoveAll("config")
 
-// Create a directory where a file is expected to trigger read error path
-require.NoError(t, os.Mkdir("config/config.yml", 0755))
+	// Create a directory where a file is expected to trigger read error path
+	require.NoError(t, os.Mkdir("config/config.yml", 0755))
 
-// Malformed YAML to trigger parse error path
-require.NoError(t, os.WriteFile("config/config.local.yml", []byte("not: [valid"), 0644))
+	// Malformed YAML to trigger parse error path
+	require.NoError(t, os.WriteFile("config/config.local.yml", []byte("not: [valid"), 0644))
 
-cfg := LoadConfig()
+	cfg := LoadConfig()
 
-// Defaults should remain when files fail to load/parse
-assert.Equal(t, 8080, cfg.Gateway.Port)
+	// Defaults should remain when files fail to load/parse
+	assert.Equal(t, 8080, cfg.Gateway.Port)
 	assert.Equal(t, "mongodb://localhost:27017", cfg.Storage.Document.Mongo.URI)
 }
 
@@ -96,19 +96,15 @@ gateway:
 
 	assert.Equal(t, "mongodb://file:27017", cfg.Storage.Document.Mongo.URI)
 	assert.Equal(t, "filedb", cfg.Storage.Document.Mongo.DatabaseName)
-
 }
 
 func TestResolvePath(t *testing.T) {
-// Test absolute path
-absPath := "/absolute/path/to/file"
-assert.Equal(t, absPath, resolvePath("base", absPath))
+	absPath := filepath.Join(t.TempDir(), "absolute", "path", "to", "file")
+	assert.Equal(t, absPath, resolvePath("base", absPath))
 
-// Test relative path
-relPath := "relative/path/to/file"
-expected := filepath.Join("base", relPath)
-assert.Equal(t, expected, resolvePath("base", relPath))
+	relPath := "relative/path/to/file"
+	expected := filepath.Join("base", relPath)
+	assert.Equal(t, expected, resolvePath("base", relPath))
 
-// Test empty path
-assert.Equal(t, "", resolvePath("base", ""))
+	assert.Equal(t, "", resolvePath("base", ""))
 }

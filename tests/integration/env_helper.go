@@ -134,6 +134,7 @@ match:
 		RunCSP:              true,
 		RunTriggerEvaluator: true,
 		RunTriggerWorker:    true,
+		ListenHost:          "localhost",
 	}
 	for _, mod := range optsModifiers {
 		mod(&opts)
@@ -242,7 +243,7 @@ func waitForPort(t *testing.T, port int) {
 }
 
 func getFreePort(t *testing.T) int {
-	listener, err := net.Listen("tcp", ":0")
+	listener, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
 	defer listener.Close()
 
