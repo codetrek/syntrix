@@ -32,7 +32,7 @@ func TestHandlePull(t *testing.T) {
 		Checkpoint: 100,
 	}
 
-	mockService.On("Pull", mock.Anything, mock.AnythingOfType("storage.ReplicationPullRequest")).Return(resp, nil)
+	mockService.On("Pull", mock.Anything, mock.AnythingOfType("types.ReplicationPullRequest")).Return(resp, nil)
 
 	req, _ := http.NewRequest("GET", "/replication/v1/pull?collection=rooms/room-1/messages&checkpoint=0&limit=10", nil)
 	rr := httptest.NewRecorder()
@@ -55,7 +55,7 @@ func TestHandlePush(t *testing.T) {
 		Conflicts: []*storage.Document{},
 	}
 
-	mockService.On("Push", mock.Anything, mock.AnythingOfType("storage.ReplicationPushRequest")).Return(resp, nil)
+	mockService.On("Push", mock.Anything, mock.AnythingOfType("types.ReplicationPushRequest")).Return(resp, nil)
 
 	pushReq := ReplicaPushRequest{
 		Collection: "rooms/room-1/messages",
@@ -126,7 +126,7 @@ func TestHandlePull_EngineError(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	mockService.On("Pull", mock.Anything, mock.AnythingOfType("storage.ReplicationPullRequest")).Return(nil, errors.New("boom"))
+	mockService.On("Pull", mock.Anything, mock.AnythingOfType("types.ReplicationPullRequest")).Return(nil, errors.New("boom"))
 
 	req, _ := http.NewRequest("GET", "/replication/v1/pull?collection=rooms&checkpoint=0&limit=1", nil)
 	rr := httptest.NewRecorder()
@@ -223,7 +223,7 @@ func TestHandlePush_EngineError(t *testing.T) {
 	mockService := new(MockQueryService)
 	server := createTestServer(mockService, nil, nil)
 
-	mockService.On("Push", mock.Anything, mock.AnythingOfType("storage.ReplicationPushRequest")).Return(nil, errors.New("boom"))
+	mockService.On("Push", mock.Anything, mock.AnythingOfType("types.ReplicationPushRequest")).Return(nil, errors.New("boom"))
 
 	reqBody := ReplicaPushRequest{Collection: "rooms", Changes: []ReplicaChange{{Doc: model.Document{"id": "1"}}}}
 	body, _ := json.Marshal(reqBody)

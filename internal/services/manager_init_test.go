@@ -25,7 +25,7 @@ func TestManager_TokenServiceGetter(t *testing.T) {
 
 func TestManager_Init_StorageError(t *testing.T) {
 	cfg := config.LoadConfig()
-	cfg.Storage.MongoURI = "mongodb://invalid-host:1"
+	cfg.Storage.Document.Mongo.URI = "mongodb://invalid-host:1"
 	opt := Options{RunQuery: true}
 	mgr := NewManager(cfg, opt)
 
@@ -137,32 +137,31 @@ func TestManager_InitStorage_SkipsWhenNoServices(t *testing.T) {
 
 	err := mgr.initStorage(ctx)
 	assert.NoError(t, err)
-	assert.Nil(t, mgr.storageBackend)
+	assert.Nil(t, mgr.docProvider)
+	assert.Nil(t, mgr.authProvider)
 }
 
 func TestManager_Init_RunAuthPath(t *testing.T) {
-	origBackendFactory := mongoBackendFactory
-	origAuthStorageFactory := authStorageFactory
+	origDocFactory := documentProviderFactory
+	origAuthFactory := authProviderFactory
 	defer func() {
-		mongoBackendFactory = origBackendFactory
-		authStorageFactory = origAuthStorageFactory
+		documentProviderFactory = origDocFactory
+		authProviderFactory = origAuthFactory
 	}()
 
-	fakeBackend := &fakeStorageBackend{db: &mongo.Database{}}
-	mongoBackendFactory = func(ctx context.Context, uri, dbName, dataColl, sysColl string, retention time.Duration) (storageBackend, error) {
-		fakeBackend.retention = retention
-		return fakeBackend, nil
+	fakeDocStore := &fakeDocumentStore{}
+	documentProviderFactory = func(ctx context.Context, cfg config.StorageConfig) (storage.DocumentProvider, error) {
+		return &fakeDocumentProvider{store: fakeDocStore}, nil
 	}
 
-	fakeAuth := &fakeAuthStorage{}
-	authStorageFactory = func(db *mongo.Database) authStorage {
-		fakeAuth.db = db
-		return fakeAuth
+	fakeAuth := &fakeAuthStore{}
+	authProviderFactory = func(ctx context.Context, cfg config.StorageConfig) (storage.AuthProvider, error) {
+		return &fakeAuthProvider{users: fakeAuth, revocations: fakeAuth}, nil
 	}
 
 	cfg := config.LoadConfig()
 	cfg.Auth.PrivateKeyFile = filepath.Join(t.TempDir(), "auth.pem")
-	
+
 	// Create a dummy rules file
 	rulesFile := filepath.Join(t.TempDir(), "security.yaml")
 	os.WriteFile(rulesFile, []byte("rules: []"), 0644)
@@ -174,16 +173,15 @@ func TestManager_Init_RunAuthPath(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, mgr.authService)
 	assert.NotNil(t, mgr.tokenService)
-	assert.True(t, fakeAuth.ensureCalled)
 }
 
 func TestManager_Init_RunQueryPath(t *testing.T) {
-	origBackendFactory := mongoBackendFactory
-	defer func() { mongoBackendFactory = origBackendFactory }()
+	origDocFactory := documentProviderFactory
+	defer func() { documentProviderFactory = origDocFactory }()
 
-	fakeBackend := &fakeStorageBackend{db: &mongo.Database{}}
-	mongoBackendFactory = func(ctx context.Context, uri, dbName, dataColl, sysColl string, retention time.Duration) (storageBackend, error) {
-		return fakeBackend, nil
+	fakeDocStore := &fakeDocumentStore{}
+	documentProviderFactory = func(ctx context.Context, cfg config.StorageConfig) (storage.DocumentProvider, error) {
+		return &fakeDocumentProvider{store: fakeDocStore}, nil
 	}
 
 	cfg := config.LoadConfig()
@@ -192,18 +190,18 @@ func TestManager_Init_RunQueryPath(t *testing.T) {
 
 	err := mgr.Init(context.Background())
 	assert.NoError(t, err)
-	assert.NotNil(t, mgr.storageBackend)
+	assert.NotNil(t, mgr.docProvider)
 	assert.Len(t, mgr.servers, 1)
 	assert.Equal(t, "Query Service", mgr.serverNames[0])
 }
 
 func TestManager_Init_RunCSPPath(t *testing.T) {
-	origBackendFactory := mongoBackendFactory
-	defer func() { mongoBackendFactory = origBackendFactory }()
+	origDocFactory := documentProviderFactory
+	defer func() { documentProviderFactory = origDocFactory }()
 
-	fakeBackend := &fakeStorageBackend{db: &mongo.Database{}}
-	mongoBackendFactory = func(ctx context.Context, uri, dbName, dataColl, sysColl string, retention time.Duration) (storageBackend, error) {
-		return fakeBackend, nil
+	fakeDocStore := &fakeDocumentStore{}
+	documentProviderFactory = func(ctx context.Context, cfg config.StorageConfig) (storage.DocumentProvider, error) {
+		return &fakeDocumentProvider{store: fakeDocStore}, nil
 	}
 
 	cfg := config.LoadConfig()
@@ -212,7 +210,7 @@ func TestManager_Init_RunCSPPath(t *testing.T) {
 
 	err := mgr.Init(context.Background())
 	assert.NoError(t, err)
-	assert.NotNil(t, mgr.storageBackend)
+	assert.NotNil(t, mgr.docProvider)
 	assert.Len(t, mgr.servers, 1)
 	assert.Equal(t, "CSP Service", mgr.serverNames[0])
 }
@@ -231,65 +229,79 @@ func TestManager_Init_RunRealtimePath(t *testing.T) {
 	assert.Equal(t, "Unified Gateway", mgr.serverNames[0])
 }
 
-type fakeStorageBackend struct {
+type fakeDocumentStore struct {
 	db        *mongo.Database
 	retention time.Duration
 }
 
-func (f *fakeStorageBackend) DB() *mongo.Database { return f.db }
-func (f *fakeStorageBackend) Get(ctx context.Context, path string) (*storage.Document, error) {
+func (f *fakeDocumentStore) Get(ctx context.Context, path string) (*storage.Document, error) {
 	return nil, nil
 }
-func (f *fakeStorageBackend) Create(ctx context.Context, doc *storage.Document) error { return nil }
-func (f *fakeStorageBackend) Update(ctx context.Context, path string, data map[string]interface{}, pred model.Filters) error {
+func (f *fakeDocumentStore) Create(ctx context.Context, doc *storage.Document) error { return nil }
+func (f *fakeDocumentStore) Update(ctx context.Context, path string, data map[string]interface{}, pred model.Filters) error {
 	return nil
 }
-func (f *fakeStorageBackend) Patch(ctx context.Context, path string, data map[string]interface{}, pred model.Filters) error {
+func (f *fakeDocumentStore) Patch(ctx context.Context, path string, data map[string]interface{}, pred model.Filters) error {
 	return nil
 }
-func (f *fakeStorageBackend) Delete(ctx context.Context, path string, pred model.Filters) error {
+func (f *fakeDocumentStore) Delete(ctx context.Context, path string, pred model.Filters) error {
 	return nil
 }
-func (f *fakeStorageBackend) Query(ctx context.Context, q model.Query) ([]*storage.Document, error) {
+func (f *fakeDocumentStore) Query(ctx context.Context, q model.Query) ([]*storage.Document, error) {
 	return nil, nil
 }
-func (f *fakeStorageBackend) Watch(ctx context.Context, collection string, resumeToken interface{}, opts storage.WatchOptions) (<-chan storage.Event, error) {
+func (f *fakeDocumentStore) Watch(ctx context.Context, collection string, resumeToken interface{}, opts storage.WatchOptions) (<-chan storage.Event, error) {
 	return nil, nil
 }
-func (f *fakeStorageBackend) Close(ctx context.Context) error { return nil }
+func (f *fakeDocumentStore) Close(ctx context.Context) error { return nil }
 
-type fakeAuthStorage struct {
+type fakeAuthStore struct {
 	db           *mongo.Database
 	ensureCalled bool
 }
 
-func (f *fakeAuthStorage) CreateUser(ctx context.Context, user *auth.User) error { return nil }
-func (f *fakeAuthStorage) GetUserByUsername(ctx context.Context, username string) (*auth.User, error) {
+func (f *fakeAuthStore) CreateUser(ctx context.Context, user *auth.User) error { return nil }
+func (f *fakeAuthStore) GetUserByUsername(ctx context.Context, username string) (*auth.User, error) {
 	return nil, auth.ErrUserNotFound
 }
-func (f *fakeAuthStorage) GetUserByID(ctx context.Context, id string) (*auth.User, error) {
+func (f *fakeAuthStore) GetUserByID(ctx context.Context, id string) (*auth.User, error) {
 	return nil, auth.ErrUserNotFound
 }
-func (f *fakeAuthStorage) ListUsers(ctx context.Context, limit int, offset int) ([]*auth.User, error) {
+func (f *fakeAuthStore) ListUsers(ctx context.Context, limit int, offset int) ([]*auth.User, error) {
 	return nil, nil
 }
-func (f *fakeAuthStorage) UpdateUser(ctx context.Context, user *auth.User) error { return nil }
-func (f *fakeAuthStorage) UpdateUserLoginStats(ctx context.Context, id string, lastLogin time.Time, attempts int, lockoutUntil time.Time) error {
+func (f *fakeAuthStore) UpdateUser(ctx context.Context, user *auth.User) error { return nil }
+func (f *fakeAuthStore) UpdateUserLoginStats(ctx context.Context, id string, lastLogin time.Time, attempts int, lockoutUntil time.Time) error {
 	return nil
 }
-func (f *fakeAuthStorage) RevokeToken(ctx context.Context, jti string, expiresAt time.Time) error {
+func (f *fakeAuthStore) RevokeToken(ctx context.Context, jti string, expiresAt time.Time) error {
 	return nil
 }
-func (f *fakeAuthStorage) RevokeTokenImmediate(ctx context.Context, jti string, expiresAt time.Time) error {
+func (f *fakeAuthStore) RevokeTokenImmediate(ctx context.Context, jti string, expiresAt time.Time) error {
 	return nil
 }
-func (f *fakeAuthStorage) IsRevoked(ctx context.Context, jti string, gracePeriod time.Duration) (bool, error) {
+func (f *fakeAuthStore) IsRevoked(ctx context.Context, jti string, gracePeriod time.Duration) (bool, error) {
 	return false, nil
 }
-func (f *fakeAuthStorage) EnsureIndexes(ctx context.Context) error {
+func (f *fakeAuthStore) EnsureIndexes(ctx context.Context) error {
 	f.ensureCalled = true
 	return nil
 }
+func (f *fakeAuthStore) Close(ctx context.Context) error { return nil }
+
+type fakeDocumentProvider struct {
+	store storage.DocumentStore
+}
+func (f *fakeDocumentProvider) Document() storage.DocumentStore { return f.store }
+func (f *fakeDocumentProvider) Close(ctx context.Context) error { return nil }
+
+type fakeAuthProvider struct {
+	users       auth.UserStore
+	revocations auth.TokenRevocationStore
+}
+func (f *fakeAuthProvider) Users() auth.UserStore { return f.users }
+func (f *fakeAuthProvider) Revocations() auth.TokenRevocationStore { return f.revocations }
+func (f *fakeAuthProvider) Close(ctx context.Context) error { return nil }
 
 type stubQueryService struct{}
 

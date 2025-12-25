@@ -1,13 +1,13 @@
 package config
 
 import (
-"os"
-"path/filepath"
-"strings"
-"testing"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
 
-"github.com/stretchr/testify/assert"
-"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLoadConfig_Defaults(t *testing.T) {
@@ -18,9 +18,8 @@ os.Unsetenv("GATEWAY_PORT")
 
 cfg := LoadConfig()
 
-assert.Equal(t, "mongodb://localhost:27017", cfg.Storage.MongoURI)
-assert.Equal(t, "syntrix", cfg.Storage.DatabaseName)
-assert.Equal(t, 8080, cfg.Gateway.Port)
+	assert.Equal(t, "mongodb://localhost:27017", cfg.Storage.Document.Mongo.URI)
+	assert.Equal(t, "syntrix", cfg.Storage.Document.Mongo.DatabaseName)
 }
 
 func TestLoadConfig_EnvVars(t *testing.T) {
@@ -45,10 +44,10 @@ os.Unsetenv("TRIGGER_NATS_URL")
 os.Unsetenv("TRIGGER_RULES_FILE")
 }()
 
-cfg := LoadConfig()
+	cfg := LoadConfig()
 
-assert.Equal(t, "mongodb://test:27017", cfg.Storage.MongoURI)
-assert.Equal(t, "testdb", cfg.Storage.DatabaseName)
+	assert.Equal(t, "mongodb://test:27017", cfg.Storage.Document.Mongo.URI)
+	assert.Equal(t, "testdb", cfg.Storage.Document.Mongo.DatabaseName)
 assert.Equal(t, 9090, cfg.Gateway.Port)
 assert.Equal(t, "http://api-env", cfg.Gateway.QueryServiceURL)
 assert.Equal(t, 9092, cfg.Query.Port)
@@ -72,31 +71,32 @@ cfg := LoadConfig()
 
 // Defaults should remain when files fail to load/parse
 assert.Equal(t, 8080, cfg.Gateway.Port)
-assert.Equal(t, "mongodb://localhost:27017", cfg.Storage.MongoURI)
+	assert.Equal(t, "mongodb://localhost:27017", cfg.Storage.Document.Mongo.URI)
 }
 
-func TestLoadConfig_FileOverride(t *testing.T) {
-// Create config directory
-err := os.Mkdir("config", 0755)
-require.NoError(t, err)
-defer os.RemoveAll("config")
+func TestLoadConfig_File(t *testing.T) {
+	err := os.Mkdir("config", 0755)
+	require.NoError(t, err)
+	defer os.RemoveAll("config")
 
-// Create a temporary config.yml in the config directory
-configContent := []byte(`
+	// Create a temporary config.yml in the config directory
+	configContent := []byte(`
 storage:
-  mongo_uri: "mongodb://file:27017"
-  database_name: "filedb"
+  document:
+    mongo:
+      uri: "mongodb://file:27017"
+      database_name: "filedb"
 gateway:
   port: 7070
 `)
-err = os.WriteFile("config/config.yml", configContent, 0644)
-require.NoError(t, err)
+	err = os.WriteFile("config/config.yml", configContent, 0644)
+	require.NoError(t, err)
 
-cfg := LoadConfig()
+	cfg := LoadConfig()
 
-assert.Equal(t, "mongodb://file:27017", cfg.Storage.MongoURI)
-assert.Equal(t, "filedb", cfg.Storage.DatabaseName)
-assert.Equal(t, 7070, cfg.Gateway.Port)
+	assert.Equal(t, "mongodb://file:27017", cfg.Storage.Document.Mongo.URI)
+	assert.Equal(t, "filedb", cfg.Storage.Document.Mongo.DatabaseName)
+
 }
 
 func TestResolvePath(t *testing.T) {

@@ -50,7 +50,33 @@ type TriggerConfig struct {
 }
 
 type StorageConfig struct {
-	MongoURI            string        `yaml:"mongo_uri"`
+	Document   DocumentStorageConfig   `yaml:"document"`
+	User       UserStorageConfig       `yaml:"user"`
+	Revocation RevocationStorageConfig `yaml:"revocation"`
+}
+
+type DocumentStorageConfig struct {
+	Backend string         `yaml:"backend"`
+	Mongo   MongoDocConfig `yaml:"mongo"`
+}
+
+type UserStorageConfig struct {
+	Backend string      `yaml:"backend"`
+	Mongo   MongoConfig `yaml:"mongo"`
+}
+
+type RevocationStorageConfig struct {
+	Backend string      `yaml:"backend"`
+	Mongo   MongoConfig `yaml:"mongo"`
+}
+
+type MongoConfig struct {
+	URI          string `yaml:"uri"`
+	DatabaseName string `yaml:"database_name"`
+}
+
+type MongoDocConfig struct {
+	URI                 string        `yaml:"uri"`
 	DatabaseName        string        `yaml:"database_name"`
 	DataCollection      string        `yaml:"data_collection"`
 	SysCollection       string        `yaml:"sys_collection"`
@@ -71,11 +97,30 @@ func LoadConfig() *Config {
 	// 1. Defaults
 	cfg := &Config{
 		Storage: StorageConfig{
-			MongoURI:            "mongodb://localhost:27017",
-			DatabaseName:        "syntrix",
-			DataCollection:      "documents",
-			SysCollection:       "sys",
-			SoftDeleteRetention: 5 * time.Minute,
+			Document: DocumentStorageConfig{
+				Backend: "mongo",
+				Mongo: MongoDocConfig{
+					URI:                 "mongodb://localhost:27017",
+					DatabaseName:        "syntrix",
+					DataCollection:      "documents",
+					SysCollection:       "sys",
+					SoftDeleteRetention: 5 * time.Minute,
+				},
+			},
+			User: UserStorageConfig{
+				Backend: "mongo",
+				Mongo: MongoConfig{
+					URI:          "mongodb://localhost:27017",
+					DatabaseName: "syntrix",
+				},
+			},
+			Revocation: RevocationStorageConfig{
+				Backend: "mongo",
+				Mongo: MongoConfig{
+					URI:          "mongodb://localhost:27017",
+					DatabaseName: "syntrix",
+				},
+			},
 		},
 		Auth: AuthConfig{
 			AccessTokenTTL:  15 * time.Minute,
@@ -128,10 +173,14 @@ func LoadConfig() *Config {
 	}
 
 	if val := os.Getenv("MONGO_URI"); val != "" {
-		cfg.Storage.MongoURI = val
+		cfg.Storage.Document.Mongo.URI = val
+		cfg.Storage.User.Mongo.URI = val
+		cfg.Storage.Revocation.Mongo.URI = val
 	}
 	if val := os.Getenv("DB_NAME"); val != "" {
-		cfg.Storage.DatabaseName = val
+		cfg.Storage.Document.Mongo.DatabaseName = val
+		cfg.Storage.User.Mongo.DatabaseName = val
+		cfg.Storage.Revocation.Mongo.DatabaseName = val
 	}
 
 	if val := os.Getenv("CSP_PORT"); val != "" {

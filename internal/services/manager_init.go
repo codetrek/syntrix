@@ -7,19 +7,18 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/codetrek/syntrix/internal/api"
 	"github.com/codetrek/syntrix/internal/api/realtime"
 	"github.com/codetrek/syntrix/internal/auth"
 	"github.com/codetrek/syntrix/internal/authz"
+	"github.com/codetrek/syntrix/internal/config"
 	"github.com/codetrek/syntrix/internal/csp"
 	"github.com/codetrek/syntrix/internal/query"
-	mongostore "github.com/codetrek/syntrix/internal/storage/mongo"
+	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/internal/trigger"
 
 	"github.com/nats-io/nats.go"
-	"go.mongodb.org/mongo-driver/mongo"
 )
 
 // natsConnector allows test injection to avoid real network.
@@ -27,12 +26,12 @@ var natsConnector = nats.Connect
 var triggerPublisherFactory = trigger.NewEventPublisher
 var triggerConsumerFactory = trigger.NewConsumer
 var triggerEvaluatorFactory = trigger.NewEvaluator
-var mongoBackendFactory = func(ctx context.Context, uri, dbName, dataColl, sysColl string, softDeleteRetention time.Duration) (storageBackend, error) {
-	return mongostore.NewMongoBackend(ctx, uri, dbName, dataColl, sysColl, softDeleteRetention)
+var documentProviderFactory = func(ctx context.Context, cfg config.StorageConfig) (storage.DocumentProvider, error) {
+	return storage.NewDocumentProvider(ctx, cfg)
 }
 
-var authStorageFactory = func(db *mongo.Database) authStorage {
-	return auth.NewStorage(db)
+var authProviderFactory = func(ctx context.Context, cfg config.StorageConfig) (storage.AuthProvider, error) {
+	return storage.NewAuthProvider(ctx, cfg)
 }
 
 func (m *Manager) Init(ctx context.Context) error {
@@ -84,18 +83,18 @@ func (m *Manager) initStorage(ctx context.Context) error {
 		return nil
 	}
 
-	mongoURI := m.cfg.Storage.MongoURI
-	dbName := m.cfg.Storage.DatabaseName
-	dataColl := m.cfg.Storage.DataCollection
-	sysColl := m.cfg.Storage.SysCollection
-
 	var err error
-	m.storageBackend, err = mongoBackendFactory(ctx, mongoURI, dbName, dataColl, sysColl, m.cfg.Storage.SoftDeleteRetention)
+	m.docProvider, err = documentProviderFactory(ctx, m.cfg.Storage)
 	if err != nil {
-		return fmt.Errorf("failed to connect to storage backend: %w", err)
+		return fmt.Errorf("failed to connect to document storage: %w", err)
 	}
 
-	log.Println("Connected to MongoDB successfully.")
+	m.authProvider, err = authProviderFactory(ctx, m.cfg.Storage)
+	if err != nil {
+		return fmt.Errorf("failed to connect to auth storage: %w", err)
+	}
+
+	log.Println("Connected to Storage successfully.")
 	return nil
 }
 
@@ -149,12 +148,7 @@ func (m *Manager) initAuthService(ctx context.Context) error {
 		return nil
 	}
 
-	authStorage := authStorageFactory(m.storageBackend.DB())
-	m.authService = auth.NewAuthService(authStorage, m.tokenService)
-
-	if err := authStorage.EnsureIndexes(ctx); err != nil {
-		log.Printf("Warning: failed to ensure auth indexes: %v", err)
-	}
+	m.authService = auth.NewAuthService(m.authProvider.Users(), m.authProvider.Revocations(), m.tokenService)
 
 	log.Println("Initialized Auth Service")
 	return nil
@@ -165,7 +159,7 @@ func (m *Manager) initQueryServices() query.Service {
 		return nil
 	}
 
-	engine := query.NewEngine(m.storageBackend, m.cfg.Query.CSPServiceURL)
+	engine := query.NewEngine(m.docProvider.Document(), m.cfg.Query.CSPServiceURL)
 	m.servers = append(m.servers, &http.Server{
 		Addr:    fmt.Sprintf(":%d", m.cfg.Query.Port),
 		Handler: query.NewServer(engine),
@@ -195,7 +189,7 @@ func (m *Manager) initAPIServer(queryService query.Service) error {
 	}
 
 	// Always initialize realtime server as part of gateway
-	m.rtServer = realtime.NewServer(queryService, m.cfg.Storage.DataCollection)
+	m.rtServer = realtime.NewServer(queryService, m.cfg.Storage.Document.Mongo.DataCollection)
 
 	apiServer := api.NewServer(queryService, m.authService, authzEngine, m.rtServer)
 	m.servers = append(m.servers, &http.Server{
@@ -208,7 +202,7 @@ func (m *Manager) initAPIServer(queryService query.Service) error {
 }
 
 func (m *Manager) initCSPServer() {
-	cspServer := csp.NewServer(m.storageBackend)
+	cspServer := csp.NewServer(m.docProvider.Document())
 	m.servers = append(m.servers, &http.Server{
 		Addr:    fmt.Sprintf(":%d", m.cfg.CSP.Port),
 		Handler: cspServer,

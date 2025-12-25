@@ -32,7 +32,7 @@ func (s *TriggerService) LoadTriggers(triggers []*Trigger) {
 
 // Watch starts watching the storage backend for changes and processes them.
 // It blocks until the context is cancelled or the stream is closed.
-func (s *TriggerService) Watch(ctx context.Context, backend storage.StorageBackend) error {
+func (s *TriggerService) Watch(ctx context.Context, backend storage.DocumentStore) error {
 	// 1. Load Checkpoint
 	var resumeToken interface{}
 	checkpointDoc, err := backend.Get(ctx, "sys/checkpoints/trigger_evaluator")

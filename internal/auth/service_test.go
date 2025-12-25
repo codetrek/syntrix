@@ -75,13 +75,18 @@ func (m *MockStorage) EnsureIndexes(ctx context.Context) error {
 	return args.Error(0)
 }
 
+func (m *MockStorage) Close(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
 func TestSignIn_AutoRegister(t *testing.T) {
 	mockStorage := new(MockStorage)
 	key, err := GeneratePrivateKey()
 	require.NoError(t, err)
 	tokenService, err := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
 	require.NoError(t, err)
-	authService := NewAuthService(mockStorage, tokenService)
+	authService := NewAuthService(mockStorage, mockStorage, tokenService)
 
 	ctx := context.Background()
 	req := LoginRequest{
@@ -93,7 +98,7 @@ func TestSignIn_AutoRegister(t *testing.T) {
 	mockStorage.On("GetUserByUsername", ctx, "newuser").Return(nil, ErrUserNotFound)
 
 	// Expect CreateUser to be called
-	mockStorage.On("CreateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil)
+	mockStorage.On("CreateUser", ctx, mock.AnythingOfType("*types.User")).Return(nil)
 
 	tokenPair, err := authService.SignIn(ctx, req)
 	assert.NoError(t, err)
@@ -108,7 +113,7 @@ func TestSignIn_Success(t *testing.T) {
 	mockStorage := new(MockStorage)
 	key, _ := GeneratePrivateKey()
 	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
-	authService := NewAuthService(mockStorage, tokenService)
+	authService := NewAuthService(mockStorage, mockStorage, tokenService)
 
 	ctx := context.Background()
 	req := LoginRequest{
@@ -138,7 +143,7 @@ func TestSignIn_WrongPassword(t *testing.T) {
 	mockStorage := new(MockStorage)
 	key, _ := GeneratePrivateKey()
 	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
-	authService := NewAuthService(mockStorage, tokenService)
+	authService := NewAuthService(mockStorage, mockStorage, tokenService)
 
 	ctx := context.Background()
 	req := LoginRequest{
@@ -169,7 +174,7 @@ func TestSignIn_WrongPasswordLockout(t *testing.T) {
 	mockStorage := new(MockStorage)
 	key, _ := GeneratePrivateKey()
 	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
-	authService := NewAuthService(mockStorage, tokenService)
+	authService := NewAuthService(mockStorage, mockStorage, tokenService)
 
 	ctx := context.Background()
 	req := LoginRequest{
@@ -204,7 +209,7 @@ func TestSignIn_LockedOut(t *testing.T) {
 	mockStorage := new(MockStorage)
 	key, _ := GeneratePrivateKey()
 	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
-	authService := NewAuthService(mockStorage, tokenService)
+	authService := NewAuthService(mockStorage, mockStorage, tokenService)
 
 	ctx := context.Background()
 	req := LoginRequest{Username: "locked", Password: "password123"}
@@ -224,7 +229,7 @@ func TestSignIn_Disabled(t *testing.T) {
 	mockStorage := new(MockStorage)
 	key, _ := GeneratePrivateKey()
 	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
-	authService := NewAuthService(mockStorage, tokenService)
+	authService := NewAuthService(mockStorage, mockStorage, tokenService)
 
 	ctx := context.Background()
 	req := LoginRequest{Username: "disabled", Password: "password123"}
@@ -245,7 +250,7 @@ func TestSignIn_PasswordTooShort(t *testing.T) {
 	mockStorage := new(MockStorage)
 	key, _ := GeneratePrivateKey()
 	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
-	authService := NewAuthService(mockStorage, tokenService)
+	authService := NewAuthService(mockStorage, mockStorage, tokenService)
 
 	ctx := context.Background()
 	req := LoginRequest{Username: "newuser", Password: "short"}
@@ -264,7 +269,7 @@ func TestRefresh_Success(t *testing.T) {
 	mockStorage := new(MockStorage)
 	key, _ := GeneratePrivateKey()
 	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
-	authService := NewAuthService(mockStorage, tokenService)
+	authService := NewAuthService(mockStorage, mockStorage, tokenService)
 
 	ctx := context.Background()
 
@@ -288,7 +293,7 @@ func TestRefresh_Revoked(t *testing.T) {
 	mockStorage := new(MockStorage)
 	key, _ := GeneratePrivateKey()
 	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
-	authService := NewAuthService(mockStorage, tokenService)
+	authService := NewAuthService(mockStorage, mockStorage, tokenService)
 
 	ctx := context.Background()
 
@@ -310,7 +315,7 @@ func TestRefresh_DisabledUser(t *testing.T) {
 	mockStorage := new(MockStorage)
 	key, _ := GeneratePrivateKey()
 	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
-	authService := NewAuthService(mockStorage, tokenService)
+	authService := NewAuthService(mockStorage, mockStorage, tokenService)
 
 	ctx := context.Background()
 
@@ -332,7 +337,7 @@ func TestMiddleware(t *testing.T) {
 	mockStorage := new(MockStorage)
 	key, _ := GeneratePrivateKey()
 	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
-	authService := NewAuthService(mockStorage, tokenService)
+	authService := NewAuthService(mockStorage, mockStorage, tokenService)
 
 	// Create a valid token
 	user := &User{ID: "user-id", Username: "user"}
@@ -372,7 +377,7 @@ func TestLogout_InvalidToken(t *testing.T) {
 	mockStorage := new(MockStorage)
 	key, _ := GeneratePrivateKey()
 	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
-	authService := NewAuthService(mockStorage, tokenService)
+	authService := NewAuthService(mockStorage, mockStorage, tokenService)
 
 	ctx := context.Background()
 
@@ -384,7 +389,7 @@ func TestMiddlewareOptional(t *testing.T) {
 	mockStorage := new(MockStorage)
 	key, _ := GeneratePrivateKey()
 	tokenService, _ := NewTokenService(key, 15*time.Minute, 7*24*time.Hour, 2*time.Minute)
-	authService := NewAuthService(mockStorage, tokenService)
+	authService := NewAuthService(mockStorage, mockStorage, tokenService)
 
 	user := &User{ID: "user-id", Username: "user"}
 	pair, _ := tokenService.GenerateTokenPair(user)
@@ -418,7 +423,7 @@ func TestMiddlewareOptional(t *testing.T) {
 
 func TestAuthService_ListUsers(t *testing.T) {
 	mockStorage := new(MockStorage)
-	authService := NewAuthService(mockStorage, nil)
+	authService := NewAuthService(mockStorage, mockStorage, nil)
 
 	ctx := context.Background()
 	users := []*User{
@@ -436,7 +441,7 @@ func TestAuthService_ListUsers(t *testing.T) {
 
 func TestAuthService_UpdateUser(t *testing.T) {
 	mockStorage := new(MockStorage)
-	authService := NewAuthService(mockStorage, nil)
+	authService := NewAuthService(mockStorage, mockStorage, nil)
 
 	ctx := context.Background()
 	user := &User{ID: "1", Username: "user1", Roles: []string{"user"}, Disabled: false}

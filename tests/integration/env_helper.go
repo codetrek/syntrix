@@ -93,10 +93,26 @@ match:
 			Port: cspPort,
 		},
 		Storage: config.StorageConfig{
-			MongoURI:       mongoURI,
-			DatabaseName:   dbName,
-			DataCollection: "documents",
-			SysCollection:  "sys",
+			Document: config.DocumentStorageConfig{
+				Mongo: config.MongoDocConfig{
+					URI:            mongoURI,
+					DatabaseName:   dbName,
+					DataCollection: "documents",
+					SysCollection:  "sys",
+				},
+			},
+			User: config.UserStorageConfig{
+				Mongo: config.MongoConfig{
+					URI:            mongoURI,
+					DatabaseName:   dbName,
+				},
+			},
+			Revocation: config.RevocationStorageConfig{
+				Mongo: config.MongoConfig{
+					URI:            mongoURI,
+					DatabaseName:   dbName,
+				},
+			},
 		},
 		Auth: config.AuthConfig{
 			AccessTokenTTL:  15 * time.Minute,

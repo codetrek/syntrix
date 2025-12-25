@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage/types"
 	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
@@ -17,18 +17,23 @@ const (
 	testDBName   = "syntrix_test"
 )
 
-func setupTestBackend(t *testing.T) *MongoBackend {
+func setupTestBackend(t *testing.T) types.DocumentStore {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	backend, err := NewMongoBackend(ctx, testMongoURI, testDBName, "documents", "sys", 0)
+	provider, err := NewDocumentProvider(ctx, testMongoURI, testDBName, "documents", "sys", 0)
 	require.NoError(t, err)
+
+	store := provider.Document()
 
 	// Clean up test database before starting
-	err = backend.db.Drop(ctx)
+	dStore, ok := store.(*documentStore)
+	require.True(t, ok)
+
+	err = dStore.db.Drop(ctx)
 	require.NoError(t, err)
 
-	return backend
+	return store
 }
 
 func TestMongoBackend_CRUD(t *testing.T) {
@@ -39,7 +44,7 @@ func TestMongoBackend_CRUD(t *testing.T) {
 	docPath := "users/testuser"
 
 	// 1. Create
-	doc := storage.NewDocument(docPath, "users", map[string]interface{}{
+	doc := types.NewDocument(docPath, "users", map[string]interface{}{
 		"name": "Test User",
 		"age":  30,
 	})
@@ -98,7 +103,7 @@ func TestMongoBackend_Update_IfMatch(t *testing.T) {
 	docPath := "users/ifmatch"
 
 	// 1. Create
-	doc := storage.NewDocument(docPath, "users", map[string]interface{}{
+	doc := types.NewDocument(docPath, "users", map[string]interface{}{
 		"status": "active",
 		"score":  100,
 	})
@@ -145,7 +150,7 @@ func TestMongoBackend_FilterOperators_OnUpdatePatchDelete(t *testing.T) {
 	ctx := context.Background()
 	path := "users/filter-ops"
 
-	seed := storage.NewDocument(path, "users", map[string]interface{}{
+	seed := types.NewDocument(path, "users", map[string]interface{}{
 		"age":  int64(30),
 		"tags": []string{"a", "b"},
 	})
@@ -189,7 +194,7 @@ func TestMongoBackend_CreateDuplicate(t *testing.T) {
 	defer backend.Close(context.Background())
 
 	ctx := context.Background()
-	doc := storage.NewDocument("users/dup", "users", nil)
+	doc := types.NewDocument("users/dup", "users", nil)
 
 	err := backend.Create(ctx, doc)
 	require.NoError(t, err)
@@ -216,7 +221,7 @@ func TestMongoBackend_Patch(t *testing.T) {
 	docPath := "users/patchuser"
 
 	// Create initial document
-	doc := storage.NewDocument(docPath, "users", map[string]interface{}{
+	doc := types.NewDocument(docPath, "users", map[string]interface{}{
 		"name": "Original Name",
 		"info": map[string]interface{}{
 			"age":  30,
@@ -264,7 +269,7 @@ func TestMongoBackend_Patch_WithFilter(t *testing.T) {
 	ctx := context.Background()
 	path := "users/patch-precond"
 
-	base := storage.NewDocument(path, "users", map[string]interface{}{"name": "One"})
+	base := types.NewDocument(path, "users", map[string]interface{}{"name": "One"})
 	require.NoError(t, backend.Create(ctx, base))
 
 	wrong := model.Filters{{Field: "version", Op: "==", Value: int64(0)}}
@@ -292,7 +297,7 @@ func TestMongoBackend_Delete_WithFilter(t *testing.T) {
 	ctx := context.Background()
 	path := "users/delete-precond"
 
-	doc := storage.NewDocument(path, "users", map[string]interface{}{"name": "ToDelete"})
+	doc := types.NewDocument(path, "users", map[string]interface{}{"name": "ToDelete"})
 	require.NoError(t, backend.Create(ctx, doc))
 
 	wrong := model.Filters{{Field: "version", Op: "==", Value: int64(0)}}

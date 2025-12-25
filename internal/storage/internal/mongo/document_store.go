@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage/types"
 	"github.com/codetrek/syntrix/pkg/model"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -14,7 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-type MongoBackend struct {
+type documentStore struct {
 	client              *mongo.Client
 	db                  *mongo.Database
 	dataCollection      string
@@ -22,46 +22,29 @@ type MongoBackend struct {
 	softDeleteRetention time.Duration
 }
 
-func (m *MongoBackend) getCollection(nameOrPath string) *mongo.Collection {
+// NewDocumentStore initializes a new MongoDB document store
+func NewDocumentStore(client *mongo.Client, db *mongo.Database, dataColl string, sysColl string, softDeleteRetention time.Duration) types.DocumentStore {
+	return &documentStore{
+		client:              client,
+		db:                  db,
+		dataCollection:      dataColl,
+		sysCollection:       sysColl,
+		softDeleteRetention: softDeleteRetention,
+	}
+}
+
+func (m *documentStore) getCollection(nameOrPath string) *mongo.Collection {
 	if nameOrPath == "sys" || strings.HasPrefix(nameOrPath, "sys/") {
 		return m.db.Collection(m.sysCollection)
 	}
 	return m.db.Collection(m.dataCollection)
 }
 
-func (m *MongoBackend) DB() *mongo.Database {
-	return m.db
-}
-
-// NewMongoBackend initializes a new MongoDB storage backend
-func NewMongoBackend(ctx context.Context, uri string, dbName string, dataColl string, sysColl string, softDeleteRetention time.Duration) (*MongoBackend, error) {
-	clientOpts := options.Client().ApplyURI(uri)
-	client, err := mongo.Connect(ctx, clientOpts)
-	if err != nil {
-		return nil, err
-	}
-
-	// Ping the database to verify connection
-	if err := client.Ping(ctx, nil); err != nil {
-		return nil, err
-	}
-
-	backend := &MongoBackend{
-		client:              client,
-		db:                  client.Database(dbName),
-		dataCollection:      dataColl,
-		sysCollection:       sysColl,
-		softDeleteRetention: softDeleteRetention,
-	}
-	backend.EnsureIndexes(ctx)
-	return backend, nil
-}
-
-func (m *MongoBackend) Get(ctx context.Context, fullpath string) (*storage.Document, error) {
+func (m *documentStore) Get(ctx context.Context, fullpath string) (*types.Document, error) {
 	collection := m.getCollection(fullpath)
-	id := storage.CalculateID(fullpath)
+	id := types.CalculateID(fullpath)
 
-	var doc storage.Document
+	var doc types.Document
 	err := collection.FindOne(ctx, bson.M{"_id": id, "deleted": bson.M{"$ne": true}}).Decode(&doc)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
@@ -73,7 +56,7 @@ func (m *MongoBackend) Get(ctx context.Context, fullpath string) (*storage.Docum
 	return &doc, nil
 }
 
-func (m *MongoBackend) Create(ctx context.Context, doc *storage.Document) error {
+func (m *documentStore) Create(ctx context.Context, doc *types.Document) error {
 	collection := m.getCollection(doc.Collection)
 
 	// Ensure soft-delete fields are reset
@@ -82,8 +65,8 @@ func (m *MongoBackend) Create(ctx context.Context, doc *storage.Document) error 
 	_, err := collection.InsertOne(ctx, doc)
 	if mongo.IsDuplicateKeyError(err) {
 		// Check if the document exists but is soft-deleted
-		id := storage.CalculateID(doc.Fullpath)
-		var existingDoc storage.Document
+		id := types.CalculateID(doc.Fullpath)
+		var existingDoc types.Document
 		if findErr := collection.FindOne(ctx, bson.M{"_id": id}).Decode(&existingDoc); findErr == nil {
 			if existingDoc.Deleted {
 				// Overwrite the soft-deleted document
@@ -96,9 +79,9 @@ func (m *MongoBackend) Create(ctx context.Context, doc *storage.Document) error 
 	return err
 }
 
-func (m *MongoBackend) Update(ctx context.Context, path string, data map[string]interface{}, precond model.Filters) error {
+func (m *documentStore) Update(ctx context.Context, path string, data map[string]interface{}, precond model.Filters) error {
 	collection := m.getCollection(path)
-	id := storage.CalculateID(path)
+	id := types.CalculateID(path)
 
 	filter := makeFilterBSON(precond)
 	filter["_id"] = id
@@ -130,9 +113,9 @@ func (m *MongoBackend) Update(ctx context.Context, path string, data map[string]
 	return nil
 }
 
-func (m *MongoBackend) Patch(ctx context.Context, path string, data map[string]interface{}, precond model.Filters) error {
+func (m *documentStore) Patch(ctx context.Context, path string, data map[string]interface{}, precond model.Filters) error {
 	collection := m.getCollection(path)
-	id := storage.CalculateID(path)
+	id := types.CalculateID(path)
 
 	filter := makeFilterBSON(precond)
 	filter["_id"] = id
@@ -168,9 +151,9 @@ func (m *MongoBackend) Patch(ctx context.Context, path string, data map[string]i
 	return nil
 }
 
-func (m *MongoBackend) Delete(ctx context.Context, path string, precond model.Filters) error {
+func (m *documentStore) Delete(ctx context.Context, path string, precond model.Filters) error {
 	collection := m.getCollection(path)
-	id := storage.CalculateID(path)
+	id := types.CalculateID(path)
 
 	filter := makeFilterBSON(precond)
 	filter["_id"] = id
@@ -200,7 +183,7 @@ func (m *MongoBackend) Delete(ctx context.Context, path string, precond model.Fi
 		}
 		// If document exists but matched count is 0, it means version conflict or already deleted
 		// We can check if it is already deleted
-		var doc storage.Document
+		var doc types.Document
 		if err := collection.FindOne(ctx, bson.M{"_id": id}).Decode(&doc); err == nil {
 			if doc.Deleted {
 				return model.ErrNotFound // Already deleted
@@ -212,7 +195,7 @@ func (m *MongoBackend) Delete(ctx context.Context, path string, precond model.Fi
 	return nil
 }
 
-func (m *MongoBackend) Query(ctx context.Context, q model.Query) ([]*storage.Document, error) {
+func (m *documentStore) Query(ctx context.Context, q model.Query) ([]*types.Document, error) {
 	collection := m.getCollection(q.Collection)
 
 	filter := makeFilterBSON(q.Filters)
@@ -246,7 +229,7 @@ func (m *MongoBackend) Query(ctx context.Context, q model.Query) ([]*storage.Doc
 	}
 	defer cursor.Close(ctx)
 
-	var docs []*storage.Document
+	var docs []*types.Document
 	if err := cursor.All(ctx, &docs); err != nil {
 		return nil, err
 	}
@@ -254,7 +237,7 @@ func (m *MongoBackend) Query(ctx context.Context, q model.Query) ([]*storage.Doc
 	return docs, nil
 }
 
-func (m *MongoBackend) Watch(ctx context.Context, collectionName string, resumeToken interface{}, opts storage.WatchOptions) (<-chan storage.Event, error) {
+func (m *documentStore) Watch(ctx context.Context, collectionName string, resumeToken interface{}, opts types.WatchOptions) (<-chan types.Event, error) {
 	pipeline := mongo.Pipeline{}
 	if collectionName != "" {
 		// Filter by fullDocument.collection for insert/update/replace
@@ -282,7 +265,7 @@ func (m *MongoBackend) Watch(ctx context.Context, collectionName string, resumeT
 		return nil, err
 	}
 
-	out := make(chan storage.Event)
+	out := make(chan types.Event)
 
 	go func() {
 		defer close(out)
@@ -292,8 +275,8 @@ func (m *MongoBackend) Watch(ctx context.Context, collectionName string, resumeT
 			var changeEvent struct {
 				ID                       interface{}       `bson:"_id"`
 				OperationType            string            `bson:"operationType"`
-				FullDocument             *storage.Document `bson:"fullDocument"`
-				FullDocumentBeforeChange *storage.Document `bson:"fullDocumentBeforeChange"`
+				FullDocument             *types.Document `bson:"fullDocument"`
+				FullDocumentBeforeChange *types.Document `bson:"fullDocumentBeforeChange"`
 				DocumentKey              struct {
 					ID string `bson:"_id"`
 				} `bson:"documentKey"`
@@ -311,7 +294,7 @@ func (m *MongoBackend) Watch(ctx context.Context, collectionName string, resumeT
 				}
 			}
 
-			evt := storage.Event{
+			evt := types.Event{
 				Id:          changeEvent.DocumentKey.ID,
 				ResumeToken: changeEvent.ID,
 				// Timestamp: ... (ClusterTime is complex, let's use current time or parse it if needed)
@@ -321,25 +304,25 @@ func (m *MongoBackend) Watch(ctx context.Context, collectionName string, resumeT
 
 			switch changeEvent.OperationType {
 			case "insert":
-				evt.Type = storage.EventCreate
+				evt.Type = types.EventCreate
 				evt.Document = changeEvent.FullDocument
 			case "update", "replace":
 				if changeEvent.FullDocument != nil && changeEvent.FullDocument.Deleted {
-					evt.Type = storage.EventDelete
+					evt.Type = types.EventDelete
 				} else if changeEvent.OperationType == "replace" {
 					// Replace operation on a non-deleted document is treated as a Create (re-creation)
 					// This happens when overwriting a soft-deleted document
-					evt.Type = storage.EventCreate
+					evt.Type = types.EventCreate
 					evt.Document = changeEvent.FullDocument
 				} else if changeEvent.FullDocumentBeforeChange != nil && changeEvent.FullDocumentBeforeChange.Deleted {
-					evt.Type = storage.EventCreate
+					evt.Type = types.EventCreate
 					evt.Document = changeEvent.FullDocument
 				} else {
-					evt.Type = storage.EventUpdate
+					evt.Type = types.EventUpdate
 					evt.Document = changeEvent.FullDocument
 				}
 			case "delete":
-				evt.Type = storage.EventDelete
+				evt.Type = types.EventDelete
 			default:
 				continue
 			}
@@ -356,7 +339,7 @@ func (m *MongoBackend) Watch(ctx context.Context, collectionName string, resumeT
 }
 
 // EnsureIndexes creates necessary indexes
-func (s *MongoBackend) EnsureIndexes(ctx context.Context) error {
+func (s *documentStore) EnsureIndexes(ctx context.Context) error {
 	coll := s.getCollection("")
 
 	indexes := []string{"collection"}
@@ -370,7 +353,8 @@ func (s *MongoBackend) EnsureIndexes(ctx context.Context) error {
 		}
 	}
 
-	// Revocation TTL index
+	// Revocation TTL index (wait, revocation is separate now. But soft delete uses sys_expires_at)
+	// "sys_expires_at" is used for soft delete retention.
 	_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "sys_expires_at", Value: 1}},
 		Options: options.Index().SetExpireAfterSeconds(0),
@@ -378,6 +362,9 @@ func (s *MongoBackend) EnsureIndexes(ctx context.Context) error {
 	return err
 }
 
-func (m *MongoBackend) Close(ctx context.Context) error {
-	return m.client.Disconnect(ctx)
+func (m *documentStore) Close(ctx context.Context) error {
+	if m.client != nil {
+		return m.client.Disconnect(ctx)
+	}
+	return nil
 }

@@ -16,13 +16,13 @@ import (
 
 // Engine handles all business logic and coordinates with the storage backend.
 type Engine struct {
-	storage storage.StorageBackend
+	storage storage.DocumentStore
 	cspURL  string
 	client  *http.Client
 }
 
 // NewEngine creates a new Query Engine instance.
-func NewEngine(storage storage.StorageBackend, cspURL string) *Engine {
+func NewEngine(storage storage.DocumentStore, cspURL string) *Engine {
 	return &Engine{
 		storage: storage,
 		cspURL:  cspURL,

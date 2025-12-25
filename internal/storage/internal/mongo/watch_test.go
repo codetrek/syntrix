@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage/types"
 	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
@@ -19,7 +19,7 @@ func TestMongoBackend_Watch(t *testing.T) {
 	defer cancel()
 
 	// Start Watching
-	stream, err := backend.Watch(ctx, "users", nil, storage.WatchOptions{})
+	stream, err := backend.Watch(ctx, "users", nil, types.WatchOptions{})
 	if err != nil {
 		t.Skipf("Skipping Watch test (likely no replica set): %v", err)
 		return
@@ -30,7 +30,7 @@ func TestMongoBackend_Watch(t *testing.T) {
 		time.Sleep(100 * time.Millisecond) // Wait for watch to establish
 
 		// Create
-		doc := storage.NewDocument("users/watcher", "users", map[string]interface{}{"msg": "hello"})
+		doc := types.NewDocument("users/watcher", "users", map[string]interface{}{"msg": "hello"})
 		backend.Create(context.Background(), doc)
 
 		time.Sleep(50 * time.Millisecond)
@@ -52,7 +52,7 @@ func TestMongoBackend_Watch(t *testing.T) {
 	}()
 
 	// Verify Events
-	expectedEvents := []storage.EventType{storage.EventCreate, storage.EventUpdate, storage.EventDelete}
+	expectedEvents := []types.EventType{types.EventCreate, types.EventUpdate, types.EventDelete}
 	for i, expectedType := range expectedEvents {
 		select {
 		case evt := <-stream:
@@ -76,7 +76,7 @@ func TestMongoBackend_Watch_Recreate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	stream, err := backend.Watch(ctx, "users", nil, storage.WatchOptions{})
+	stream, err := backend.Watch(ctx, "users", nil, types.WatchOptions{})
 	if err != nil {
 		t.Skipf("Skipping Watch recreate test (likely no replica set): %v", err)
 		return
@@ -84,24 +84,24 @@ func TestMongoBackend_Watch_Recreate(t *testing.T) {
 
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		doc := storage.NewDocument("users/recreate", "users", map[string]interface{}{"msg": "v1"})
+		doc := types.NewDocument("users/recreate", "users", map[string]interface{}{"msg": "v1"})
 		_ = backend.Create(context.Background(), doc)
 
 		time.Sleep(50 * time.Millisecond)
 		_ = backend.Delete(context.Background(), "users/recreate", nil)
 
 		time.Sleep(50 * time.Millisecond)
-		_ = backend.Create(context.Background(), storage.NewDocument("users/recreate", "users", map[string]interface{}{"msg": "v2"}))
+		_ = backend.Create(context.Background(), types.NewDocument("users/recreate", "users", map[string]interface{}{"msg": "v2"}))
 	}()
 
-	expected := []storage.EventType{storage.EventCreate, storage.EventDelete, storage.EventCreate}
+	expected := []types.EventType{types.EventCreate, types.EventDelete, types.EventCreate}
 	msgs := []string{"v1", "v2"}
 	createIdx := 0
 	for _, evtType := range expected {
 		select {
 		case evt := <-stream:
 			assert.Equal(t, evtType, evt.Type)
-			if evtType == storage.EventCreate {
+			if evtType == types.EventCreate {
 				if assert.NotNil(t, evt.Document) && createIdx < len(msgs) {
 					assert.Equal(t, msgs[createIdx], evt.Document.Data["msg"])
 				}
@@ -120,7 +120,7 @@ func TestMongoBackend_Watch_Recreate_WithBefore(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	stream, err := backend.Watch(ctx, "users", nil, storage.WatchOptions{IncludeBefore: true})
+	stream, err := backend.Watch(ctx, "users", nil, types.WatchOptions{IncludeBefore: true})
 	if err != nil {
 		t.Skipf("Skipping Watch recreate (before) test (likely no replica set): %v", err)
 		return
@@ -128,31 +128,31 @@ func TestMongoBackend_Watch_Recreate_WithBefore(t *testing.T) {
 
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		doc := storage.NewDocument("users/recreate-before", "users", map[string]interface{}{"msg": "v1"})
+		doc := types.NewDocument("users/recreate-before", "users", map[string]interface{}{"msg": "v1"})
 		_ = backend.Create(context.Background(), doc)
 
 		time.Sleep(50 * time.Millisecond)
 		_ = backend.Delete(context.Background(), "users/recreate-before", nil)
 
 		time.Sleep(50 * time.Millisecond)
-		_ = backend.Create(context.Background(), storage.NewDocument("users/recreate-before", "users", map[string]interface{}{"msg": "v2"}))
+		_ = backend.Create(context.Background(), types.NewDocument("users/recreate-before", "users", map[string]interface{}{"msg": "v2"}))
 	}()
 
-	expected := []storage.EventType{storage.EventCreate, storage.EventDelete, storage.EventCreate}
+	expected := []types.EventType{types.EventCreate, types.EventDelete, types.EventCreate}
 	msgs := []string{"v1", "v2"}
 	createIdx := 0
 	for _, evtType := range expected {
 		select {
 		case evt := <-stream:
 			assert.Equal(t, evtType, evt.Type)
-			if evtType == storage.EventCreate {
+			if evtType == types.EventCreate {
 				if assert.NotNil(t, evt.Document) && createIdx < len(msgs) {
 					assert.Equal(t, msgs[createIdx], evt.Document.Data["msg"])
 				}
 				assert.Nil(t, evt.Before)
 				createIdx++
 			}
-			if evtType == storage.EventDelete {
+			if evtType == types.EventDelete {
 				if evt.Before != nil {
 					assert.Equal(t, "v1", evt.Before.Data["msg"])
 				}

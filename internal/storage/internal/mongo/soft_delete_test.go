@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage/types"
 	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
@@ -19,7 +19,7 @@ func TestMongoBackend_SoftDelete(t *testing.T) {
 	docPath := "users/softdelete"
 
 	// 1. Create
-	doc := storage.NewDocument(docPath, "users", map[string]interface{}{
+	doc := types.NewDocument(docPath, "users", map[string]interface{}{
 		"name": "To Be Deleted",
 	})
 	err := backend.Create(ctx, doc)
@@ -51,7 +51,7 @@ func TestMongoBackend_SoftDelete(t *testing.T) {
 	assert.Empty(t, docs[0].Data) // Data should be cleared
 
 	// 6. Re-create (Revive)
-	newDoc := storage.NewDocument(docPath, "users", map[string]interface{}{
+	newDoc := types.NewDocument(docPath, "users", map[string]interface{}{
 		"name": "Revived",
 	})
 	err = backend.Create(ctx, newDoc)

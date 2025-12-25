@@ -11,8 +11,6 @@ import (
 	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/internal/trigger"
 
-	"go.mongodb.org/mongo-driver/mongo"
-
 	"github.com/nats-io/nats.go"
 )
 
@@ -27,7 +25,7 @@ type Options struct {
 }
 
 type triggerService interface {
-	Watch(ctx context.Context, backend storage.StorageBackend) error
+	Watch(ctx context.Context, backend storage.DocumentStore) error
 	LoadTriggers(triggers []*trigger.Trigger)
 }
 
@@ -35,22 +33,13 @@ type triggerConsumer interface {
 	Start(ctx context.Context) error
 }
 
-type storageBackend interface {
-	storage.StorageBackend
-	DB() *mongo.Database
-}
-
-type authStorage interface {
-	auth.StorageInterface
-	EnsureIndexes(ctx context.Context) error
-}
-
 type Manager struct {
 	cfg             *config.Config
 	opts            Options
 	servers         []*http.Server
 	serverNames     []string
-	storageBackend  storageBackend
+	docProvider     storage.DocumentProvider
+	authProvider    storage.AuthProvider
 	authService     auth.Service
 	tokenService    *auth.TokenService
 	rtServer        *realtime.Server

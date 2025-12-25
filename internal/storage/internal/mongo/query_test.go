@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage/types"
 	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
@@ -25,7 +25,7 @@ func TestMongoBackend_Query(t *testing.T) {
 	}
 
 	for _, u := range users {
-		doc := storage.NewDocument("users/"+u["name"].(string), "users", u)
+		doc := types.NewDocument("users/"+u["name"].(string), "users", u)
 		err := backend.Create(ctx, doc)
 		require.NoError(t, err)
 	}

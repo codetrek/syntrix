@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codetrek/syntrix/internal/config"
 	"github.com/codetrek/syntrix/internal/storage"
-	internalmongo "github.com/codetrek/syntrix/internal/storage/mongo"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,17 +44,32 @@ match:
 	connCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	backend, err := internalmongo.NewMongoBackend(connCtx, env.MongoURI, env.DBName, "documents", "sys", 0)
+	cfg := config.StorageConfig{
+		Document: config.DocumentStorageConfig{
+			Backend: "mongo",
+			Mongo: config.MongoDocConfig{
+				URI:                 env.MongoURI,
+				DatabaseName:        env.DBName,
+				DataCollection:      "documents",
+				SysCollection:       "sys",
+				SoftDeleteRetention: 0,
+			},
+		},
+	}
+	provider, err := storage.NewDocumentProvider(connCtx, cfg)
 	require.NoError(t, err)
-	defer backend.Close(ctx)
+	defer provider.Close(ctx)
+	backend := provider.Document()
 
 	docs := []interface{}{
 		&storage.Document{Id: storage.CalculateID("public/doc1"), Collection: "public", Data: map[string]interface{}{"foo": "bar"}},
 		&storage.Document{Id: storage.CalculateID("private/doc1"), Collection: "private", Data: map[string]interface{}{"secret": "data"}},
 		&storage.Document{Id: storage.CalculateID("admin/doc1"), Collection: "admin", Data: map[string]interface{}{"top": "secret"}},
 	}
-	_, err = backend.DB().Collection("documents").InsertMany(ctx, docs)
-	require.NoError(t, err)
+	for _, d := range docs {
+		err := backend.Create(ctx, d.(*storage.Document))
+		require.NoError(t, err)
+	}
 
 	// Helper to make requests
 	makeRequest := func(method, path, token string, body interface{}) int {

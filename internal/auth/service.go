@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/google/uuid"
 )
 
@@ -17,17 +18,8 @@ var (
 	ErrInvalidToken       = errors.New("invalid token")
 )
 
-type StorageInterface interface {
-	CreateUser(ctx context.Context, user *User) error
-	GetUserByUsername(ctx context.Context, username string) (*User, error)
-	GetUserByID(ctx context.Context, id string) (*User, error)
-	ListUsers(ctx context.Context, limit int, offset int) ([]*User, error)
-	UpdateUser(ctx context.Context, user *User) error
-	UpdateUserLoginStats(ctx context.Context, id string, lastLogin time.Time, attempts int, lockoutUntil time.Time) error
-	RevokeToken(ctx context.Context, jti string, expiresAt time.Time) error
-	RevokeTokenImmediate(ctx context.Context, jti string, expiresAt time.Time) error
-	IsRevoked(ctx context.Context, jti string, gracePeriod time.Duration) (bool, error)
-}
+type UserStore = storage.UserStore
+type TokenRevocationStore = storage.TokenRevocationStore
 
 type Service interface {
 	Middleware(next http.Handler) http.Handler
@@ -40,19 +32,21 @@ type Service interface {
 }
 
 type AuthService struct {
-	storage      StorageInterface
+	users        UserStore
+	revocations  TokenRevocationStore
 	tokenService *TokenService
 }
 
-func NewAuthService(storage StorageInterface, tokenService *TokenService) Service {
+func NewAuthService(users UserStore, revocations TokenRevocationStore, tokenService *TokenService) Service {
 	return &AuthService{
-		storage:      storage,
+		users:        users,
+		revocations:  revocations,
 		tokenService: tokenService,
 	}
 }
 
 func (s *AuthService) SignIn(ctx context.Context, req LoginRequest) (*TokenPair, error) {
-	user, err := s.storage.GetUserByUsername(ctx, req.Username)
+	user, err := s.users.GetUserByUsername(ctx, req.Username)
 	if err != nil {
 		if errors.Is(err, ErrUserNotFound) {
 			// Auto-register
@@ -79,7 +73,7 @@ func (s *AuthService) SignIn(ctx context.Context, req LoginRequest) (*TokenPair,
 		if attempts >= 10 { // Lockout threshold
 			lockoutUntil = time.Now().Add(5 * time.Minute)
 		}
-		_ = s.storage.UpdateUserLoginStats(ctx, user.ID, user.LastLoginAt, attempts, lockoutUntil)
+		_ = s.users.UpdateUserLoginStats(ctx, user.ID, user.LastLoginAt, attempts, lockoutUntil)
 		return nil, ErrInvalidCredentials
 	}
 
@@ -89,7 +83,7 @@ func (s *AuthService) SignIn(ctx context.Context, req LoginRequest) (*TokenPair,
 	}
 
 	// Success - reset stats
-	_ = s.storage.UpdateUserLoginStats(ctx, user.ID, time.Now(), 0, time.Time{})
+	_ = s.users.UpdateUserLoginStats(ctx, user.ID, time.Now(), 0, time.Time{})
 
 	return s.tokenService.GenerateTokenPair(user)
 }
@@ -123,7 +117,7 @@ func (s *AuthService) register(ctx context.Context, req LoginRequest) (*TokenPai
 		user.Roles = append(user.Roles, "user")
 	}
 
-	if err := s.storage.CreateUser(ctx, user); err != nil {
+	if err := s.users.CreateUser(ctx, user); err != nil {
 		return nil, err
 	}
 
@@ -137,7 +131,7 @@ func (s *AuthService) Refresh(ctx context.Context, req RefreshRequest) (*TokenPa
 	}
 
 	// Check revocation with overlap
-	revoked, err := s.storage.IsRevoked(ctx, claims.ID, s.tokenService.refreshOverlap)
+	revoked, err := s.revocations.IsRevoked(ctx, claims.ID, s.tokenService.refreshOverlap)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +140,7 @@ func (s *AuthService) Refresh(ctx context.Context, req RefreshRequest) (*TokenPa
 	}
 
 	// Get user to ensure still exists/active
-	user, err := s.storage.GetUserByID(ctx, claims.Subject)
+	user, err := s.users.GetUserByID(ctx, claims.Subject)
 	if err != nil {
 		return nil, ErrInvalidToken
 	}
@@ -156,7 +150,7 @@ func (s *AuthService) Refresh(ctx context.Context, req RefreshRequest) (*TokenPa
 
 	// Revoke old token (soft revoke for overlap)
 	// We use the Expiration time from claims to clean up later
-	if err := s.storage.RevokeToken(ctx, claims.ID, claims.ExpiresAt.Time); err != nil {
+	if err := s.revocations.RevokeToken(ctx, claims.ID, claims.ExpiresAt.Time); err != nil {
 		return nil, err
 	}
 
@@ -170,7 +164,7 @@ func (s *AuthService) Logout(ctx context.Context, refreshToken string) error {
 		return ErrInvalidToken
 	}
 
-	return s.storage.RevokeTokenImmediate(ctx, claims.ID, claims.ExpiresAt.Time)
+	return s.revocations.RevokeTokenImmediate(ctx, claims.ID, claims.ExpiresAt.Time)
 }
 
 func (s *AuthService) GenerateSystemToken(serviceName string) (string, error) {
@@ -238,16 +232,16 @@ func (s *AuthService) MiddlewareOptional(next http.Handler) http.Handler {
 }
 
 func (s *AuthService) ListUsers(ctx context.Context, limit int, offset int) ([]*User, error) {
-	return s.storage.ListUsers(ctx, limit, offset)
+	return s.users.ListUsers(ctx, limit, offset)
 }
 
 func (s *AuthService) UpdateUser(ctx context.Context, id string, roles []string, disabled bool) error {
-	user, err := s.storage.GetUserByID(ctx, id)
+	user, err := s.users.GetUserByID(ctx, id)
 	if err != nil {
 		return err
 	}
 
 	user.Roles = roles
 	user.Disabled = disabled
-	return s.storage.UpdateUser(ctx, user)
+	return s.users.UpdateUser(ctx, user)
 }

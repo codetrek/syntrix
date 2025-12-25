@@ -1,10 +1,40 @@
-package storage
+package types
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"github.com/codetrek/syntrix/pkg/model"
 )
+
+var (
+	ErrUserNotFound = errors.New("user not found")
+	ErrUserExists   = errors.New("user already exists")
+)
+
+// User represents a user in the system
+type User struct {
+	ID            string                 `json:"id" bson:"_id"`
+	Username      string                 `json:"username" bson:"username"`
+	PasswordHash  string                 `json:"password_hash" bson:"password_hash"`
+	PasswordAlgo  string                 `json:"password_algo" bson:"password_algo"` // "argon2id" or "bcrypt"
+	CreatedAt     time.Time              `json:"createdAt" bson:"createdAt"`
+	UpdatedAt     time.Time              `json:"updatedAt" bson:"updatedAt"`
+	Disabled      bool                   `json:"disabled" bson:"disabled"`
+	Roles         []string               `json:"roles" bson:"roles"`
+	Profile       map[string]interface{} `json:"profile" bson:"profile"`
+	LastLoginAt   time.Time              `json:"last_login_at" bson:"last_login_at"`
+	LoginAttempts int                    `json:"login_attempts" bson:"login_attempts"`
+	LockoutUntil  time.Time              `json:"lockout_until" bson:"lockout_until"`
+}
+
+// RevokedToken represents a revoked JWT
+type RevokedToken struct {
+	JTI       string    `bson:"_id"`
+	ExpiresAt time.Time `bson:"expires_at"`
+	RevokedAt time.Time `bson:"revoked_at"`
+}
 
 // Document represents a stored document in the database
 type Document struct {
@@ -41,8 +71,8 @@ type WatchOptions struct {
 	IncludeBefore bool
 }
 
-// StorageBackend defines the interface for storage operations
-type StorageBackend interface {
+// DocumentStore defines the interface for document storage operations
+type DocumentStore interface {
 	// Get retrieves a document by its path
 	Get(ctx context.Context, path string) (*Document, error)
 
@@ -69,6 +99,56 @@ type StorageBackend interface {
 
 	// Close closes the connection to the backend
 	Close(ctx context.Context) error
+}
+
+// UserStore defines the interface for user storage operations
+type UserStore interface {
+	CreateUser(ctx context.Context, user *User) error
+	GetUserByUsername(ctx context.Context, username string) (*User, error)
+	GetUserByID(ctx context.Context, id string) (*User, error)
+	ListUsers(ctx context.Context, limit int, offset int) ([]*User, error)
+	UpdateUser(ctx context.Context, user *User) error
+	UpdateUserLoginStats(ctx context.Context, id string, lastLogin time.Time, attempts int, lockoutUntil time.Time) error
+	EnsureIndexes(ctx context.Context) error
+	Close(ctx context.Context) error
+}
+
+// TokenRevocationStore defines the interface for token revocation storage operations
+type TokenRevocationStore interface {
+	RevokeToken(ctx context.Context, jti string, expiresAt time.Time) error
+	RevokeTokenImmediate(ctx context.Context, jti string, expiresAt time.Time) error
+	IsRevoked(ctx context.Context, jti string, gracePeriod time.Duration) (bool, error)
+	EnsureIndexes(ctx context.Context) error
+	Close(ctx context.Context) error
+}
+
+// DocumentProvider provides access to DocumentStore
+type DocumentProvider interface {
+	Document() DocumentStore
+	Close(ctx context.Context) error
+}
+
+// AuthProvider provides access to UserStore and TokenRevocationStore
+type AuthProvider interface {
+	Users() UserStore
+	Revocations() TokenRevocationStore
+	Close(ctx context.Context) error
+}
+
+// OpKind represents the type of operation for routing
+type OpKind int
+
+const (
+	OpRead OpKind = iota
+	OpWrite
+	OpMigrate
+)
+
+// Router defines the interface for selecting stores based on operation
+type Router interface {
+	SelectDocument(op OpKind) DocumentStore
+	SelectUser(op OpKind) UserStore
+	SelectRevocation(op OpKind) TokenRevocationStore
 }
 
 // EventType represents the type of change

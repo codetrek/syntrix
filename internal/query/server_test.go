@@ -47,7 +47,7 @@ func TestServer_CreateDocument(t *testing.T) {
 	server, mockStorage := setupTestServer()
 
 	doc := model.Document{"id": "1", "collection": "test", "foo": "bar"}
-	mockStorage.On("Create", mock.Anything, mock.AnythingOfType("*storage.Document")).Return(nil)
+	mockStorage.On("Create", mock.Anything, mock.AnythingOfType("*types.Document")).Return(nil)
 
 	reqBody, _ := json.Marshal(doc)
 	req := httptest.NewRequest("POST", "/internal/v1/document/create", bytes.NewBuffer(reqBody))
@@ -74,7 +74,7 @@ func TestServer_CreateDocument_Errors(t *testing.T) {
 	t.Run("create error", func(t *testing.T) {
 		mockStorage.ExpectedCalls = nil
 		mockStorage.Calls = nil
-		mockStorage.On("Create", mock.Anything, mock.AnythingOfType("*storage.Document")).Return(assert.AnError)
+		mockStorage.On("Create", mock.Anything, mock.AnythingOfType("*types.Document")).Return(assert.AnError)
 
 		reqBody, _ := json.Marshal(model.Document{"id": "1", "collection": "test"})
 		req := httptest.NewRequest("POST", "/internal/v1/document/create", bytes.NewBuffer(reqBody))
@@ -211,7 +211,7 @@ func TestServer_ReplaceDocument_Errors(t *testing.T) {
 		mockStorage.ExpectedCalls = nil
 		mockStorage.Calls = nil
 		mockStorage.On("Get", mock.Anything, "test/1").Return(nil, model.ErrNotFound)
-		mockStorage.On("Create", mock.Anything, mock.AnythingOfType("*storage.Document")).Return(assert.AnError)
+		mockStorage.On("Create", mock.Anything, mock.AnythingOfType("*types.Document")).Return(assert.AnError)
 
 		reqBody, _ := json.Marshal(map[string]interface{}{"data": model.Document{"id": "1", "collection": "test"}})
 		req := httptest.NewRequest("POST", "/internal/v1/document/replace", bytes.NewBuffer(reqBody))

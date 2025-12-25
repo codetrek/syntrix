@@ -10,10 +10,10 @@ import (
 
 type Server struct {
 	mux     *http.ServeMux
-	storage storage.StorageBackend
+	storage storage.DocumentStore
 }
 
-func NewServer(storage storage.StorageBackend) *Server {
+func NewServer(storage storage.DocumentStore) *Server {
 	s := &Server{
 		mux:     http.NewServeMux(),
 		storage: storage,

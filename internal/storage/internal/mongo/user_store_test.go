@@ -1,4 +1,4 @@
-package auth
+package mongo
 
 import (
 	"context"
@@ -6,18 +6,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codetrek/syntrix/internal/storage/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-const (
-	testMongoURI = "mongodb://localhost:27017"
-	testDBName   = "syntrix_auth_test"
-)
-
-func setupTestStorage(t *testing.T) (*Storage, func()) {
+func setupTestUserStore(t *testing.T) (types.UserStore, func()) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -36,23 +32,23 @@ func setupTestStorage(t *testing.T) (*Storage, func()) {
 	err = db.Drop(ctx)
 	require.NoError(t, err)
 
-	storage := NewStorage(db)
-	err = storage.EnsureIndexes(ctx)
+	store := NewUserStore(db)
+	err = store.EnsureIndexes(ctx)
 	require.NoError(t, err)
 
-	return storage, func() {
+	return store, func() {
 		_ = db.Drop(context.Background())
 		_ = client.Disconnect(context.Background())
 	}
 }
 
-func TestStorage_UserLifecycle(t *testing.T) {
-	s, teardown := setupTestStorage(t)
+func TestUserStore_UserLifecycle(t *testing.T) {
+	s, teardown := setupTestUserStore(t)
 	defer teardown()
 
 	ctx := context.Background()
 
-	user := &User{
+	user := &types.User{
 		ID:           "user1",
 		Username:     "TestUser",
 		PasswordHash: "hash",
@@ -66,7 +62,7 @@ func TestStorage_UserLifecycle(t *testing.T) {
 
 	// 2. Create Duplicate User (should fail)
 	err = s.CreateUser(ctx, user)
-	assert.ErrorIs(t, err, ErrUserExists)
+	assert.ErrorIs(t, err, types.ErrUserExists)
 
 	// 3. Get User By Username (case insensitive)
 	fetched, err := s.GetUserByUsername(ctx, "testuser")
@@ -81,10 +77,10 @@ func TestStorage_UserLifecycle(t *testing.T) {
 
 	// 5. Get Non-existent User
 	_, err = s.GetUserByUsername(ctx, "nonexistent")
-	assert.ErrorIs(t, err, ErrUserNotFound)
+	assert.ErrorIs(t, err, types.ErrUserNotFound)
 
 	_, err = s.GetUserByID(ctx, "nonexistent")
-	assert.ErrorIs(t, err, ErrUserNotFound)
+	assert.ErrorIs(t, err, types.ErrUserNotFound)
 
 	// 6. Update Login Stats
 	now := time.Now().Truncate(time.Millisecond)
@@ -99,56 +95,14 @@ func TestStorage_UserLifecycle(t *testing.T) {
 	assert.Equal(t, lockout.UnixMilli(), fetchedUpdated.LockoutUntil.UnixMilli())
 }
 
-func TestStorage_Revocation(t *testing.T) {
-	s, teardown := setupTestStorage(t)
-	defer teardown()
-
-	ctx := context.Background()
-	jti := "token-123"
-	expiresAt := time.Now().Add(1 * time.Hour)
-
-	// 1. Check not revoked initially
-	revoked, err := s.IsRevoked(ctx, jti, 0)
-	require.NoError(t, err)
-	assert.False(t, revoked)
-
-	// 2. Revoke Token
-	err = s.RevokeToken(ctx, jti, expiresAt)
-	require.NoError(t, err)
-
-	// 3. Check immediate revocation (grace period 0) -> Should be revoked
-	revoked, err = s.IsRevoked(ctx, jti, 0)
-	require.NoError(t, err)
-	assert.True(t, revoked)
-
-	// 4. Check with grace period -> Should NOT be revoked yet (within grace period)
-	revoked, err = s.IsRevoked(ctx, jti, 1*time.Minute)
-	require.NoError(t, err)
-	assert.False(t, revoked)
-
-	// 5. Revoke Duplicate (should not error)
-	err = s.RevokeToken(ctx, jti, expiresAt)
-	require.NoError(t, err)
-
-	// 6. Revoke Immediate (Force Logout)
-	jti2 := "token-456"
-	err = s.RevokeTokenImmediate(ctx, jti2, expiresAt)
-	require.NoError(t, err)
-
-	// 7. Check Immediate with grace period -> Should be revoked (bypassed grace period)
-	revoked, err = s.IsRevoked(ctx, jti2, 1*time.Minute)
-	require.NoError(t, err)
-	assert.True(t, revoked)
-}
-
-func TestStorage_ListUsersAndUpdate(t *testing.T) {
-	s, teardown := setupTestStorage(t)
+func TestUserStore_ListUsersAndUpdate(t *testing.T) {
+	s, teardown := setupTestUserStore(t)
 	defer teardown()
 
 	ctx := context.Background()
 
 	baseTime := time.Now().Add(-2 * time.Hour).Truncate(time.Millisecond)
-	users := []*User{
+	users := []*types.User{
 		{ID: "u1", Username: "Alice", Roles: []string{"reader"}, CreatedAt: baseTime, UpdatedAt: baseTime},
 		{ID: "u2", Username: "Bob", Roles: []string{"writer"}, CreatedAt: baseTime, UpdatedAt: baseTime},
 		{ID: "u3", Username: "Carol", Roles: []string{"admin"}, CreatedAt: baseTime, UpdatedAt: baseTime},
@@ -177,7 +131,7 @@ func TestStorage_ListUsersAndUpdate(t *testing.T) {
 	original, err := s.GetUserByID(ctx, "u2")
 	require.NoError(t, err)
 
-	update := &User{ID: "u2", Roles: []string{"admin", "editor"}, Disabled: true}
+	update := &types.User{ID: "u2", Roles: []string{"admin", "editor"}, Disabled: true}
 	require.NoError(t, s.UpdateUser(ctx, update))
 
 	updated, err := s.GetUserByID(ctx, "u2")

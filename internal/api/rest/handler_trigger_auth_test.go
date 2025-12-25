@@ -61,12 +61,18 @@ func (m *MockAuthStorage) ListUsers(ctx context.Context, limit int, offset int) 
 func (m *MockAuthStorage) UpdateUser(ctx context.Context, user *auth.User) error {
 	return m.Called(ctx, user).Error(0)
 }
+func (m *MockAuthStorage) EnsureIndexes(ctx context.Context) error {
+	return m.Called(ctx).Error(0)
+}
+func (m *MockAuthStorage) Close(ctx context.Context) error {
+	return m.Called(ctx).Error(0)
+}
 func TestTriggerAuth(t *testing.T) {
 	// Setup Auth Service
 	mockStorage := new(MockAuthStorage)
 	key, _ := auth.GeneratePrivateKey()
 	tokenService, _ := auth.NewTokenService(key, time.Hour, time.Hour, time.Minute)
-	authService := auth.NewAuthService(mockStorage, tokenService)
+	authService := auth.NewAuthService(mockStorage, mockStorage, tokenService)
 
 	// Setup Server
 	mockEngine := new(MockQueryService)

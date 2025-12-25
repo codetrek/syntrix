@@ -62,7 +62,7 @@ func TestEngine_CreateDocument_StorageError(t *testing.T) {
 	ctx := context.Background()
 
 	doc := model.Document{"id": "1", "collection": "test", "foo": "bar"}
-	mockStorage.On("Create", ctx, mock.AnythingOfType("*storage.Document")).Return(assert.AnError)
+	mockStorage.On("Create", ctx, mock.AnythingOfType("*types.Document")).Return(assert.AnError)
 
 	err := engine.CreateDocument(ctx, doc)
 	assert.Error(t, err)
@@ -126,7 +126,7 @@ func TestEngine_ReplaceDocument_CreateError(t *testing.T) {
 	data.SetCollection(collection)
 
 	mockStorage.On("Get", ctx, path).Return(nil, model.ErrNotFound)
-	mockStorage.On("Create", ctx, mock.AnythingOfType("*storage.Document")).Return(assert.AnError)
+	mockStorage.On("Create", ctx, mock.AnythingOfType("*types.Document")).Return(assert.AnError)
 
 	doc, err := engine.ReplaceDocument(ctx, data, model.Filters{})
 	assert.Error(t, err)
