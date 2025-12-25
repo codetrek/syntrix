@@ -1,23 +1,26 @@
 
 storage:
-  document:
-    backend: mongo
-    mongo:
-      uri: "mongodb://localhost:27017"
-      database_name: "syntrix"
-      data_collection: "documents"
-      sys_collection: "sys"
+  backends:
+    default_mongo:
+      type: mongo
+      mongo:
+        uri: "mongodb://localhost:27017"
+        database_name: "syntrix"
+  topology:
+    document:
+      strategy: single
+      primary: default_mongo
+      data_collection: documents
+      sys_collection: sys
       soft_delete_retention: 720h # 30 days
-  user:
-    backend: mongo
-    mongo:
-      uri: "mongodb://localhost:27017"
-      database_name: "syntrix"
-  revocation:
-    backend: mongo
-    mongo:
-      uri: "mongodb://localhost:27017"
-      database_name: "syntrix"
+    user:
+      strategy: single
+      primary: default_mongo
+      collection: users
+    revocation:
+      strategy: single
+      primary: default_mongo
+      collection: revocations
 
 auth:
   access_token_ttl: 15m

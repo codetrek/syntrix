@@ -44,22 +44,47 @@ match:
 	connCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	cfg := config.StorageConfig{
-		Document: config.DocumentStorageConfig{
-			Backend: "mongo",
-			Mongo: config.MongoDocConfig{
-				URI:                 env.MongoURI,
-				DatabaseName:        env.DBName,
-				DataCollection:      "documents",
-				SysCollection:       "sys",
-				SoftDeleteRetention: 0,
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			Backends: map[string]config.BackendConfig{
+				"default": {
+					Type: "mongo",
+					Mongo: config.MongoConfig{
+						URI:          env.MongoURI,
+						DatabaseName: env.DBName,
+					},
+				},
+			},
+			Topology: config.TopologyConfig{
+				Document: config.DocumentTopology{
+					BaseTopology: config.BaseTopology{
+						Strategy: "single",
+						Primary:  "default",
+					},
+					DataCollection: "documents",
+					SysCollection:  "sys",
+				},
+				User: config.CollectionTopology{
+					BaseTopology: config.BaseTopology{
+						Strategy: "single",
+						Primary:  "default",
+					},
+					Collection: "users",
+				},
+				Revocation: config.CollectionTopology{
+					BaseTopology: config.BaseTopology{
+						Strategy: "single",
+						Primary:  "default",
+					},
+					Collection: "revocations",
+				},
 			},
 		},
 	}
-	provider, err := storage.NewDocumentProvider(connCtx, cfg)
+	factory, err := storage.NewFactory(connCtx, cfg)
 	require.NoError(t, err)
-	defer provider.Close(ctx)
-	backend := provider.Document()
+	defer factory.Close()
+	backend := factory.Document()
 
 	docs := []interface{}{
 		&storage.Document{Id: storage.CalculateID("public/doc1"), Collection: "public", Data: map[string]interface{}{"foo": "bar"}},

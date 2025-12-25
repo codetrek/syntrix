@@ -53,7 +53,7 @@ func TestManager_Start_RealtimeBackground_Failure(t *testing.T) {
 	cfg := config.LoadConfig()
 	mgr := NewManager(cfg, Options{RunAPI: true})
 	stub := &rtQueryStub{failAlways: true}
-	mgr.rtServer = realtime.NewServer(stub, cfg.Storage.Document.Mongo.DataCollection)
+	mgr.rtServer = realtime.NewServer(stub, cfg.Storage.Topology.Document.DataCollection)
 
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	defer bgCancel()
@@ -69,7 +69,7 @@ func TestManager_Start_RealtimeBackground_Success(t *testing.T) {
 	cfg := config.LoadConfig()
 	mgr := NewManager(cfg, Options{RunAPI: true})
 	stub := &rtQueryStub{}
-	mgr.rtServer = realtime.NewServer(stub, cfg.Storage.Document.Mongo.DataCollection)
+	mgr.rtServer = realtime.NewServer(stub, cfg.Storage.Topology.Document.DataCollection)
 
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	defer bgCancel()
@@ -84,7 +84,7 @@ func TestManager_Start_RealtimeBackground_RetryThenSuccess(t *testing.T) {
 	cfg := config.LoadConfig()
 	mgr := NewManager(cfg, Options{RunAPI: true})
 	stub := &rtQueryStub{failFirst: true}
-	mgr.rtServer = realtime.NewServer(stub, cfg.Storage.Document.Mongo.DataCollection)
+	mgr.rtServer = realtime.NewServer(stub, cfg.Storage.Topology.Document.DataCollection)
 
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	defer bgCancel()
@@ -137,7 +137,7 @@ func TestManager_Start_TriggerEvaluator_CallsWatch(t *testing.T) {
 	mgr := NewManager(cfg, Options{RunTriggerEvaluator: true})
 
 	backend := &storageBackendStub{}
-	mgr.docProvider = &fakeDocumentProvider{store: backend}
+	mgr.docStore = backend
 	mgr.triggerService = trigger.NewTriggerService(&fakeEvaluator{}, &fakePublisher{})
 
 	bgCtx, cancel := context.WithCancel(context.Background())

@@ -18,8 +18,8 @@ func TestLoadConfig_Defaults(t *testing.T) {
 
 	cfg := LoadConfig()
 
-	assert.Equal(t, "mongodb://localhost:27017", cfg.Storage.Document.Mongo.URI)
-	assert.Equal(t, "syntrix", cfg.Storage.Document.Mongo.DatabaseName)
+	assert.Equal(t, "mongodb://localhost:27017", cfg.Storage.Backends["default_mongo"].Mongo.URI)
+	assert.Equal(t, "syntrix", cfg.Storage.Backends["default_mongo"].Mongo.DatabaseName)
 }
 
 func TestLoadConfig_EnvVars(t *testing.T) {
@@ -46,8 +46,8 @@ func TestLoadConfig_EnvVars(t *testing.T) {
 
 	cfg := LoadConfig()
 
-	assert.Equal(t, "mongodb://test:27017", cfg.Storage.Document.Mongo.URI)
-	assert.Equal(t, "testdb", cfg.Storage.Document.Mongo.DatabaseName)
+	assert.Equal(t, "mongodb://test:27017", cfg.Storage.Backends["default_mongo"].Mongo.URI)
+	assert.Equal(t, "testdb", cfg.Storage.Backends["default_mongo"].Mongo.DatabaseName)
 	assert.Equal(t, 9090, cfg.Gateway.Port)
 	assert.Equal(t, "http://api-env", cfg.Gateway.QueryServiceURL)
 	assert.Equal(t, 9092, cfg.Query.Port)
@@ -71,7 +71,7 @@ func TestLoadConfig_LoadFileErrors(t *testing.T) {
 
 	// Defaults should remain when files fail to load/parse
 	assert.Equal(t, 8080, cfg.Gateway.Port)
-	assert.Equal(t, "mongodb://localhost:27017", cfg.Storage.Document.Mongo.URI)
+	assert.Equal(t, "mongodb://localhost:27017", cfg.Storage.Backends["default_mongo"].Mongo.URI)
 }
 
 func TestLoadConfig_File(t *testing.T) {
@@ -82,10 +82,11 @@ func TestLoadConfig_File(t *testing.T) {
 	// Create a temporary config.yml in the config directory
 	configContent := []byte(`
 storage:
-  document:
-    mongo:
-      uri: "mongodb://file:27017"
-      database_name: "filedb"
+  backends:
+    default_mongo:
+      mongo:
+        uri: "mongodb://file:27017"
+        database_name: "filedb"
 gateway:
   port: 7070
 `)
@@ -94,8 +95,8 @@ gateway:
 
 	cfg := LoadConfig()
 
-	assert.Equal(t, "mongodb://file:27017", cfg.Storage.Document.Mongo.URI)
-	assert.Equal(t, "filedb", cfg.Storage.Document.Mongo.DatabaseName)
+	assert.Equal(t, "mongodb://file:27017", cfg.Storage.Backends["default_mongo"].Mongo.URI)
+	assert.Equal(t, "filedb", cfg.Storage.Backends["default_mongo"].Mongo.DatabaseName)
 }
 
 func TestResolvePath(t *testing.T) {

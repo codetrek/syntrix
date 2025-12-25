@@ -16,9 +16,12 @@ type userStore struct {
 	coll *mongo.Collection
 }
 
-func NewUserStore(db *mongo.Database) types.UserStore {
+func NewUserStore(db *mongo.Database, collectionName string) types.UserStore {
+	if collectionName == "" {
+		collectionName = "auth_users"
+	}
 	return &userStore{
-		coll: db.Collection("auth_users"),
+		coll: db.Collection(collectionName),
 	}
 }
 

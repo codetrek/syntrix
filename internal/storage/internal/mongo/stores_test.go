@@ -45,7 +45,7 @@ func TestUserStore_Close(t *testing.T) {
 	if client != nil {
 		defer client.Disconnect(ctx)
 		db := client.Database(testDBName)
-		store := NewUserStore(db)
+		store := NewUserStore(db, "")
 		err := store.Close(ctx)
 		assert.NoError(t, err)
 	}
@@ -57,7 +57,7 @@ func TestRevocationStore_Close(t *testing.T) {
 	if client != nil {
 		defer client.Disconnect(ctx)
 		db := client.Database(testDBName)
-		store := NewRevocationStore(db)
+		store := NewRevocationStore(db, "")
 		err := store.Close(ctx)
 		assert.NoError(t, err)
 	}

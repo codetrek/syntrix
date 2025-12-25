@@ -50,37 +50,42 @@ type TriggerConfig struct {
 }
 
 type StorageConfig struct {
-	Document   DocumentStorageConfig   `yaml:"document"`
-	User       UserStorageConfig       `yaml:"user"`
-	Revocation RevocationStorageConfig `yaml:"revocation"`
+	Backends map[string]BackendConfig `yaml:"backends"`
+	Topology TopologyConfig           `yaml:"topology"`
 }
 
-type DocumentStorageConfig struct {
-	Backend string         `yaml:"backend"`
-	Mongo   MongoDocConfig `yaml:"mongo"`
+type BackendConfig struct {
+	Type  string      `yaml:"type"` // "mongo"
+	Mongo MongoConfig `yaml:"mongo"`
 }
 
-type UserStorageConfig struct {
-	Backend string      `yaml:"backend"`
-	Mongo   MongoConfig `yaml:"mongo"`
+type TopologyConfig struct {
+	Document   DocumentTopology   `yaml:"document"`
+	User       CollectionTopology `yaml:"user"`
+	Revocation CollectionTopology `yaml:"revocation"`
 }
 
-type RevocationStorageConfig struct {
-	Backend string      `yaml:"backend"`
-	Mongo   MongoConfig `yaml:"mongo"`
+type BaseTopology struct {
+	Strategy string `yaml:"strategy"` // "single", "read_write_split"
+	Primary  string `yaml:"primary"`
+	Replica  string `yaml:"replica"`
+}
+
+type DocumentTopology struct {
+	BaseTopology        `yaml:",inline"`
+	DataCollection      string        `yaml:"data_collection"`
+	SysCollection       string        `yaml:"sys_collection"`
+	SoftDeleteRetention time.Duration `yaml:"soft_delete_retention"`
+}
+
+type CollectionTopology struct {
+	BaseTopology `yaml:",inline"`
+	Collection   string `yaml:"collection"`
 }
 
 type MongoConfig struct {
 	URI          string `yaml:"uri"`
 	DatabaseName string `yaml:"database_name"`
-}
-
-type MongoDocConfig struct {
-	URI                 string        `yaml:"uri"`
-	DatabaseName        string        `yaml:"database_name"`
-	DataCollection      string        `yaml:"data_collection"`
-	SysCollection       string        `yaml:"sys_collection"`
-	SoftDeleteRetention time.Duration `yaml:"soft_delete_retention"`
 }
 
 type AuthConfig struct {
@@ -97,28 +102,38 @@ func LoadConfig() *Config {
 	// 1. Defaults
 	cfg := &Config{
 		Storage: StorageConfig{
-			Document: DocumentStorageConfig{
-				Backend: "mongo",
-				Mongo: MongoDocConfig{
-					URI:                 "mongodb://localhost:27017",
-					DatabaseName:        "syntrix",
+			Backends: map[string]BackendConfig{
+				"default_mongo": {
+					Type: "mongo",
+					Mongo: MongoConfig{
+						URI:          "mongodb://localhost:27017",
+						DatabaseName: "syntrix",
+					},
+				},
+			},
+			Topology: TopologyConfig{
+				Document: DocumentTopology{
+					BaseTopology: BaseTopology{
+						Strategy: "single",
+						Primary:  "default_mongo",
+					},
 					DataCollection:      "documents",
 					SysCollection:       "sys",
 					SoftDeleteRetention: 5 * time.Minute,
 				},
-			},
-			User: UserStorageConfig{
-				Backend: "mongo",
-				Mongo: MongoConfig{
-					URI:          "mongodb://localhost:27017",
-					DatabaseName: "syntrix",
+				User: CollectionTopology{
+					BaseTopology: BaseTopology{
+						Strategy: "single",
+						Primary:  "default_mongo",
+					},
+					Collection: "users",
 				},
-			},
-			Revocation: RevocationStorageConfig{
-				Backend: "mongo",
-				Mongo: MongoConfig{
-					URI:          "mongodb://localhost:27017",
-					DatabaseName: "syntrix",
+				Revocation: CollectionTopology{
+					BaseTopology: BaseTopology{
+						Strategy: "single",
+						Primary:  "default_mongo",
+					},
+					Collection: "revocations",
 				},
 			},
 		},
@@ -173,14 +188,16 @@ func LoadConfig() *Config {
 	}
 
 	if val := os.Getenv("MONGO_URI"); val != "" {
-		cfg.Storage.Document.Mongo.URI = val
-		cfg.Storage.User.Mongo.URI = val
-		cfg.Storage.Revocation.Mongo.URI = val
+		if backend, ok := cfg.Storage.Backends["default_mongo"]; ok {
+			backend.Mongo.URI = val
+			cfg.Storage.Backends["default_mongo"] = backend
+		}
 	}
 	if val := os.Getenv("DB_NAME"); val != "" {
-		cfg.Storage.Document.Mongo.DatabaseName = val
-		cfg.Storage.User.Mongo.DatabaseName = val
-		cfg.Storage.Revocation.Mongo.DatabaseName = val
+		if backend, ok := cfg.Storage.Backends["default_mongo"]; ok {
+			backend.Mongo.DatabaseName = val
+			cfg.Storage.Backends["default_mongo"] = backend
+		}
 	}
 
 	if val := os.Getenv("CSP_PORT"); val != "" {

@@ -8,21 +8,67 @@ import (
 	"github.com/codetrek/syntrix/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+type mockMongoProvider struct {
+	client *mongo.Client
+	dbName string
+}
+
+func (m *mockMongoProvider) Client() *mongo.Client {
+	return m.client
+}
+
+func (m *mockMongoProvider) DatabaseName() string {
+	return m.dbName
+}
+
+func (m *mockMongoProvider) Close(ctx context.Context) error {
+	return nil
+}
 
 const (
 	testMongoURI = "mongodb://localhost:27017"
 	testDBName   = "syntrix_test_factory"
 )
 
-func TestNewDocumentProvider(t *testing.T) {
-	cfg := config.StorageConfig{
-		Document: config.DocumentStorageConfig{
-			Mongo: config.MongoDocConfig{
-				URI:            testMongoURI,
-				DatabaseName:   testDBName,
-				DataCollection: "docs",
-				SysCollection:  "sys",
+func TestNewFactory(t *testing.T) {
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			Backends: map[string]config.BackendConfig{
+				"primary": {
+					Type: "mongo",
+					Mongo: config.MongoConfig{
+						URI:          testMongoURI,
+						DatabaseName: testDBName,
+					},
+				},
+			},
+			Topology: config.TopologyConfig{
+				Document: config.DocumentTopology{
+					BaseTopology: config.BaseTopology{
+						Strategy: "single",
+						Primary:  "primary",
+					},
+					DataCollection: "docs",
+					SysCollection:  "sys",
+				},
+				User: config.CollectionTopology{
+					BaseTopology: config.BaseTopology{
+						Strategy: "single",
+						Primary:  "primary",
+					},
+					Collection: "users",
+				},
+				Revocation: config.CollectionTopology{
+					BaseTopology: config.BaseTopology{
+						Strategy: "single",
+						Primary:  "primary",
+					},
+					Collection: "revocations",
+				},
 			},
 		},
 	}
@@ -30,34 +76,107 @@ func TestNewDocumentProvider(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	provider, err := NewDocumentProvider(ctx, cfg)
+	f, err := NewFactory(ctx, cfg)
 	if err != nil {
 		t.Skipf("Skipping test: MongoDB not available: %v", err)
 	}
 	require.NoError(t, err)
-	assert.NotNil(t, provider)
-	assert.NotNil(t, provider.Document())
+	defer f.Close()
+
+	assert.NotNil(t, f.Document())
+	assert.NotNil(t, f.User())
+	assert.NotNil(t, f.Revocation())
 }
 
-func TestNewAuthProvider(t *testing.T) {
-	cfg := config.StorageConfig{
-		User: config.UserStorageConfig{
-			Mongo: config.MongoConfig{
-				URI:          testMongoURI,
-				DatabaseName: testDBName,
+func TestNewFactory_Errors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Unsupported Backend Type", func(t *testing.T) {
+		cfg := &config.Config{
+			Storage: config.StorageConfig{
+				Backends: map[string]config.BackendConfig{
+					"bad": {Type: "redis"},
+				},
+			},
+		}
+		_, err := NewFactory(ctx, cfg)
+		assert.ErrorContains(t, err, "unsupported backend type")
+	})
+
+	t.Run("Document Backend Not Found", func(t *testing.T) {
+		cfg := &config.Config{
+			Storage: config.StorageConfig{
+				Backends: map[string]config.BackendConfig{},
+				Topology: config.TopologyConfig{
+					Document: config.DocumentTopology{
+						BaseTopology: config.BaseTopology{Primary: "missing"},
+					},
+				},
+			},
+		}
+		_, err := NewFactory(ctx, cfg)
+		assert.ErrorContains(t, err, "backend not found")
+	})
+}
+
+func TestNewFactory_ReadWriteSplit(t *testing.T) {
+	// Mock provider creation
+	origNewMongoProvider := newMongoProvider
+	defer func() { newMongoProvider = origNewMongoProvider }()
+
+	newMongoProvider = func(ctx context.Context, uri, dbName string) (Provider, error) {
+		client, _ := mongo.Connect(ctx, options.Client().ApplyURI(uri))
+		return &mockMongoProvider{client: client, dbName: dbName}, nil
+	}
+
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			Backends: map[string]config.BackendConfig{
+				"primary": {
+					Type: "mongo",
+					Mongo: config.MongoConfig{URI: "mongodb://primary", DatabaseName: "db"},
+				},
+				"replica": {
+					Type: "mongo",
+					Mongo: config.MongoConfig{URI: "mongodb://replica", DatabaseName: "db"},
+				},
+			},
+			Topology: config.TopologyConfig{
+				Document: config.DocumentTopology{
+					BaseTopology: config.BaseTopology{
+						Strategy: "read_write_split",
+						Primary:  "primary",
+						Replica:  "replica",
+					},
+					DataCollection: "docs",
+					SysCollection:  "sys",
+				},
+				User: config.CollectionTopology{
+					BaseTopology: config.BaseTopology{
+						Strategy: "read_write_split",
+						Primary:  "primary",
+						Replica:  "replica",
+					},
+					Collection: "users",
+				},
+				Revocation: config.CollectionTopology{
+					BaseTopology: config.BaseTopology{
+						Strategy: "read_write_split",
+						Primary:  "primary",
+						Replica:  "replica",
+					},
+					Collection: "revocations",
+				},
 			},
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	provider, err := NewAuthProvider(ctx, cfg)
-	if err != nil {
-		t.Skipf("Skipping test: MongoDB not available: %v", err)
-	}
+	ctx := context.Background()
+	f, err := NewFactory(ctx, cfg)
 	require.NoError(t, err)
-	assert.NotNil(t, provider)
-	assert.NotNil(t, provider.Users())
-	assert.NotNil(t, provider.Revocations())
+	defer f.Close()
+
+	assert.NotNil(t, f.Document())
+	assert.NotNil(t, f.User())
+	assert.NotNil(t, f.Revocation())
 }

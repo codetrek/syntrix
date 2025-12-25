@@ -32,7 +32,7 @@ func setupTestUserStore(t *testing.T) (types.UserStore, func()) {
 	err = db.Drop(ctx)
 	require.NoError(t, err)
 
-	store := NewUserStore(db)
+	store := NewUserStore(db, "")
 	err = store.EnsureIndexes(ctx)
 	require.NoError(t, err)
 
