@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/syntrix/internal/auth"
+	"github.com/codetrek/syntrix/internal/identity/authn"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -78,8 +78,8 @@ func TestDeliveryWorker_ProcessTask_Failure(t *testing.T) {
 
 func TestDeliveryWorker_ProcessTask_WithToken(t *testing.T) {
 	// 1. Setup Token Service
-	key, _ := auth.GeneratePrivateKey()
-	tokenService, err := auth.NewTokenService(key, time.Hour, time.Hour, time.Minute)
+	key, _ := authn.GeneratePrivateKey()
+	tokenService, err := authn.NewTokenService(key, time.Hour, time.Hour, time.Minute)
 	assert.NoError(t, err)
 
 	// 2. Setup Mock Server

@@ -4,8 +4,8 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/codetrek/syntrix/internal/auth"
-	"github.com/codetrek/syntrix/internal/authz"
+	"github.com/codetrek/syntrix/internal/identity/authn"
+	"github.com/codetrek/syntrix/internal/identity/authz"
 	"github.com/codetrek/syntrix/internal/query"
 	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/pkg/model"
@@ -110,28 +110,28 @@ func (m *MockAuthService) MiddlewareOptional(next http.Handler) http.Handler {
 	return next
 }
 
-func (m *MockAuthService) SignIn(ctx context.Context, req auth.LoginRequest) (*auth.TokenPair, error) {
+func (m *MockAuthService) SignIn(ctx context.Context, req authn.LoginRequest) (*authn.TokenPair, error) {
 	args := m.Called(ctx, req)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*auth.TokenPair), args.Error(1)
+	return args.Get(0).(*authn.TokenPair), args.Error(1)
 }
 
-func (m *MockAuthService) Refresh(ctx context.Context, req auth.RefreshRequest) (*auth.TokenPair, error) {
+func (m *MockAuthService) Refresh(ctx context.Context, req authn.RefreshRequest) (*authn.TokenPair, error) {
 	args := m.Called(ctx, req)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*auth.TokenPair), args.Error(1)
+	return args.Get(0).(*authn.TokenPair), args.Error(1)
 }
 
-func (m *MockAuthService) ListUsers(ctx context.Context, limit int, offset int) ([]*auth.User, error) {
+func (m *MockAuthService) ListUsers(ctx context.Context, limit int, offset int) ([]*authn.User, error) {
 	args := m.Called(ctx, limit, offset)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*auth.User), args.Error(1)
+	return args.Get(0).([]*authn.User), args.Error(1)
 }
 
 func (m *MockAuthService) UpdateUser(ctx context.Context, id string, roles []string, disabled bool) error {
@@ -196,7 +196,7 @@ func (s *TestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-func createTestServer(engine query.Service, auth auth.Service, authz authz.Engine) *TestServer {
+func createTestServer(engine query.Service, auth authn.Service, authz authz.Engine) *TestServer {
 	h := NewHandler(engine, auth, authz)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)

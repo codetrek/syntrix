@@ -21,7 +21,7 @@ func main() {
 	runTriggerEvaluator := flag.Bool("trigger-evaluator", false, "Run Trigger Evaluator Service")
 	runTriggerWorker := flag.Bool("trigger-worker", false, "Run Trigger Worker Service")
 	runAll := flag.Bool("all", false, "Run All Services")
-	listenHost := flag.String("host", "0.0.0.0", "Host to listen on for all services")
+	listenHost := flag.String("host", "", "Host to listen on for all services")
 	flag.Parse()
 
 	// Default to running all if no specific flags are provided or if --all is set

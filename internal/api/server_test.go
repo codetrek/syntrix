@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/codetrek/syntrix/internal/api/realtime"
-	"github.com/codetrek/syntrix/internal/auth"
-	"github.com/codetrek/syntrix/internal/authz"
+	"github.com/codetrek/syntrix/internal/identity/authn"
+	"github.com/codetrek/syntrix/internal/identity/authz"
 	"github.com/codetrek/syntrix/internal/query"
 	"github.com/codetrek/syntrix/pkg/model"
 	"github.com/stretchr/testify/assert"
@@ -31,7 +31,7 @@ func (m *MockQueryService) GetDocument(ctx context.Context, path string) (model.
 
 type MockAuthService struct {
 	mock.Mock
-	auth.Service
+	authn.Service
 }
 
 func (m *MockAuthService) Middleware(next http.Handler) http.Handler {

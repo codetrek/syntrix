@@ -9,7 +9,7 @@ const buildClient = (token?: string | null, refreshToken?: string | null) => {
   client = new SyntrixClient(API_URL, {
     token: token || undefined,
     refreshToken: refreshToken || undefined,
-    refreshUrl: `${API_URL}/api/v1/auth/refresh`,
+    refreshUrl: `${API_URL}/auth/v1/refresh`,
     onTokenRefresh: (newToken: string) => {
       localStorage.setItem('access_token', newToken);
     },

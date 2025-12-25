@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/codetrek/syntrix/internal/authz"
+	"github.com/codetrek/syntrix/internal/identity/authz"
 	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"

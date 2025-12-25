@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/codetrek/syntrix/internal/auth"
+	"github.com/codetrek/syntrix/internal/identity/authn"
 )
 
 // Worker defines the interface for processing delivery tasks.
@@ -22,11 +22,11 @@ type Worker interface {
 // DeliveryWorker handles the execution of delivery tasks.
 type DeliveryWorker struct {
 	client       *http.Client
-	tokenService *auth.TokenService
+	tokenService *authn.TokenService
 }
 
 // NewDeliveryWorker creates a new DeliveryWorker.
-func NewDeliveryWorker(tokenService *auth.TokenService) *DeliveryWorker {
+func NewDeliveryWorker(tokenService *authn.TokenService) *DeliveryWorker {
 	return &DeliveryWorker{
 		client: &http.Client{
 			Timeout: 5 * time.Second,

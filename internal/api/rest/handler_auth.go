@@ -6,11 +6,11 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/codetrek/syntrix/internal/auth"
+	"github.com/codetrek/syntrix/internal/identity/authn"
 )
 
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
-	var req auth.LoginRequest
+	var req authn.LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -18,7 +18,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	tokenPair, err := h.auth.SignIn(r.Context(), req)
 	if err != nil {
-		if errors.Is(err, auth.ErrInvalidCredentials) || errors.Is(err, auth.ErrAccountDisabled) || errors.Is(err, auth.ErrAccountLocked) {
+		if errors.Is(err, authn.ErrInvalidCredentials) || errors.Is(err, authn.ErrAccountDisabled) || errors.Is(err, authn.ErrAccountLocked) {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
@@ -31,7 +31,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
-	var req auth.RefreshRequest
+	var req authn.RefreshRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -52,7 +52,7 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	var refreshToken string
 
 	// Try body first
-	var req auth.RefreshRequest
+	var req authn.RefreshRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err == nil && req.RefreshToken != "" {
 		refreshToken = req.RefreshToken
 	} else {

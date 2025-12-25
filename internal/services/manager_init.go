@@ -12,10 +12,10 @@ import (
 
 	"github.com/codetrek/syntrix/internal/api"
 	"github.com/codetrek/syntrix/internal/api/realtime"
-	"github.com/codetrek/syntrix/internal/auth"
-	"github.com/codetrek/syntrix/internal/authz"
 	"github.com/codetrek/syntrix/internal/config"
 	"github.com/codetrek/syntrix/internal/csp"
+	"github.com/codetrek/syntrix/internal/identity/authn"
+	"github.com/codetrek/syntrix/internal/identity/authz"
 	"github.com/codetrek/syntrix/internal/query"
 	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/internal/trigger"
@@ -107,7 +107,7 @@ func (m *Manager) initTokenService() error {
 
 	if _, err := os.Stat(keyFile); os.IsNotExist(err) {
 		log.Printf("Generating new private key at %s", keyFile)
-		var privateKey, err = auth.GeneratePrivateKey()
+		var privateKey, err = authn.GeneratePrivateKey()
 		if err != nil {
 			return fmt.Errorf("failed to generate private key: %w", err)
 		}
@@ -116,18 +116,18 @@ func (m *Manager) initTokenService() error {
 			return fmt.Errorf("failed to create directory for private key: %w", err)
 		}
 
-		if err := auth.SavePrivateKey(keyFile, privateKey); err != nil {
+		if err := authn.SavePrivateKey(keyFile, privateKey); err != nil {
 			return fmt.Errorf("failed to save private key: %w", err)
 		}
 	}
 
 	log.Printf("Loading private key from %s", keyFile)
-	var privateKey, err = auth.LoadPrivateKey(keyFile)
+	var privateKey, err = authn.LoadPrivateKey(keyFile)
 	if err != nil {
 		return fmt.Errorf("failed to load private key: %w", err)
 	}
 
-	m.tokenService, err = auth.NewTokenService(
+	m.tokenService, err = authn.NewTokenService(
 		privateKey,
 		m.cfg.Auth.AccessTokenTTL,
 		m.cfg.Auth.RefreshTokenTTL,
@@ -145,7 +145,7 @@ func (m *Manager) initAuthService(ctx context.Context) error {
 		return nil
 	}
 
-	m.authService = auth.NewAuthService(
+	m.authService = authn.NewAuthService(
 		m.userStore,
 		m.revocationStore,
 		m.tokenService,

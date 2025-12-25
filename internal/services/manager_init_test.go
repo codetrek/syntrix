@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/syntrix/internal/auth"
 	"github.com/codetrek/syntrix/internal/config"
+	"github.com/codetrek/syntrix/internal/identity/authn"
 	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/pkg/model"
 
@@ -281,17 +281,17 @@ type fakeAuthStore struct {
 	ensureCalled bool
 }
 
-func (f *fakeAuthStore) CreateUser(ctx context.Context, user *auth.User) error { return nil }
-func (f *fakeAuthStore) GetUserByUsername(ctx context.Context, username string) (*auth.User, error) {
-	return nil, auth.ErrUserNotFound
+func (f *fakeAuthStore) CreateUser(ctx context.Context, user *authn.User) error { return nil }
+func (f *fakeAuthStore) GetUserByUsername(ctx context.Context, username string) (*authn.User, error) {
+	return nil, authn.ErrUserNotFound
 }
-func (f *fakeAuthStore) GetUserByID(ctx context.Context, id string) (*auth.User, error) {
-	return nil, auth.ErrUserNotFound
+func (f *fakeAuthStore) GetUserByID(ctx context.Context, id string) (*authn.User, error) {
+	return nil, authn.ErrUserNotFound
 }
-func (f *fakeAuthStore) ListUsers(ctx context.Context, limit int, offset int) ([]*auth.User, error) {
+func (f *fakeAuthStore) ListUsers(ctx context.Context, limit int, offset int) ([]*authn.User, error) {
 	return nil, nil
 }
-func (f *fakeAuthStore) UpdateUser(ctx context.Context, user *auth.User) error { return nil }
+func (f *fakeAuthStore) UpdateUser(ctx context.Context, user *authn.User) error { return nil }
 func (f *fakeAuthStore) UpdateUserLoginStats(ctx context.Context, id string, lastLogin time.Time, attempts int, lockoutUntil time.Time) error {
 	return nil
 }
@@ -318,12 +318,12 @@ func (f *fakeDocumentProvider) Document() storage.DocumentStore { return f.store
 func (f *fakeDocumentProvider) Close(ctx context.Context) error { return nil }
 
 type fakeAuthProvider struct {
-	users       auth.UserStore
-	revocations auth.TokenRevocationStore
+	users       authn.UserStore
+	revocations authn.TokenRevocationStore
 }
 
-func (f *fakeAuthProvider) Users() auth.UserStore                  { return f.users }
-func (f *fakeAuthProvider) Revocations() auth.TokenRevocationStore { return f.revocations }
+func (f *fakeAuthProvider) Users() authn.UserStore                  { return f.users }
+func (f *fakeAuthProvider) Revocations() authn.TokenRevocationStore { return f.revocations }
 func (f *fakeAuthProvider) Close(ctx context.Context) error        { return nil }
 
 type stubQueryService struct{}

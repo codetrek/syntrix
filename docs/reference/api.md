@@ -14,7 +14,7 @@ Syntrix uses JWT (JSON Web Tokens) for authentication.
 
 Authenticate a user and receive a token pair (Access Token and Refresh Token).
 
-**Endpoint:** `POST /api/v1/auth/login`
+**Endpoint:** `POST /auth/v1/login`
 
 **Request Body:**
 
@@ -39,7 +39,7 @@ Authenticate a user and receive a token pair (Access Token and Refresh Token).
 
 Get a new Access Token using a valid Refresh Token.
 
-**Endpoint:** `POST /api/v1/auth/refresh`
+**Endpoint:** `POST /auth/v1/refresh`
 
 **Request Body:**
 
@@ -63,7 +63,7 @@ Get a new Access Token using a valid Refresh Token.
 
 Invalidate a Refresh Token.
 
-**Endpoint:** `POST /api/v1/auth/logout`
+**Endpoint:** `POST /auth/v1/logout`
 
 **Request Body:**
 

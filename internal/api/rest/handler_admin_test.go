@@ -9,8 +9,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/codetrek/syntrix/internal/auth"
-	"github.com/codetrek/syntrix/internal/authz"
+	"github.com/codetrek/syntrix/internal/identity/authn"
+	"github.com/codetrek/syntrix/internal/identity/authz"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -38,28 +38,28 @@ func (m *MockAdminAuthService) MiddlewareOptional(next http.Handler) http.Handle
 	return m.Middleware(next)
 }
 
-func (m *MockAdminAuthService) SignIn(ctx context.Context, req auth.LoginRequest) (*auth.TokenPair, error) {
+func (m *MockAdminAuthService) SignIn(ctx context.Context, req authn.LoginRequest) (*authn.TokenPair, error) {
 	args := m.Called(ctx, req)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*auth.TokenPair), args.Error(1)
+	return args.Get(0).(*authn.TokenPair), args.Error(1)
 }
 
-func (m *MockAdminAuthService) Refresh(ctx context.Context, req auth.RefreshRequest) (*auth.TokenPair, error) {
+func (m *MockAdminAuthService) Refresh(ctx context.Context, req authn.RefreshRequest) (*authn.TokenPair, error) {
 	args := m.Called(ctx, req)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*auth.TokenPair), args.Error(1)
+	return args.Get(0).(*authn.TokenPair), args.Error(1)
 }
 
-func (m *MockAdminAuthService) ListUsers(ctx context.Context, limit int, offset int) ([]*auth.User, error) {
+func (m *MockAdminAuthService) ListUsers(ctx context.Context, limit int, offset int) ([]*authn.User, error) {
 	args := m.Called(ctx, limit, offset)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*auth.User), args.Error(1)
+	return args.Get(0).([]*authn.User), args.Error(1)
 }
 
 func (m *MockAdminAuthService) UpdateUser(ctx context.Context, id string, roles []string, disabled bool) error {
@@ -109,12 +109,12 @@ func (m *MockAdminAuthzService) LoadRules(path string) error {
 	return nil
 }
 
-func (m *MockAdminAuthService) ValidateToken(tokenString string) (*auth.Claims, error) {
+func (m *MockAdminAuthService) ValidateToken(tokenString string) (*authn.Claims, error) {
 	args := m.Called(tokenString)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*auth.Claims), args.Error(1)
+	return args.Get(0).(*authn.Claims), args.Error(1)
 }
 
 func TestAdmin_ListUsers(t *testing.T) {
@@ -123,7 +123,7 @@ func TestAdmin_ListUsers(t *testing.T) {
 	server := createTestServer(nil, mockAuth, mockAuthz)
 
 	// Mock ListUsers
-	users := []*auth.User{
+	users := []*authn.User{
 		{ID: "1", Username: "user1", Roles: []string{"user"}},
 		{ID: "2", Username: "user2", Roles: []string{"admin"}},
 	}
@@ -139,7 +139,7 @@ func TestAdmin_ListUsers(t *testing.T) {
 
 	// Assert
 	assert.Equal(t, http.StatusOK, w.Code)
-	var respUsers []*auth.User
+	var respUsers []*authn.User
 	err := json.NewDecoder(w.Body).Decode(&respUsers)
 	assert.NoError(t, err)
 	assert.Len(t, respUsers, 2)
@@ -151,7 +151,7 @@ func TestAdmin_ListUsers_WithPaging(t *testing.T) {
 	mockAuthz := new(MockAdminAuthzService)
 	server := createTestServer(nil, mockAuth, mockAuthz)
 
-	users := []*auth.User{}
+	users := []*authn.User{}
 	mockAuth.On("ListUsers", mock.Anything, 10, 5).Return(users, nil)
 
 	req := httptest.NewRequest("GET", "/admin/users?limit=10&offset=5", nil)

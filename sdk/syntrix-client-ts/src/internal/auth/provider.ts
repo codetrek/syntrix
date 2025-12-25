@@ -30,18 +30,18 @@ export class DefaultTokenProvider implements TokenProvider, AuthService {
   }
 
   async login(username: string, password: string): Promise<LoginResponse> {
-    const url = this.config.refreshUrl?.replace('/refresh', '/login') || `${this.baseUrl}/api/v1/auth/login`;
+    const url = this.config.refreshUrl?.replace('/refresh', '/login') || `${this.baseUrl}/auth/v1/login`;
     const response = await axios.post<LoginResponse>(url, { username, password });
-    
+
     this.token = response.data.access_token;
     this._refreshToken = response.data.refresh_token;
-    
+
     return response.data;
   }
 
   async logout(): Promise<void> {
     if (this._refreshToken) {
-      const url = this.config.refreshUrl?.replace('/refresh', '/logout') || `${this.baseUrl}/api/v1/auth/logout`;
+      const url = this.config.refreshUrl?.replace('/refresh', '/logout') || `${this.baseUrl}/auth/v1/logout`;
       try {
         await axios.post(url, { refresh_token: this._refreshToken });
       } catch {
@@ -57,7 +57,7 @@ export class DefaultTokenProvider implements TokenProvider, AuthService {
       throw new Error('No refresh token available');
     }
 
-    const refreshUrl = this.config.refreshUrl || `${this.baseUrl}/api/v1/auth/refresh`;
+    const refreshUrl = this.config.refreshUrl || `${this.baseUrl}/auth/v1/refresh`;
 
     if (this.refreshPromise) {
       return this.refreshPromise;
@@ -80,7 +80,7 @@ export class DefaultTokenProvider implements TokenProvider, AuthService {
 
       const newToken = response.data.access_token;
       const newRefreshToken = response.data.refresh_token;
-      
+
       if (!newToken) {
         throw new Error('Invalid refresh response: missing token');
       }
@@ -89,7 +89,7 @@ export class DefaultTokenProvider implements TokenProvider, AuthService {
       if (newRefreshToken) {
         this._refreshToken = newRefreshToken;
       }
-      
+
       this.config.onTokenRefresh?.(newToken);
       return newToken;
     } catch (error) {

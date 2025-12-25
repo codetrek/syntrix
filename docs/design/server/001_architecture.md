@@ -91,6 +91,12 @@ Build a Firestore-like database system with the following core characteristics:
     - **Isolation**: Protects API/CSP latency from slow or failing external endpoints; enforces per-tenant rate limits and timeouts.
 6. **MongoDB**: Storage backend.
 
+## Identity Design Docs
+
+- [Identity architecture](identity/001.architecture.md)
+- [Authentication](identity/002.authentication.md)
+- [Authorization rules](identity/003.authorization.md)
+
 ### 2.4 Component Dependency Analysis
 
 **Why Replication Worker was merged into API Gateway?**

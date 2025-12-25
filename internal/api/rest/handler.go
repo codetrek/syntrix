@@ -7,19 +7,19 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/codetrek/syntrix/internal/auth"
-	"github.com/codetrek/syntrix/internal/authz"
+	"github.com/codetrek/syntrix/internal/identity/authn"
+	"github.com/codetrek/syntrix/internal/identity/authz"
 	"github.com/codetrek/syntrix/internal/query"
 	"github.com/codetrek/syntrix/pkg/model"
 )
 
 type Handler struct {
 	engine query.Service
-	auth   auth.Service
+	auth   authn.Service
 	authz  authz.Engine
 }
 
-func NewHandler(engine query.Service, auth auth.Service, authz authz.Engine) *Handler {
+func NewHandler(engine query.Service, auth authn.Service, authz authz.Engine) *Handler {
 	return &Handler{
 		engine: engine,
 		auth:   auth,
@@ -49,9 +49,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	// Auth Operations
 	if h.auth != nil {
-		mux.HandleFunc("POST /api/v1/auth/login", h.handleLogin)
-		mux.HandleFunc("POST /api/v1/auth/refresh", h.handleRefresh)
-		mux.HandleFunc("POST /api/v1/auth/logout", h.handleLogout)
+		mux.HandleFunc("POST /auth/v1/login", h.handleLogin)
+		mux.HandleFunc("POST /auth/v1/refresh", h.handleRefresh)
+		mux.HandleFunc("POST /auth/v1/logout", h.handleLogout)
 
 		// Admin Operations
 		mux.HandleFunc("GET /admin/users", h.adminOnly(h.handleAdminListUsers))

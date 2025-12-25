@@ -86,7 +86,7 @@
 ## 4. Endpoints Used
 
 - User data: standard `/api/v1/...` CRUD/query; subject to rules.
-- Auth: `/api/v1/auth/login`, `/api/v1/auth/logout`, `/api/v1/auth/refresh`, `/api/v1/auth/password`.
+- Auth: `/auth/v1/login`, `/auth/v1/logout`, `/auth/v1/refresh`, `/auth/v1/password`.
 - Admin (admins only): `/admin/rules` (list/push/rollback), `/admin/users` (list/create/patch), `/admin/health`.
 
 ## 5. UX & Safety
