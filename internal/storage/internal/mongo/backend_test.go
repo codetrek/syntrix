@@ -7,6 +7,7 @@ import (
 
 	"github.com/codetrek/syntrix/internal/storage/types"
 	"github.com/codetrek/syntrix/pkg/model"
+	"go.mongodb.org/mongo-driver/bson"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,6 +34,9 @@ func setupTestBackend(t *testing.T) types.DocumentStore {
 	err = dStore.db.Drop(ctx)
 	require.NoError(t, err)
 
+	// Recreate indexes after dropping the database
+	require.NoError(t, dStore.EnsureIndexes(ctx))
+
 	return store
 }
 
@@ -56,6 +60,7 @@ func TestMongoBackend_CRUD(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, doc.Id, fetchedDoc.Id)
 	assert.Equal(t, doc.Collection, fetchedDoc.Collection)
+	assert.Equal(t, types.CalculateCollectionHash("users"), fetchedDoc.CollectionHash)
 	assert.Equal(t, "Test User", fetchedDoc.Data["name"])
 	assert.Equal(t, int64(1), fetchedDoc.Version)
 
@@ -211,6 +216,35 @@ func TestMongoBackend_GetNotFound(t *testing.T) {
 	ctx := context.Background()
 	_, err := backend.Get(ctx, "non/existent")
 	assert.ErrorIs(t, err, model.ErrNotFound)
+}
+
+func TestMongoBackend_IndexesIncludeCollectionHash(t *testing.T) {
+	backend := setupTestBackend(t)
+	defer backend.Close(context.Background())
+
+	ctx := context.Background()
+
+	dStore, ok := backend.(*documentStore)
+	require.True(t, ok)
+
+	coll := dStore.getCollection("")
+	cur, err := coll.Indexes().List(ctx)
+	require.NoError(t, err)
+	defer cur.Close(ctx)
+
+	found := false
+	for cur.Next(ctx) {
+		var idx bson.M
+		require.NoError(t, cur.Decode(&idx))
+		if key, ok := idx["key"].(bson.M); ok {
+			if _, exists := key["collection_hash"]; exists {
+				found = true
+				break
+			}
+		}
+	}
+
+	assert.True(t, found, "collection_hash index should exist")
 }
 
 func TestMongoBackend_Patch(t *testing.T) {

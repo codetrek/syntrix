@@ -59,6 +59,11 @@ func (m *documentStore) Get(ctx context.Context, fullpath string) (*types.Docume
 func (m *documentStore) Create(ctx context.Context, doc *types.Document) error {
 	collection := m.getCollection(doc.Collection)
 
+	// Ensure derived fields are populated
+	if doc.CollectionHash == "" {
+		doc.CollectionHash = types.CalculateCollectionHash(doc.Collection)
+	}
+
 	// Ensure soft-delete fields are reset
 	doc.Deleted = false
 
@@ -199,7 +204,7 @@ func (m *documentStore) Query(ctx context.Context, q model.Query) ([]*types.Docu
 	collection := m.getCollection(q.Collection)
 
 	filter := makeFilterBSON(q.Filters)
-	filter["collection"] = q.Collection
+	filter["collection_hash"] = types.CalculateCollectionHash(q.Collection)
 	if !q.ShowDeleted {
 		filter["deleted"] = bson.M{"$ne": true}
 	}
@@ -273,8 +278,8 @@ func (m *documentStore) Watch(ctx context.Context, collectionName string, resume
 
 		for stream.Next(ctx) {
 			var changeEvent struct {
-				ID                       interface{}       `bson:"_id"`
-				OperationType            string            `bson:"operationType"`
+				ID                       interface{}     `bson:"_id"`
+				OperationType            string          `bson:"operationType"`
 				FullDocument             *types.Document `bson:"fullDocument"`
 				FullDocumentBeforeChange *types.Document `bson:"fullDocumentBeforeChange"`
 				DocumentKey              struct {
@@ -342,7 +347,7 @@ func (m *documentStore) Watch(ctx context.Context, collectionName string, resume
 func (s *documentStore) EnsureIndexes(ctx context.Context) error {
 	coll := s.getCollection("")
 
-	indexes := []string{"collection"}
+	indexes := []string{"collection_hash"}
 	for _, field := range indexes {
 		_, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 			Keys:    bson.D{{Key: field, Value: 1}},

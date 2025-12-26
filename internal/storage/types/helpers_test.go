@@ -16,6 +16,16 @@ func TestCalculateID(t *testing.T) {
 	assert.NotEmpty(t, id1)
 }
 
+func TestCalculateCollectionHash(t *testing.T) {
+	h1 := CalculateCollectionHash("users")
+	h2 := CalculateCollectionHash("users")
+	h3 := CalculateCollectionHash("orders")
+
+	assert.Equal(t, h1, h2)
+	assert.NotEqual(t, h1, h3)
+	assert.NotEmpty(t, h1)
+}
+
 func TestNewDocument(t *testing.T) {
 	data := map[string]interface{}{
 		"key": "value",
@@ -27,6 +37,7 @@ func TestNewDocument(t *testing.T) {
 	assert.Equal(t, data, doc.Data)
 	assert.NotEmpty(t, doc.Id)
 	assert.Equal(t, CalculateID("/users/123"), doc.Id)
+	assert.Equal(t, CalculateCollectionHash("users"), doc.CollectionHash)
 	assert.NotZero(t, doc.CreatedAt)
 	assert.NotZero(t, doc.UpdatedAt)
 }
