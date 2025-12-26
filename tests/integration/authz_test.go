@@ -31,7 +31,7 @@ match:
           read, write: "request.auth.uid != null"
       /admin/{doc=**}:
         allow:
-          read, write: "'admin' in request.auth.token.roles"
+          read, write: "'admin' in request.auth.roles"
 `
 
 	// 2. Setup Environment

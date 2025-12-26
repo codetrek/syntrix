@@ -46,7 +46,7 @@ type MockAuthzEngine struct {
 	identity.AuthZ
 }
 
-func (m *MockAuthzEngine) Evaluate(ctx context.Context, path string, action string, req identity.Request, existingRes *identity.Resource) (bool, error) {
+func (m *MockAuthzEngine) Evaluate(ctx context.Context, path string, action string, req identity.AuthzRequest, existingRes *identity.Resource) (bool, error) {
 	args := m.Called(ctx, path, action, req, existingRes)
 	return args.Bool(0), args.Error(1)
 }

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+
 	"github.com/codetrek/syntrix/internal/identity"
 	"github.com/codetrek/syntrix/internal/query"
 	"github.com/codetrek/syntrix/pkg/model"
@@ -93,7 +95,7 @@ func (h *Handler) authorized(handler http.HandlerFunc, action string) http.Handl
 		path := r.PathValue("path")
 
 		// Build Request Context
-		reqCtx := identity.Request{
+		reqCtx := identity.AuthzRequest{
 			Time: time.Now(),
 		}
 
@@ -101,15 +103,14 @@ func (h *Handler) authorized(handler http.HandlerFunc, action string) http.Handl
 		if uid, ok := r.Context().Value(identity.ContextKeyUserID).(string); ok {
 			reqCtx.Auth.UID = uid
 		}
-		reqCtx.Auth.Token = map[string]interface{}{
-			"uid": reqCtx.Auth.UID,
+		if username, ok := r.Context().Value(identity.ContextKeyUsername).(string); ok {
+			reqCtx.Auth.Username = username
 		}
 		if roles, ok := r.Context().Value(identity.ContextKeyRoles).([]string); ok {
-			rInterface := make([]interface{}, len(roles))
-			for i, v := range roles {
-				rInterface[i] = v
-			}
-			reqCtx.Auth.Token["roles"] = rInterface
+			reqCtx.Auth.Roles = append([]string{}, roles...)
+		}
+		if claims, ok := r.Context().Value(identity.ContextKeyClaims).(*identity.Claims); ok {
+			reqCtx.Auth.Claims = claimsToMap(claims)
 		}
 
 		// Fetch Existing Resource if needed
@@ -156,6 +157,32 @@ func (h *Handler) authorized(handler http.HandlerFunc, action string) http.Handl
 		}
 
 		handler(w, r)
+	}
+}
+
+func claimsToMap(claims *identity.Claims) map[string]interface{} {
+	if claims == nil {
+		return nil
+	}
+
+	toTime := func(nd *jwt.NumericDate) interface{} {
+		if nd == nil {
+			return nil
+		}
+		return nd.Time
+	}
+
+	return map[string]interface{}{
+		"sub":      claims.Subject,
+		"username": claims.Username,
+		"roles":    append([]string{}, claims.Roles...),
+		"disabled": claims.Disabled,
+		"aud":      claims.Audience,
+		"iss":      claims.Issuer,
+		"jti":      claims.ID,
+		"nbf":      toTime(claims.NotBefore),
+		"exp":      toTime(claims.ExpiresAt),
+		"iat":      toTime(claims.IssuedAt),
 	}
 }
 

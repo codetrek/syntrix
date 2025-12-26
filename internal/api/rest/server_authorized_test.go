@@ -80,12 +80,11 @@ func TestAuthorized_AllowedWithExistingAndNewData(t *testing.T) {
 	existing := model.Document{"id": "123", "field": "old", "version": 1, "collection": "c"}
 	engine.On("GetDocument", mock.Anything, "col/doc").Return(existing, nil)
 
-	authzSvc.On("Evaluate", mock.Anything, "col/doc", "update", mock.MatchedBy(func(req identity.Request) bool {
+	authzSvc.On("Evaluate", mock.Anything, "col/doc", "update", mock.MatchedBy(func(req identity.AuthzRequest) bool {
 		if req.Auth.UID != "user-1" {
 			return false
 		}
-		roles, ok := req.Auth.Token["roles"].([]interface{})
-		if !ok || len(roles) != 1 || roles[0] != "admin" {
+		if len(req.Auth.Roles) != 1 || req.Auth.Roles[0] != "admin" {
 			return false
 		}
 		if req.Resource == nil || req.Resource.Data["field"] != "new" {

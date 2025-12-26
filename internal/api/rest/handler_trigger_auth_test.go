@@ -11,6 +11,7 @@ import (
 
 	"github.com/codetrek/syntrix/internal/config"
 	"github.com/codetrek/syntrix/internal/identity"
+	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
@@ -22,22 +23,22 @@ type MockAuthStorage struct {
 	mock.Mock
 }
 
-func (m *MockAuthStorage) CreateUser(ctx context.Context, user *identity.User) error {
+func (m *MockAuthStorage) CreateUser(ctx context.Context, user *storage.User) error {
 	return m.Called(ctx, user).Error(0)
 }
-func (m *MockAuthStorage) GetUserByUsername(ctx context.Context, username string) (*identity.User, error) {
+func (m *MockAuthStorage) GetUserByUsername(ctx context.Context, username string) (*storage.User, error) {
 	args := m.Called(ctx, username)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*identity.User), args.Error(1)
+	return args.Get(0).(*storage.User), args.Error(1)
 }
-func (m *MockAuthStorage) GetUserByID(ctx context.Context, id string) (*identity.User, error) {
+func (m *MockAuthStorage) GetUserByID(ctx context.Context, id string) (*storage.User, error) {
 	args := m.Called(ctx, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*identity.User), args.Error(1)
+	return args.Get(0).(*storage.User), args.Error(1)
 }
 func (m *MockAuthStorage) UpdateUserLoginStats(ctx context.Context, id string, lastLogin time.Time, attempts int, lockoutUntil time.Time) error {
 	return m.Called(ctx, id, lastLogin, attempts, lockoutUntil).Error(0)
@@ -52,15 +53,15 @@ func (m *MockAuthStorage) IsRevoked(ctx context.Context, jti string, gracePeriod
 	args := m.Called(ctx, jti, gracePeriod)
 	return args.Bool(0), args.Error(1)
 }
-func (m *MockAuthStorage) ListUsers(ctx context.Context, limit int, offset int) ([]*identity.User, error) {
+func (m *MockAuthStorage) ListUsers(ctx context.Context, limit int, offset int) ([]*storage.User, error) {
 	args := m.Called(ctx, limit, offset)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*identity.User), args.Error(1)
+	return args.Get(0).([]*storage.User), args.Error(1)
 }
 
-func (m *MockAuthStorage) UpdateUser(ctx context.Context, user *identity.User) error {
+func (m *MockAuthStorage) UpdateUser(ctx context.Context, user *storage.User) error {
 	return m.Called(ctx, user).Error(0)
 }
 func (m *MockAuthStorage) EnsureIndexes(ctx context.Context) error {

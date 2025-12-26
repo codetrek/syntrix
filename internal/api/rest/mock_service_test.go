@@ -133,12 +133,12 @@ func (m *MockAuthService) Refresh(ctx context.Context, req identity.RefreshReque
 	return args.Get(0).(*identity.TokenPair), args.Error(1)
 }
 
-func (m *MockAuthService) ListUsers(ctx context.Context, limit int, offset int) ([]*identity.User, error) {
+func (m *MockAuthService) ListUsers(ctx context.Context, limit int, offset int) ([]*storage.User, error) {
 	args := m.Called(ctx, limit, offset)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*identity.User), args.Error(1)
+	return args.Get(0).([]*storage.User), args.Error(1)
 }
 
 func (m *MockAuthService) UpdateUser(ctx context.Context, id string, roles []string, disabled bool) error {
@@ -169,7 +169,7 @@ type MockAuthzService struct {
 	mock.Mock
 }
 
-func (m *MockAuthzService) Evaluate(ctx context.Context, path string, action string, req identity.Request, existingRes *identity.Resource) (bool, error) {
+func (m *MockAuthzService) Evaluate(ctx context.Context, path string, action string, req identity.AuthzRequest, existingRes *identity.Resource) (bool, error) {
 	args := m.Called(ctx, path, action, req, existingRes)
 	return args.Bool(0), args.Error(1)
 }

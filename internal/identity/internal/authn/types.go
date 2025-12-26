@@ -1,45 +1,26 @@
 package authn
 
 import (
+	identtypes "github.com/codetrek/syntrix/internal/identity/types"
 	"github.com/codetrek/syntrix/internal/storage"
-	"github.com/golang-jwt/jwt/v5"
 )
 
-// Context keys
-type ContextKey string
+// Directly reuse public identity types to avoid duplicate definitions and adapters.
+type (
+	ContextKey     = identtypes.ContextKey
+	Claims         = identtypes.Claims
+	TokenPair      = identtypes.TokenPair
+	LoginRequest   = identtypes.LoginRequest
+	RefreshRequest = identtypes.RefreshRequest
+)
 
 const (
-	ContextKeyUser     ContextKey = "user"
-	ContextKeyUserID   ContextKey = "user_id"
-	ContextKeyUsername ContextKey = "username"
-	ContextKeyRoles    ContextKey = "roles"
+	ContextKeyUser     = identtypes.ContextKeyUser
+	ContextKeyUserID   = identtypes.ContextKeyUserID
+	ContextKeyUsername = identtypes.ContextKeyUsername
+	ContextKeyRoles    = identtypes.ContextKeyRoles
+	ContextKeyClaims   = identtypes.ContextKeyClaims
 )
 
-// User is an alias to storage.User to avoid circular dependency
+// Keep storage alias for store interfaces.
 type User = storage.User
-
-// Claims represents the JWT claims
-type Claims struct {
-	Username string   `json:"username"`
-	Roles    []string `json:"roles,omitempty"`
-	Disabled bool     `json:"disabled"`
-	jwt.RegisteredClaims
-}
-
-// TokenPair contains access and refresh tokens
-type TokenPair struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int    `json:"expires_in"` // Seconds
-}
-
-// LoginRequest represents the login payload
-type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-// RefreshRequest represents the refresh payload
-type RefreshRequest struct {
-	RefreshToken string `json:"refresh_token"`
-}

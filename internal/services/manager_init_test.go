@@ -298,17 +298,17 @@ type fakeAuthStore struct {
 	ensureCalled bool
 }
 
-func (f *fakeAuthStore) CreateUser(ctx context.Context, user *identity.User) error { return nil }
-func (f *fakeAuthStore) GetUserByUsername(ctx context.Context, username string) (*identity.User, error) {
+func (f *fakeAuthStore) CreateUser(ctx context.Context, user *storage.User) error { return nil }
+func (f *fakeAuthStore) GetUserByUsername(ctx context.Context, username string) (*storage.User, error) {
 	return nil, identity.ErrUserNotFound
 }
-func (f *fakeAuthStore) GetUserByID(ctx context.Context, id string) (*identity.User, error) {
+func (f *fakeAuthStore) GetUserByID(ctx context.Context, id string) (*storage.User, error) {
 	return nil, identity.ErrUserNotFound
 }
-func (f *fakeAuthStore) ListUsers(ctx context.Context, limit int, offset int) ([]*identity.User, error) {
+func (f *fakeAuthStore) ListUsers(ctx context.Context, limit int, offset int) ([]*storage.User, error) {
 	return nil, nil
 }
-func (f *fakeAuthStore) UpdateUser(ctx context.Context, user *identity.User) error { return nil }
+func (f *fakeAuthStore) UpdateUser(ctx context.Context, user *storage.User) error { return nil }
 func (f *fakeAuthStore) UpdateUserLoginStats(ctx context.Context, id string, lastLogin time.Time, attempts int, lockoutUntil time.Time) error {
 	return nil
 }

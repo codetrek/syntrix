@@ -214,6 +214,7 @@ func (s *AuthService) Middleware(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), ContextKeyUserID, claims.Subject)
 		ctx = context.WithValue(ctx, ContextKeyUsername, claims.Username)
 		ctx = context.WithValue(ctx, ContextKeyRoles, claims.Roles)
+		ctx = context.WithValue(ctx, ContextKeyClaims, claims)
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -244,6 +245,7 @@ func (s *AuthService) MiddlewareOptional(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), ContextKeyUserID, claims.Subject)
 		ctx = context.WithValue(ctx, ContextKeyUsername, claims.Username)
 		ctx = context.WithValue(ctx, ContextKeyRoles, claims.Roles)
+		ctx = context.WithValue(ctx, ContextKeyClaims, claims)
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

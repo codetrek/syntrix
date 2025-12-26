@@ -35,8 +35,8 @@ match:
         allow:
           read: "true"
           create: "request.resource.data.title.size() > 0 && request.resource.data.title.size() < 100 && request.auth.uid != null"
-          update: "request.auth.uid == resource.data.authorId || (has(request.auth.token.roles) && 'admin' in request.auth.token.roles)"
-          delete: "has(request.auth.token.roles) && 'admin' in request.auth.token.roles"
+          update: "request.auth.uid == resource.data.authorId || (request.auth.roles != null && 'admin' in request.auth.roles)"
+          delete: "request.auth.roles != null && 'admin' in request.auth.roles"
 
       /secrets/{secretId}:
         allow:
@@ -48,7 +48,7 @@ match:
 
       /complex_logic/{docId}:
         allow:
-          write: "(request.auth.uid == resource.data.owner || 'editor' in request.auth.token.roles) && request.resource.data.status == 'draft'"
+          write: "(request.auth.uid == resource.data.owner || (request.auth.roles != null && 'editor' in request.auth.roles)) && request.resource.data.status == 'draft'"
 `
 
 	tmpFile := t.TempDir() + "/complex_security.yaml"
@@ -161,10 +161,8 @@ match:
 			action: "update",
 			req: Request{
 				Auth: Auth{
-					UID: "admin1",
-					Token: map[string]interface{}{
-						"roles": []interface{}{"admin"},
-					},
+					UID:   "admin1",
+					Roles: []string{"admin"},
 				},
 			},
 			existingRes: &Resource{
@@ -183,10 +181,10 @@ match:
 			},
 			mockSetup: func(m *MockQueryService) {
 				m.On("GetDocument", mock.Anything, "users/user1").Return(model.Document{
-					"id": "user1",
+					"id":         "user1",
 					"collection": "users",
-					"role": "admin",
-					"version": int64(1),
+					"role":       "admin",
+					"version":    int64(1),
 				}, nil)
 			},
 			expected: true,
@@ -200,10 +198,10 @@ match:
 			},
 			mockSetup: func(m *MockQueryService) {
 				m.On("GetDocument", mock.Anything, "users/user2").Return(model.Document{
-					"id": "user2",
+					"id":         "user2",
 					"collection": "users",
-					"role": "user",
-					"version": int64(1),
+					"role":       "user",
+					"version":    int64(1),
 				}, nil)
 			},
 			expected: false,
