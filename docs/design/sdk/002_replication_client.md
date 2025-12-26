@@ -136,6 +136,44 @@ App
 ## Cleanup
 - Tombstone GC (optional): app can provide policy (e.g., delete tombstones older than N days after last checkpoint synced) to keep local store small.
 
+## Connection Health & Keepalive
+
+### Server-side (WebSocket)
+- **Ping interval:** 54 seconds (`pongWait * 9/10`)
+- **Pong timeout:** 60 seconds - connection closed if no pong received
+- **Write timeout:** 10 seconds per message
+
+The server sends WebSocket Ping frames; browsers automatically respond with Pong. If the server doesn't receive a Pong within 60 seconds, it closes the connection.
+
+### Server-side (SSE)
+- **Heartbeat interval:** 15 seconds - server sends `: heartbeat\n\n` comments
+- Client should monitor incoming data; if no data (including heartbeats) arrives for an extended period, consider reconnecting.
+
+### Client-side Keepalive (SDK)
+
+- Browser WebSocket API automatically responds to server Ping frames
+- Client tracks `lastMessageTime` on every incoming message (including server heartbeats)
+- **Activity timeout:** If no messages received within `activityTimeoutMs` (default: 90s), proactively close and trigger reconnect
+- Reconnect uses exponential backoff: base delay × 2^(attempt-1), capped at max attempts
+
+### Reconnect Flow
+1. On disconnect detected (via `onclose` or activity timeout), set state to `disconnected`.
+2. Attempt reconnect with exponential backoff.
+3. On successful reconnect:
+   - Re-authenticate (send auth message with fresh token)
+   - Re-subscribe to all active subscriptions
+   - Trigger immediate pull to catch up on missed changes
+4. If max retries exceeded, stop and invoke `onError` hook.
+
+### Configuration (planned)
+```typescript
+interface RealtimeOptions {
+  maxReconnectAttempts?: number;  // default: 5
+  reconnectDelayMs?: number;      // base delay, default: 1000
+  activityTimeoutMs?: number;     // client-side health check, default: 90000
+}
+```
+
 ## Security
 - Reuse bearer token for HTTP and realtime; refresh hooks must be supported before retry.
 - Validate collection names client-side before requests (defensive against misuse).

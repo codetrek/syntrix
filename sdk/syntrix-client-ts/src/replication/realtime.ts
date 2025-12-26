@@ -56,6 +56,12 @@ export interface RealtimeCallbacks {
   onStateChange?: (state: ConnectionState) => void;
 }
 
+export interface RealtimeClientOptions {
+  maxReconnectAttempts?: number;
+  reconnectDelayMs?: number;
+  activityTimeoutMs?: number;
+}
+
 export class RealtimeClient {
   private ws: WebSocket | null = null;
   private wsUrl: string;
@@ -66,12 +72,26 @@ export class RealtimeClient {
   private subIdCounter = 0;
   private state: ConnectionState = 'disconnected';
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
-  private reconnectDelay = 1000;
+  private maxReconnectAttempts: number;
+  private reconnectDelay: number;
+  private activityTimeoutMs: number;
+  private lastMessageTime: number = 0;
+  private activityCheckTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(wsUrl: string, tokenProvider: TokenProvider) {
+  constructor(wsUrl: string, tokenProvider: TokenProvider, options?: RealtimeClientOptions) {
     this.wsUrl = wsUrl;
     this.tokenProvider = tokenProvider;
+    this.maxReconnectAttempts = options?.maxReconnectAttempts ?? 5;
+    this.reconnectDelay = options?.reconnectDelayMs ?? 1000;
+    this.activityTimeoutMs = options?.activityTimeoutMs ?? 90000;
+  }
+
+  /**
+   * Returns the timestamp of the last received message.
+   * Useful for observability and debugging connection health.
+   */
+  getLastMessageTime(): number {
+    return this.lastMessageTime;
   }
 
   on<K extends keyof RealtimeCallbacks>(event: K, callback: RealtimeCallbacks[K]): this {
@@ -99,6 +119,8 @@ export class RealtimeClient {
 
         this.ws.onopen = async () => {
           this.reconnectAttempts = 0;
+          this.lastMessageTime = Date.now();
+          this.startActivityCheck();
           // Send auth message
           const token = await this.tokenProvider.getToken();
           if (token) {
@@ -120,6 +142,7 @@ export class RealtimeClient {
         };
 
         this.ws.onmessage = (event) => {
+          this.lastMessageTime = Date.now();
           try {
             const msg: BaseMessage = JSON.parse(event.data);
             this.handleMessage(msg);
@@ -136,6 +159,7 @@ export class RealtimeClient {
         };
 
         this.ws.onclose = () => {
+          this.stopActivityCheck();
           this.setState('disconnected');
           this.callbacks.onDisconnect?.();
           this.attemptReconnect();
@@ -153,7 +177,18 @@ export class RealtimeClient {
     }
 
     this.reconnectAttempts++;
-    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+    // Exponential backoff with jitter (±50%) to spread reconnection attempts
+    // and avoid thundering herd when many clients reconnect simultaneously.
+    //
+    // With default reconnectDelay=1000ms:
+    //   Attempt 1: base=1s,  actual=0.5s~1.5s
+    //   Attempt 2: base=2s,  actual=1s~3s
+    //   Attempt 3: base=4s,  actual=2s~6s
+    //   Attempt 4: base=8s,  actual=4s~12s
+    //   Attempt 5: base=16s, actual=8s~24s
+    const baseDelay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+    const jitter = 0.5 + Math.random(); // 0.5 ~ 1.5
+    const delay = Math.floor(baseDelay * jitter);
     
     setTimeout(() => {
       if (this.state === 'disconnected') {
@@ -163,12 +198,42 @@ export class RealtimeClient {
   }
 
   disconnect(): void {
+    this.stopActivityCheck();
     if (this.ws) {
       this.reconnectAttempts = this.maxReconnectAttempts; // Prevent reconnect
       this.ws.close();
       this.ws = null;
     }
     this.setState('disconnected');
+  }
+
+  /**
+   * Starts the activity check timer.
+   * If no messages are received within activityTimeoutMs, the connection
+   * is considered stale and will be closed to trigger reconnect.
+   */
+  private startActivityCheck(): void {
+    this.stopActivityCheck();
+    // Check every 10 seconds
+    const checkInterval = Math.min(10000, this.activityTimeoutMs / 3);
+    this.activityCheckTimer = setInterval(() => {
+      if (this.state !== 'connected') {
+        return;
+      }
+      const elapsed = Date.now() - this.lastMessageTime;
+      if (elapsed > this.activityTimeoutMs) {
+        console.warn(`[Realtime] No activity for ${elapsed}ms, closing connection`);
+        // Close the connection to trigger reconnect
+        this.ws?.close();
+      }
+    }, checkInterval);
+  }
+
+  private stopActivityCheck(): void {
+    if (this.activityCheckTimer) {
+      clearInterval(this.activityCheckTimer);
+      this.activityCheckTimer = null;
+    }
   }
 
   private sendMessage(msg: BaseMessage): void {
