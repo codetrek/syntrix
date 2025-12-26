@@ -18,7 +18,9 @@ import (
 
 func setupTestServer() (*Server, *MockStorageBackend) {
 	mockStorage := new(MockStorageBackend)
-	engine := NewEngine(mockStorage, "http://mock-csp")
+	// Use 127.0.0.1:1 to avoid DNS lookup timeouts on invalid hostnames.
+	// Port 1 is privileged and will fail immediately with connection refused.
+	engine := NewEngine(mockStorage, "http://127.0.0.1:1")
 	server := NewServer(engine)
 	return server, mockStorage
 }
