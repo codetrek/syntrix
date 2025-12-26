@@ -47,6 +47,9 @@ type Document struct {
 	// Collection is the parent collection name
 	Collection string `json:"collection" bson:"collection"`
 
+	// CollectionHash is a compact hash of collection for shorter indexes
+	CollectionHash string `json:"collectionHash" bson:"collection_hash"`
+
 	// Parent is the parent of collection
 	Parent string `json:"-" bson:"parent"`
 

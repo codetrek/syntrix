@@ -22,10 +22,12 @@ func makeFilterBSON(filters model.Filters) bson.M {
 
 func mapField(field string) string {
 	switch field {
-	case "path", "_id":
+	case "_id":
 		return "_id"
 	case "collection":
 		return "collection"
+	case "collectionHash":
+		return "collection_hash"
 	case "updatedAt":
 		return "updated_at"
 	case "createdAt":

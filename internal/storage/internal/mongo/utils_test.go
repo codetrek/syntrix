@@ -11,6 +11,7 @@ func TestMakeFilterBSON_FieldAndOpMapping(t *testing.T) {
 	filters := model.Filters{
 		{Field: "path", Op: "==", Value: "users/1"},
 		{Field: "collection", Op: "!=", Value: "users"},
+		{Field: "collectionHash", Op: "==", Value: "abc"},
 		{Field: "updatedAt", Op: ">", Value: int64(10)},
 		{Field: "createdAt", Op: "<=", Value: int64(5)},
 		{Field: "version", Op: "in", Value: []int{1, 2}},
@@ -24,6 +25,9 @@ func TestMakeFilterBSON_FieldAndOpMapping(t *testing.T) {
 	}
 	if m, ok := bsonFilter["collection"].(map[string]interface{}); ok {
 		assert.Equal(t, "users", m["$ne"])
+	}
+	if m, ok := bsonFilter["collection_hash"].(map[string]interface{}); ok {
+		assert.Equal(t, "abc", m["$eq"])
 	}
 	if m, ok := bsonFilter["updated_at"].(map[string]interface{}); ok {
 		assert.Equal(t, int64(10), m["$gt"])
