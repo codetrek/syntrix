@@ -22,9 +22,10 @@ func TestHub_Broadcast(t *testing.T) {
 
 	// Create a mock client
 	client := &Client{
-		hub:           hub,
-		send:          make(chan BaseMessage, 10),
-		subscriptions: make(map[string]Subscription),
+		hub:             hub,
+		send:            make(chan BaseMessage, 10),
+		subscriptions:   make(map[string]Subscription),
+		allowAllTenants: true,
 	}
 
 	// Add a subscription
@@ -95,9 +96,10 @@ func TestHub_Broadcast_WithFilter(t *testing.T) {
 
 	// Create a mock client
 	client := &Client{
-		hub:           hub,
-		send:          make(chan BaseMessage, 10),
-		subscriptions: make(map[string]Subscription),
+		hub:             hub,
+		send:            make(chan BaseMessage, 10),
+		subscriptions:   make(map[string]Subscription),
+		allowAllTenants: true,
 	}
 
 	// Add a subscription with filter: age > 20
@@ -206,9 +208,10 @@ func TestHub_Broadcast_WaitsForSlowClient(t *testing.T) {
 	go hub.Run(hubCtx)
 
 	client := &Client{
-		hub:           hub,
-		send:          make(chan BaseMessage, 1),
-		subscriptions: map[string]Subscription{"sub": {Query: model.Query{Collection: "users"}, IncludeData: true}},
+		hub:             hub,
+		send:            make(chan BaseMessage, 1),
+		subscriptions:   map[string]Subscription{"sub": {Query: model.Query{Collection: "users"}, IncludeData: true}},
+		allowAllTenants: true,
 	}
 
 	hub.Register(client)

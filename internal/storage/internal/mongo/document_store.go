@@ -251,19 +251,21 @@ func (m *documentStore) Watch(ctx context.Context, tenant string, collectionName
 	pipeline := mongo.Pipeline{}
 
 	// Tenant filter
-	tenantMatch := bson.D{
-		{Key: "$or", Value: bson.A{
-			bson.D{
-				{Key: "operationType", Value: bson.D{{Key: "$in", Value: bson.A{"insert", "update", "replace"}}}},
-				{Key: "fullDocument.tenant_id", Value: tenant},
-			},
-			bson.D{
-				{Key: "operationType", Value: "delete"},
-				{Key: "documentKey._id", Value: bson.D{{Key: "$regex", Value: "^" + tenant + ":"}}},
-			},
-		}},
+	if tenant != "" {
+		tenantMatch := bson.D{
+			{Key: "$or", Value: bson.A{
+				bson.D{
+					{Key: "operationType", Value: bson.D{{Key: "$in", Value: bson.A{"insert", "update", "replace"}}}},
+					{Key: "fullDocument.tenant_id", Value: tenant},
+				},
+				bson.D{
+					{Key: "operationType", Value: "delete"},
+					{Key: "documentKey._id", Value: bson.D{{Key: "$regex", Value: "^" + tenant + ":"}}},
+				},
+			}},
+		}
+		pipeline = append(pipeline, bson.D{{Key: "$match", Value: tenantMatch}})
 	}
-	pipeline = append(pipeline, bson.D{{Key: "$match", Value: tenantMatch}})
 
 	if collectionName != "" {
 		// Filter by fullDocument.collection for insert/update/replace
@@ -314,13 +316,15 @@ func (m *documentStore) Watch(ctx context.Context, tenant string, collectionName
 			}
 
 			// Client-side filtering for tenant (double check)
-			if changeEvent.OperationType == "delete" {
-				if !strings.HasPrefix(changeEvent.DocumentKey.ID, tenant+":") {
-					continue
-				}
-			} else {
-				if changeEvent.FullDocument == nil || changeEvent.FullDocument.TenantID != tenant {
-					continue
+			if tenant != "" {
+				if changeEvent.OperationType == "delete" {
+					if !strings.HasPrefix(changeEvent.DocumentKey.ID, tenant+":") {
+						continue
+					}
+				} else {
+					if changeEvent.FullDocument == nil || changeEvent.FullDocument.TenantID != tenant {
+						continue
+					}
 				}
 			}
 
@@ -331,9 +335,20 @@ func (m *documentStore) Watch(ctx context.Context, tenant string, collectionName
 				}
 			}
 
+			// If tenant arg is empty, try to get it from document
+			eventTenant := tenant
+			if eventTenant == "" {
+				if changeEvent.FullDocument != nil {
+					eventTenant = changeEvent.FullDocument.TenantID
+				} else if strings.Contains(changeEvent.DocumentKey.ID, ":") {
+					parts := strings.SplitN(changeEvent.DocumentKey.ID, ":", 2)
+					eventTenant = parts[0]
+				}
+			}
+
 			evt := types.Event{
 				Id:          changeEvent.DocumentKey.ID,
-				TenantID:    tenant,
+				TenantID:    eventTenant,
 				ResumeToken: changeEvent.ID,
 				// Timestamp: ... (ClusterTime is complex, let's use current time or parse it if needed)
 				Timestamp: time.Now().UnixNano(),

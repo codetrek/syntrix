@@ -30,6 +30,11 @@ func NewEngine(storage storage.DocumentStore, cspURL string) *Engine {
 	}
 }
 
+// SetHTTPClient sets the HTTP client for the engine.
+func (e *Engine) SetHTTPClient(client *http.Client) {
+	e.client = client
+}
+
 // GetDocument retrieves a document by path.
 func (e *Engine) GetDocument(ctx context.Context, tenant string, path string) (model.Document, error) {
 	// Future: Add authorization check here

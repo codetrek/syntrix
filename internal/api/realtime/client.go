@@ -249,9 +249,12 @@ func (c *Client) handleAuth(msg BaseMessage) {
 		return
 	}
 
+	c.mu.Lock()
 	c.tenant = claims.TenantID
 	c.allowAllTenants = hasSystemRoleFromClaims(claims)
 	c.authenticated = true
+	c.mu.Unlock()
+
 	c.send <- BaseMessage{ID: msg.ID, Type: TypeAuthAck}
 }
 
@@ -269,6 +272,7 @@ func (c *Client) writePump() {
 	for {
 		select {
 		case message, ok := <-c.send:
+			log.Printf("[Debug] Client writePump: received message type=%s id=%s", message.Type, message.ID)
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
 				// The hub closed the channel.

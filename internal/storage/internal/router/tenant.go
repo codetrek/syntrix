@@ -25,16 +25,15 @@ func NewTenantDocumentRouter(defaultRouter types.DocumentRouter, tenants map[str
 }
 
 func (r *TenantDocumentRouter) Select(tenant string, op types.OpKind) (types.DocumentStore, error) {
-	if tenant == "" {
-		return nil, ErrTenantRequired
-	}
-
 	router, ok := r.tenants[tenant]
 	if !ok {
 		router = r.defaultRouter
 	}
 
 	if router == nil {
+		if tenant == "" {
+			return nil, ErrTenantRequired
+		}
 		return nil, ErrTenantNotFound
 	}
 

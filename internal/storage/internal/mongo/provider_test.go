@@ -2,6 +2,8 @@ package mongo
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 )
 
 func TestNewProvider_InvalidURI(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -21,18 +24,21 @@ func TestNewProvider_InvalidURI(t *testing.T) {
 }
 
 func TestNewProvider_ConnectionFailure(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	// Valid URI format but likely unreachable port
 	// Using a short connect timeout to fail fast
-	uri := "mongodb://localhost:27999/?connectTimeoutMS=100"
+	// Added serverSelectionTimeoutMS to fail fast on Ping
+	uri := "mongodb://localhost:27999/?connectTimeoutMS=100&serverSelectionTimeoutMS=100"
 	p, err := NewProvider(ctx, uri, "testdb")
 	assert.Error(t, err)
 	assert.Nil(t, p)
 }
 
 func TestProvider_Getters(t *testing.T) {
+	t.Parallel()
 	// Manually construct Provider since we are in the same package
 	mockClient := &mongo.Client{}
 	dbName := "test_db"
@@ -46,6 +52,7 @@ func TestProvider_Getters(t *testing.T) {
 }
 
 func TestProvider_Close(t *testing.T) {
+	t.Parallel()
 	// We need a real client to call Disconnect without panic (or at least a client created via Connect)
 	// Even if not connected, Disconnect should be safe to call on a client returned by Connect.
 
@@ -67,6 +74,7 @@ func TestProvider_Close(t *testing.T) {
 }
 
 func TestNewProvider_Success(t *testing.T) {
+	t.Parallel()
 	// This test requires a running MongoDB.
 	// We try to connect to the test URI defined in backend_test.go
 
@@ -84,14 +92,22 @@ func TestNewProvider_Success(t *testing.T) {
 	}
 	client.Disconnect(ctx)
 
+	// Generate unique DB name
+	safeName := strings.ReplaceAll(t.Name(), "/", "_")
+	safeName = strings.ReplaceAll(safeName, "\\", "_")
+	if len(safeName) > 20 {
+		safeName = safeName[len(safeName)-20:]
+	}
+	dbName := fmt.Sprintf("test_mongo_prov_%s_%d", safeName, time.Now().UnixNano()%100000)
+
 	// Now test NewProvider
-	p, err := NewProvider(ctx, testMongoURI, testDBName)
+	p, err := NewProvider(ctx, testMongoURI, dbName)
 	assert.NoError(t, err)
 	assert.NotNil(t, p)
 
 	if p != nil {
 		assert.NotNil(t, p.Client())
-		assert.Equal(t, testDBName, p.DatabaseName())
+		assert.Equal(t, dbName, p.DatabaseName())
 		p.Close(ctx)
 	}
 }

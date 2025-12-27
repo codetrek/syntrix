@@ -189,15 +189,17 @@ func claimsToMap(claims *identity.Claims) map[string]interface{} {
 
 	return map[string]interface{}{
 		"sub":      claims.Subject,
+		"tid":      claims.TenantID,
+		"oid":      claims.UserID,
 		"username": claims.Username,
 		"roles":    append([]string{}, claims.Roles...),
-		"disabled": claims.Disabled,
-		"aud":      claims.Audience,
-		"iss":      claims.Issuer,
-		"jti":      claims.ID,
-		"nbf":      toTime(claims.NotBefore),
-		"exp":      toTime(claims.ExpiresAt),
-		"iat":      toTime(claims.IssuedAt),
+		"disabled":  claims.Disabled,
+		"aud":       claims.Audience,
+		"iss":       claims.Issuer,
+		"jti":       claims.ID,
+		"nbf":       toTime(claims.NotBefore),
+		"exp":       toTime(claims.ExpiresAt),
+		"iat":       toTime(claims.IssuedAt),
 	}
 }
 

@@ -129,12 +129,17 @@ func TestServeSSE_WriteError(t *testing.T) {
 }
 
 func TestServeSSE_AuthMissing(t *testing.T) {
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
+
 	hub := NewHub()
+	go hub.Run(hubCtx)
+
 	qs := &MockQueryService{}
 	auth := &mockAuthService{}
 	cfg := Config{AllowedOrigins: []string{"http://example.com"}, EnableAuth: true}
 
-	req := httptest.NewRequest("GET", "/realtime/sse", nil).WithContext(context.WithValue(context.Background(), identity.ContextKeyTenant, "default"))
+	req := httptest.NewRequest("GET", "/realtime/sse", nil)
 	req.Header.Set("Origin", "http://example.com")
 	w := httptest.NewRecorder()
 
@@ -144,7 +149,12 @@ func TestServeSSE_AuthMissing(t *testing.T) {
 }
 
 func TestServeSSE_OriginMissingWithCredentials(t *testing.T) {
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
+
 	hub := NewHub()
+	go hub.Run(hubCtx)
+
 	qs := &MockQueryService{}
 	auth := &mockAuthService{}
 	cfg := Config{AllowedOrigins: []string{"http://example.com"}, EnableAuth: true}
@@ -159,7 +169,12 @@ func TestServeSSE_OriginMissingWithCredentials(t *testing.T) {
 }
 
 func TestServeSSE_OriginDisallowed(t *testing.T) {
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
+
 	hub := NewHub()
+	go hub.Run(hubCtx)
+
 	qs := &MockQueryService{}
 	auth := &mockAuthService{}
 	cfg := Config{AllowedOrigins: []string{"http://example.com"}, EnableAuth: true}
@@ -175,16 +190,27 @@ func TestServeSSE_OriginDisallowed(t *testing.T) {
 }
 
 func TestServeSSE_CookieIgnored(t *testing.T) {
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
+
 	hub := NewHub()
+	go hub.Run(hubCtx)
+
 	qs := &MockQueryService{}
 	auth := &mockAuthService{}
 	cfg := Config{AllowedOrigins: []string{"http://example.com"}, EnableAuth: true}
 
-	req := httptest.NewRequest("GET", "/realtime/sse", nil).WithContext(context.WithValue(context.Background(), identity.ContextKeyTenant, "default"))
+	reqCtx, reqCancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest("GET", "/realtime/sse", nil).WithContext(context.WithValue(reqCtx, identity.ContextKeyTenant, "default"))
 	req.Header.Set("Authorization", "Bearer good")
 	req.Header.Set("Origin", "http://example.com")
 	req.Header.Set("Cookie", "a=b")
 	w := httptest.NewRecorder()
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		reqCancel()
+	}()
 
 	ServeSSE(hub, qs, auth, cfg, w, req)
 

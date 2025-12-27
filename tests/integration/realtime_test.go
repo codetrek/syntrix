@@ -77,6 +77,7 @@ const (
 )
 
 func TestRealtime_FullFlow(t *testing.T) {
+	t.Parallel()
 	env := setupServiceEnv(t, "")
 	defer env.Cancel()
 
@@ -102,6 +103,7 @@ func TestRealtime_FullFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read Auth Ack
+	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
 	var ackMsg BaseMessage
 	err = ws.ReadJSON(&ackMsg)
 	require.NoError(t, err)
@@ -180,6 +182,7 @@ func TestRealtime_FullFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read Unsubscribe Ack
+	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
 	var unsubAckMsg BaseMessage
 	err = ws.ReadJSON(&unsubAckMsg)
 	require.NoError(t, err)
@@ -211,6 +214,7 @@ func TestRealtime_FullFlow(t *testing.T) {
 }
 
 func TestRealtime_SSE(t *testing.T) {
+	t.Parallel()
 	env := setupServiceEnv(t, "")
 	defer env.Cancel()
 
@@ -236,13 +240,31 @@ func TestRealtime_SSE(t *testing.T) {
 
 	reader := bufio.NewReader(resp.Body)
 
+	readLine := func() string {
+		type result struct {
+			line string
+			err  error
+		}
+		ch := make(chan result, 1)
+		go func() {
+			line, err := reader.ReadString('\n')
+			ch <- result{line, err}
+		}()
+		select {
+		case res := <-ch:
+			require.NoError(t, res.err)
+			return res.line
+		case <-time.After(5 * time.Second):
+			t.Fatal("Timeout reading SSE stream")
+			return ""
+		}
+	}
+
 	// 1. Read Initial Connection Message
 	// Expect ": connected\n\n"
-	line, err := reader.ReadString('\n')
-	require.NoError(t, err)
+	line := readLine()
 	assert.Equal(t, ": connected\n", line)
-	line, err = reader.ReadString('\n')
-	require.NoError(t, err)
+	line = readLine()
 	assert.Equal(t, "\n", line)
 
 	// Give some time for subscription to register
@@ -300,6 +322,7 @@ func TestRealtime_SSE(t *testing.T) {
 }
 
 func TestRealtime_Stream(t *testing.T) {
+	t.Parallel()
 	env := setupServiceEnv(t, "")
 	defer env.Cancel()
 
@@ -337,6 +360,7 @@ func TestRealtime_Stream(t *testing.T) {
 	require.NoError(t, ws.WriteJSON(authMsg))
 
 	var authAck BaseMessage
+	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
 	require.NoError(t, ws.ReadJSON(&authAck))
 	assert.Equal(t, TypeAuthAck, authAck.Type)
 
@@ -358,6 +382,7 @@ func TestRealtime_Stream(t *testing.T) {
 	// 3. Expect Snapshot with existing document
 	var receivedSnapshot bool
 	for i := 0; i < 5; i++ {
+		ws.SetReadDeadline(time.Now().Add(5 * time.Second))
 		var msg BaseMessage
 		err := ws.ReadJSON(&msg)
 		require.NoError(t, err)
@@ -392,6 +417,7 @@ func TestRealtime_Stream(t *testing.T) {
 	// 5. Expect Event
 	var receivedEvent bool
 	for i := 0; i < 5; i++ {
+		ws.SetReadDeadline(time.Now().Add(5 * time.Second))
 		var msg BaseMessage
 		err := ws.ReadJSON(&msg)
 		require.NoError(t, err)
@@ -419,6 +445,7 @@ func mustMarshal(v interface{}) []byte {
 }
 
 func TestRealtime_Filtering(t *testing.T) {
+	t.Parallel()
 	env := setupServiceEnv(t, "")
 	defer env.Cancel()
 
@@ -442,6 +469,7 @@ func TestRealtime_Filtering(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read Auth Ack
+	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
 	var ackMsg BaseMessage
 	err = ws.ReadJSON(&ackMsg)
 	require.NoError(t, err)
@@ -467,6 +495,7 @@ func TestRealtime_Filtering(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read Subscribe Ack
+	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
 	var subAckMsg BaseMessage
 	err = ws.ReadJSON(&subAckMsg)
 	require.NoError(t, err)
@@ -520,6 +549,7 @@ func TestRealtime_Filtering(t *testing.T) {
 	err = ws.WriteJSON(authMsg2)
 	require.NoError(t, err)
 	// Read auth ack
+	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
 	ws.ReadJSON(&BaseMessage{})
 
 	// Subscribe again
@@ -539,6 +569,7 @@ func TestRealtime_Filtering(t *testing.T) {
 	err = ws.WriteJSON(subMsg2)
 	require.NoError(t, err)
 	// Read sub ack
+	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
 	ws.ReadJSON(&BaseMessage{})
 
 	// 4. Create Matching Document (age = 25)

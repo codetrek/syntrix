@@ -12,6 +12,7 @@ import (
 )
 
 func TestDocumentSystemFields(t *testing.T) {
+	t.Parallel()
 	env := setupServiceEnv(t, "")
 	defer env.Cancel()
 

@@ -15,6 +15,7 @@ import (
 // TestAPIIntegration runs a full integration test against a real MongoDB.
 // It requires MongoDB to be running (e.g. via docker-compose).
 func TestAPIIntegration(t *testing.T) {
+	t.Parallel()
 	env := setupServiceEnv(t, "")
 	defer env.Cancel()
 

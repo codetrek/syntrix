@@ -18,6 +18,7 @@ import (
 )
 
 func TestReplication_FullFlow(t *testing.T) {
+	t.Parallel()
 	env := setupServiceEnv(t, "")
 	defer env.Cancel()
 
@@ -42,9 +43,28 @@ func TestReplication_FullFlow(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	reader := bufio.NewReader(resp.Body)
 
+	readLine := func() string {
+		type result struct {
+			line string
+			err  error
+		}
+		ch := make(chan result, 1)
+		go func() {
+			line, err := reader.ReadString('\n')
+			ch <- result{line, err}
+		}()
+		select {
+		case res := <-ch:
+			require.NoError(t, res.err)
+			return res.line
+		case <-time.After(5 * time.Second):
+			t.Fatal("Timeout reading SSE stream")
+			return ""
+		}
+	}
+
 	// Read connection message
-	line, err := reader.ReadString('\n')
-	require.NoError(t, err)
+	line := readLine()
 	assert.Equal(t, ": connected\n", line)
 
 	// Wait for subscription

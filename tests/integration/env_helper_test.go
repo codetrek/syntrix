@@ -8,6 +8,7 @@ import (
 )
 
 func TestEnvHelper(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -22,16 +23,10 @@ func TestEnvHelper(t *testing.T) {
 		assert.NotEmpty(t, token)
 	})
 
-	// Test createUserInDB and GetToken
+	// Test GetToken
 	t.Run("UserManagement", func(t *testing.T) {
 		username := "testuser_helper"
 		role := "user"
-		
-		// First creation
-		env.createUserInDB(t, username, role)
-		
-		// Second creation (should be idempotent, covering the "exists" check)
-		env.createUserInDB(t, username, role)
 
 		token := env.GetToken(t, username, role)
 		assert.NotEmpty(t, token)

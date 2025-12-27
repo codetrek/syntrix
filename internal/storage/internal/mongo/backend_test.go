@@ -2,12 +2,15 @@ package mongo
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/codetrek/syntrix/internal/storage/types"
 	"github.com/codetrek/syntrix/pkg/model"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,26 +21,50 @@ const (
 	testDBName   = "syntrix_test"
 )
 
+var (
+	globalTestClient     *mongo.Client
+	globalTestClientOnce sync.Once
+)
+
+func getGlobalTestClient(t *testing.T) *mongo.Client {
+	globalTestClientOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		clientOpts := options.Client().ApplyURI(testMongoURI)
+		client, err := mongo.Connect(ctx, clientOpts)
+		require.NoError(t, err)
+		err = client.Ping(ctx, nil)
+		require.NoError(t, err)
+		globalTestClient = client
+	})
+	return globalTestClient
+}
+
+type testDocumentStore struct {
+	*documentStore
+}
+
+func (s *testDocumentStore) Close(ctx context.Context) error {
+	// Do not close the shared client
+	return nil
+}
+
 func setupTestBackend(t *testing.T) types.DocumentStore {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	env := setupTestEnv(t)
 
-	provider, err := NewDocumentProvider(ctx, testMongoURI, testDBName, "documents", "sys", 0)
-	require.NoError(t, err)
+	dStore := &documentStore{
+		client:              env.Client,
+		db:                  env.DB,
+		dataCollection:      "documents",
+		sysCollection:       "sys",
+		softDeleteRetention: 0,
+	}
 
-	store := provider.Document()
-
-	// Clean up test database before starting
-	dStore, ok := store.(*documentStore)
-	require.True(t, ok)
-
-	err = dStore.db.Drop(ctx)
-	require.NoError(t, err)
-
-	// Recreate indexes after dropping the database
+	// Recreate indexes
+	ctx := context.Background()
 	require.NoError(t, dStore.EnsureIndexes(ctx))
 
-	return store
+	return &testDocumentStore{documentStore: dStore}
 }
 
 func TestMongoBackend_CRUD(t *testing.T) {
@@ -229,8 +256,13 @@ func TestMongoBackend_IndexesIncludeCollectionHash(t *testing.T) {
 
 	ctx := context.Background()
 
-	dStore, ok := backend.(*documentStore)
-	require.True(t, ok)
+	var dStore *documentStore
+	if ds, ok := backend.(*documentStore); ok {
+		dStore = ds
+	} else if tds, ok := backend.(*testDocumentStore); ok {
+		dStore = tds.documentStore
+	}
+	require.NotNil(t, dStore, "backend should be *documentStore or *testDocumentStore")
 
 	coll := dStore.getCollection("")
 	cur, err := coll.Indexes().List(ctx)

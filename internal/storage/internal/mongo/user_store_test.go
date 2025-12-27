@@ -9,36 +9,17 @@ import (
 	"github.com/codetrek/syntrix/internal/storage/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func setupTestUserStore(t *testing.T) (types.UserStore, func()) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	env := setupTestEnv(t)
 
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(testMongoURI))
-	require.NoError(t, err)
-
-	// Ping to ensure connection
-	err = client.Ping(ctx, nil)
-	if err != nil {
-		t.Skip("MongoDB not available, skipping integration tests")
-	}
-
-	db := client.Database(testDBName)
-
-	// Clean up
-	err = db.Drop(ctx)
-	require.NoError(t, err)
-
-	store := NewUserStore(db, "")
-	err = store.EnsureIndexes(ctx)
+	store := NewUserStore(env.DB, "")
+	err := store.EnsureIndexes(context.Background())
 	require.NoError(t, err)
 
 	return store, func() {
-		_ = db.Drop(context.Background())
-		_ = client.Disconnect(context.Background())
+		// Cleanup handled by setupTestEnv
 	}
 }
 

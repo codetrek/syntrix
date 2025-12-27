@@ -92,7 +92,7 @@ func (s *Server) StartBackgroundTasks(ctx context.Context) error {
 	go s.hub.Run(ctx)
 
 	// Watch all collections
-	stream, err := s.queryService.WatchCollection(ctx, "default", "")
+	stream, err := s.queryService.WatchCollection(ctx, "", "")
 	if err != nil {
 		return err
 	}

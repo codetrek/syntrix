@@ -42,9 +42,43 @@ func TestServer_HandleWS(t *testing.T) {
 	assert.NotEqual(t, http.StatusOK, w.Code)
 }
 
-func TestServer_HandleSSE(t *testing.T) {
+func TestServer_HandleWS_QueryToken(t *testing.T) {
 	mockQS := new(MockQueryService)
 	server := NewServer(mockQS, "docs", &mockAuthService{}, Config{EnableAuth: true})
+
+	req := httptest.NewRequest("GET", "/ws?access_token=bad", nil)
+	w := httptest.NewRecorder()
+
+	server.HandleWS(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Contains(t, w.Body.String(), "Query token not allowed")
+}
+
+func TestTokenFromQueryParam(t *testing.T) {
+	// Case 1: Nil request
+	assert.Equal(t, "", tokenFromQueryParam(nil))
+
+	// Case 2: access_token
+	req1 := httptest.NewRequest("GET", "/?access_token=abc", nil)
+	assert.Equal(t, "abc", tokenFromQueryParam(req1))
+
+	// Case 3: token
+	req2 := httptest.NewRequest("GET", "/?token=xyz", nil)
+	assert.Equal(t, "xyz", tokenFromQueryParam(req2))
+
+	// Case 4: Both (access_token takes precedence)
+	req3 := httptest.NewRequest("GET", "/?access_token=abc&token=xyz", nil)
+	assert.Equal(t, "abc", tokenFromQueryParam(req3))
+
+	// Case 5: None
+	req4 := httptest.NewRequest("GET", "/", nil)
+	assert.Equal(t, "", tokenFromQueryParam(req4))
+}
+
+func TestServer_HandleSSE(t *testing.T) {
+	mockQS := new(MockQueryService)
+	server := NewServer(mockQS, "docs", &mockAuthService{}, Config{EnableAuth: true, AllowedOrigins: []string{"http://example.com"}})
 
 	// Start Hub
 	ctxHub, cancelHub := context.WithCancel(context.Background())
@@ -53,6 +87,8 @@ func TestServer_HandleSSE(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	req := httptest.NewRequest("GET", "/sse", nil).WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer good")
+	req.Header.Set("Origin", "http://example.com")
 	w := httptest.NewRecorder()
 
 	// Cancel context shortly to unblock HandleSSE

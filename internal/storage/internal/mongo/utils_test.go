@@ -8,6 +8,7 @@ import (
 )
 
 func TestMakeFilterBSON_FieldAndOpMapping(t *testing.T) {
+	t.Parallel()
 	filters := model.Filters{
 		{Field: "path", Op: "==", Value: "users/1"},
 		{Field: "collection", Op: "!=", Value: "users"},
@@ -44,6 +45,7 @@ func TestMakeFilterBSON_FieldAndOpMapping(t *testing.T) {
 }
 
 func TestMakeFilterBSON_Defaults(t *testing.T) {
+	t.Parallel()
 	bsonFilter := makeFilterBSON(nil)
 	assert.Empty(t, bsonFilter)
 

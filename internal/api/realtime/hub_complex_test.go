@@ -20,9 +20,10 @@ func TestHub_Broadcast_ComplexFilters(t *testing.T) {
 	go hub.Run(hubCtx)
 
 	client := &Client{
-		hub:           hub,
-		send:          make(chan BaseMessage, 10),
-		subscriptions: make(map[string]Subscription),
+		hub:             hub,
+		send:            make(chan BaseMessage, 10),
+		subscriptions:   make(map[string]Subscription),
+		allowAllTenants: true,
 	}
 
 	// Test "in" operator

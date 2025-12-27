@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -15,6 +16,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
+
+type mockRoundTripper struct {
+	fn func(*http.Request) (*http.Response, error)
+}
+
+func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return m.fn(req)
+}
 
 func setupTestServer() (*Server, *MockStorageBackend) {
 	mockStorage := new(MockStorageBackend)
@@ -72,13 +81,16 @@ func TestServer_WatchCollection_InvalidBody(t *testing.T) {
 }
 
 func TestServer_WatchCollection_WatchError(t *testing.T) {
-	server, mockStorage := setupTestServer()
+	server, _ := setupTestServer()
 
-	// Watch returns channel and error.
-	// We need to mock Watch to return error.
-	// Note: Watch returns <-chan Event, error
-	var ch <-chan storage.Event
-	mockStorage.On("Watch", mock.Anything, "default", "test", mock.Anything, mock.Anything).Return(ch, assert.AnError)
+	// Mock HTTP Client to return error
+	server.engine.SetHTTPClient(&http.Client{
+		Transport: &mockRoundTripper{
+			fn: func(req *http.Request) (*http.Response, error) {
+				return nil, assert.AnError
+			},
+		},
+	})
 
 	reqBody, _ := json.Marshal(map[string]string{"collection": "test", "tenant": "default"})
 	req := httptest.NewRequest("POST", "/internal/v1/watch", bytes.NewBuffer(reqBody))
@@ -108,15 +120,27 @@ func TestServer_WatchCollection_NoFlusher(t *testing.T) {
 }
 
 func TestServer_WatchCollection_Success(t *testing.T) {
-	server, mockStorage := setupTestServer()
+	server, _ := setupTestServer()
 
-	ch := make(chan storage.Event, 1)
-	ch <- storage.Event{Type: storage.EventCreate, Id: "1"}
-	close(ch)
-
-	// Cast to read-only channel
-	readCh := (<-chan storage.Event)(ch)
-	mockStorage.On("Watch", mock.Anything, "default", "test", mock.Anything, mock.Anything).Return(readCh, nil)
+	// Mock HTTP Client to return success stream
+	server.engine.SetHTTPClient(&http.Client{
+		Transport: &mockRoundTripper{
+			fn: func(req *http.Request) (*http.Response, error) {
+				// Return a pipe so we can write events
+				pr, pw := io.Pipe()
+				go func() {
+					enc := json.NewEncoder(pw)
+					enc.Encode(storage.Event{Type: storage.EventCreate, Id: "1"})
+					pw.Close()
+				}()
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       pr,
+					Header:     make(http.Header),
+				}, nil
+			},
+		},
+	})
 
 	reqBody, _ := json.Marshal(map[string]string{"collection": "test", "tenant": "default"})
 	req := httptest.NewRequest("POST", "/internal/v1/watch", bytes.NewBuffer(reqBody))
@@ -360,7 +384,7 @@ func (n *noFlusher) Write(b []byte) (int, error) { return n.rec.Write(b) }
 func (n *noFlusher) WriteHeader(status int)      { n.rec.WriteHeader(status) }
 
 func TestServer_WatchCollection_Errors(t *testing.T) {
-	server, mockStorage := setupTestServer()
+	server, _ := setupTestServer()
 
 	t.Run("bad json", func(t *testing.T) {
 		req := httptest.NewRequest("POST", "/internal/v1/watch", bytes.NewBuffer([]byte("{bad")))
@@ -380,9 +404,14 @@ func TestServer_WatchCollection_Errors(t *testing.T) {
 	})
 
 	t.Run("watch error", func(t *testing.T) {
-		mockStorage.ExpectedCalls = nil
-		mockStorage.Calls = nil
-		mockStorage.On("Watch", mock.Anything, "default", "c", nil, storage.WatchOptions{}).Return(nil, assert.AnError)
+		// Mock HTTP Client to return error
+		server.engine.SetHTTPClient(&http.Client{
+			Transport: &mockRoundTripper{
+				fn: func(req *http.Request) (*http.Response, error) {
+					return nil, assert.AnError
+				},
+			},
+		})
 
 		body, _ := json.Marshal(map[string]string{"collection": "c", "tenant": "default"})
 		req := httptest.NewRequest("POST", "/internal/v1/watch", bytes.NewBuffer(body))

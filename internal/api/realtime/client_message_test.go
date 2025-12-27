@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codetrek/syntrix/internal/identity"
 	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/pkg/model"
 
@@ -59,8 +60,96 @@ func TestClientHandleMessage_AuthAck(t *testing.T) {
 	}
 }
 
+func TestClientHandleMessage_AuthError(t *testing.T) {
+	c := &Client{
+		hub:          NewHub(),
+		queryService: &mockQueryForClient{},
+		send:         make(chan BaseMessage, 1),
+		auth:         &mockAuthService{},
+	}
+
+	// Case 1: Invalid Payload
+	c.handleMessage(BaseMessage{Type: TypeAuth, ID: "req1", Payload: []byte(`invalid`)})
+	select {
+	case msg := <-c.send:
+		assert.Equal(t, TypeError, msg.Type)
+		assert.Equal(t, "req1", msg.ID)
+		assert.Contains(t, string(msg.Payload), "invalid_auth")
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected error")
+	}
+
+	// Case 2: Invalid Token
+	payload, _ := json.Marshal(AuthPayload{Token: "bad"})
+	c.handleMessage(BaseMessage{Type: TypeAuth, ID: "req2", Payload: payload})
+	select {
+	case msg := <-c.send:
+		assert.Equal(t, TypeError, msg.Type)
+		assert.Equal(t, "req2", msg.ID)
+		assert.Contains(t, string(msg.Payload), "unauthorized")
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected error")
+	}
+}
+
+func TestClientHandleMessage_AuthSuccess(t *testing.T) {
+	c := &Client{
+		hub:          NewHub(),
+		queryService: &mockQueryForClient{},
+		send:         make(chan BaseMessage, 1),
+		auth:         &mockAuthService{},
+	}
+
+	payload, _ := json.Marshal(AuthPayload{Token: "good"})
+	c.handleMessage(BaseMessage{Type: TypeAuth, ID: "req-ok", Payload: payload})
+
+	select {
+	case msg := <-c.send:
+		assert.Equal(t, TypeAuthAck, msg.Type)
+		assert.Equal(t, "req-ok", msg.ID)
+		assert.True(t, c.authenticated)
+		assert.Equal(t, "default", c.tenant)
+		assert.False(t, c.allowAllTenants)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected auth ack")
+	}
+}
+
+type mockAuthServiceSystem struct {
+	mockAuthService
+}
+
+func (m *mockAuthServiceSystem) ValidateToken(tokenString string) (*identity.Claims, error) {
+	if tokenString == "system" {
+		return &identity.Claims{TenantID: "default", Roles: []string{"system"}}, nil
+	}
+	return m.mockAuthService.ValidateToken(tokenString)
+}
+
+func TestClientHandleMessage_AuthSystemRole(t *testing.T) {
+	c := &Client{
+		hub:          NewHub(),
+		queryService: &mockQueryForClient{},
+		send:         make(chan BaseMessage, 1),
+		auth:         &mockAuthServiceSystem{},
+	}
+
+	payload, _ := json.Marshal(AuthPayload{Token: "system"})
+	c.handleMessage(BaseMessage{Type: TypeAuth, ID: "req", Payload: payload})
+
+	select {
+	case msg := <-c.send:
+		assert.Equal(t, TypeAuthAck, msg.Type)
+		assert.True(t, c.authenticated)
+		assert.True(t, c.allowAllTenants)
+		assert.Equal(t, "default", c.tenant)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected auth ack")
+	}
+}
+
 func TestClientHandleMessage_SubscribeSnapshot(t *testing.T) {
-	c := &Client{hub: NewHub(), queryService: &mockQueryForClient{}, send: make(chan BaseMessage, 2), subscriptions: make(map[string]Subscription)}
+	c := &Client{hub: NewHub(), queryService: &mockQueryForClient{}, send: make(chan BaseMessage, 2), subscriptions: make(map[string]Subscription), authenticated: true}
 	payload := SubscribePayload{Query: model.Query{Collection: "users"}, IncludeData: true, SendSnapshot: true}
 	b, _ := json.Marshal(payload)
 
@@ -74,7 +163,7 @@ func TestClientHandleMessage_SubscribeSnapshot(t *testing.T) {
 }
 
 func TestClientHandleMessage_Unsubscribe(t *testing.T) {
-	c := &Client{hub: NewHub(), queryService: &mockQueryForClient{}, send: make(chan BaseMessage, 1), subscriptions: map[string]Subscription{"sub": {}}}
+	c := &Client{hub: NewHub(), queryService: &mockQueryForClient{}, send: make(chan BaseMessage, 1), subscriptions: map[string]Subscription{"sub": {}}, authenticated: true}
 	payload := UnsubscribePayload{ID: "sub"}
 	b, _ := json.Marshal(payload)
 
@@ -116,6 +205,7 @@ func TestReadPump_InvalidJSONContinues(t *testing.T) {
 	assert.NoError(t, conn.WriteJSON(authMsg))
 
 	var resp BaseMessage
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	assert.NoError(t, conn.ReadJSON(&resp))
 	assert.Equal(t, TypeAuthAck, resp.Type)
 }
@@ -141,7 +231,7 @@ func TestServeWs_RejectsCrossOrigin(t *testing.T) {
 }
 
 func TestHandleMessage_SubscribeCompileError(t *testing.T) {
-	c := &Client{hub: NewHub(), queryService: &mockQueryForClient{}, send: make(chan BaseMessage, 1), subscriptions: make(map[string]Subscription)}
+	c := &Client{hub: NewHub(), queryService: &mockQueryForClient{}, send: make(chan BaseMessage, 1), subscriptions: make(map[string]Subscription), authenticated: true}
 	payload := SubscribePayload{Query: model.Query{Filters: []model.Filter{{Field: "age", Op: "!", Value: 1}}}}
 	b, _ := json.Marshal(payload)
 
@@ -152,7 +242,7 @@ func TestHandleMessage_SubscribeCompileError(t *testing.T) {
 }
 
 func TestHandleMessage_SubscribeBadJSON(t *testing.T) {
-	c := &Client{hub: NewHub(), queryService: &mockQueryForClient{}, send: make(chan BaseMessage, 1), subscriptions: make(map[string]Subscription)}
+	c := &Client{hub: NewHub(), queryService: &mockQueryForClient{}, send: make(chan BaseMessage, 1), subscriptions: make(map[string]Subscription), authenticated: true}
 
 	c.handleMessage(BaseMessage{Type: TypeSubscribe, ID: "sub-bad", Payload: []byte("{bad")})
 
@@ -186,6 +276,7 @@ func TestWritePump_StopsOnChannelClose(t *testing.T) {
 
 	// Send one message through writePump
 	c.send <- BaseMessage{Type: TypeAuthAck, ID: "x"}
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	msgType, data, err := conn.ReadMessage()
 	assert.NoError(t, err)
 	assert.Equal(t, websocket.TextMessage, msgType)
@@ -193,6 +284,7 @@ func TestWritePump_StopsOnChannelClose(t *testing.T) {
 
 	// Closing channel should make writePump emit a close frame and exit
 	close(c.send)
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	_, _, err = conn.ReadMessage()
 	assert.Error(t, err)
 }
@@ -277,6 +369,7 @@ func TestServeWs_ReadWriteCycle(t *testing.T) {
 	assert.NoError(t, conn.WriteJSON(authMsg))
 
 	var resp BaseMessage
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	assert.NoError(t, conn.ReadJSON(&resp))
 	assert.Equal(t, TypeAuthAck, resp.Type)
 	assert.Equal(t, "auth-1", resp.ID)
@@ -286,9 +379,11 @@ func TestServeWs_ReadWriteCycle(t *testing.T) {
 	body, _ := json.Marshal(subPayload)
 	assert.NoError(t, conn.WriteJSON(BaseMessage{Type: TypeSubscribe, ID: "sub-1", Payload: body}))
 
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	assert.NoError(t, conn.ReadJSON(&resp))
 	assert.Equal(t, TypeSubscribeAck, resp.Type)
 
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	assert.NoError(t, conn.ReadJSON(&resp))
 	assert.Equal(t, TypeSnapshot, resp.Type)
 }

@@ -16,6 +16,7 @@ import (
 )
 
 func TestAuthzIntegration(t *testing.T) {
+	t.Parallel()
 	// 1. Define Rules
 	rules := `
 rules_version: '1'

@@ -133,16 +133,16 @@ func (h *Hub) Run(ctx context.Context) {
 }
 
 func determineEventTenant(evt storage.Event) string {
-    if evt.TenantID != "" {
-        return evt.TenantID
-    }
-    if evt.Document != nil && evt.Document.TenantID != "" {
-        return evt.Document.TenantID
-    }
-    if evt.Before != nil && evt.Before.TenantID != "" {
-        return evt.Before.TenantID
-    }
-    return ""
+	if evt.TenantID != "" {
+		return evt.TenantID
+	}
+	if evt.Document != nil && evt.Document.TenantID != "" {
+		return evt.Document.TenantID
+	}
+	if evt.Before != nil && evt.Before.TenantID != "" {
+		return evt.Before.TenantID
+	}
+	return ""
 }
 
 func (h *Hub) Broadcast(event storage.Event) {

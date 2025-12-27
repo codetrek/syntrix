@@ -3,24 +3,23 @@ package integration
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/codetrek/syntrix/internal/config"
 	"github.com/codetrek/syntrix/internal/services"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
-	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type ServiceEnv struct {
@@ -44,7 +43,15 @@ func setupServiceEnvWithOptions(t *testing.T, rulesContent string, configModifie
 	if mongoURI == "" {
 		mongoURI = "mongodb://localhost:27017"
 	}
-	dbName := "syntrix_microservices_test"
+	// Use a unique database name for each test to allow parallel execution
+	// Sanitize test name to be safe for MongoDB and keep it short (max 63 chars)
+	// We use the last 8 chars of the test name + timestamp to ensure uniqueness and brevity
+	safeName := strings.ReplaceAll(t.Name(), "/", "_")
+	safeName = strings.ReplaceAll(safeName, "\\", "_")
+	if len(safeName) > 20 {
+		safeName = safeName[len(safeName)-20:]
+	}
+	dbName := fmt.Sprintf("test_%s_%d", safeName, time.Now().UnixNano()%100000)
 
 	// Clean DB
 	ctx := context.Background()
@@ -58,7 +65,10 @@ func setupServiceEnvWithOptions(t *testing.T, rulesContent string, configModifie
 	}
 	defer client.Disconnect(ctx)
 
-	err = client.Database(dbName).Drop(ctx)
+	dropCtx, dropCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer dropCancel()
+	// Ensure we start with a clean state (though the name is unique)
+	err = client.Database(dbName).Drop(dropCtx)
 	require.NoError(t, err)
 
 	apiPort := getFreePort(t)
@@ -148,12 +158,24 @@ match:
 		mod(cfg)
 	}
 
+	// Check if NATS is available
+	natsAvailable := false
+	if os.Getenv("NATS_URL") != "" {
+		natsAvailable = true
+	} else {
+		conn, err := net.DialTimeout("tcp", "localhost:4222", 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			natsAvailable = true
+		}
+	}
+
 	opts := services.Options{
 		RunAPI:              true,
 		RunQuery:            true,
 		RunCSP:              true,
-		RunTriggerEvaluator: true,
-		RunTriggerWorker:    true,
+		RunTriggerEvaluator: natsAvailable,
+		RunTriggerWorker:    natsAvailable,
 		ListenHost:          "localhost",
 	}
 	for _, mod := range optsModifiers {
@@ -191,6 +213,16 @@ match:
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			manager.Shutdown(shutdownCtx)
+
+			// Cleanup DB
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cleanupCancel()
+
+			client, err := mongo.Connect(cleanupCtx, options.Client().ApplyURI(mongoURI))
+			if err == nil {
+				defer client.Disconnect(context.Background())
+				_ = client.Database(dbName).Drop(cleanupCtx)
+			}
 		},
 	}
 }
@@ -203,61 +235,122 @@ func (e *ServiceEnv) GenerateSystemToken(t *testing.T) string {
 }
 
 func (e *ServiceEnv) GetToken(t *testing.T, uid string, role string) string {
-	// Ensure user exists in DB with correct role
-	e.createUserInDB(t, uid, role)
+	return e.GetTokenForTenant(t, "default", uid, role)
+}
 
-	// Login
-	loginBody := map[string]string{
-		"tenant":   "default",
+func (e *ServiceEnv) GetTokenForTenant(t *testing.T, tenant, uid, role string) string {
+	// 1. Try SignUp
+	signupBody := map[string]string{
+		"tenant":   tenant,
 		"username": uid,
-		"password": "password",
+		"password": "password123456",
 	}
-	bodyBytes, _ := json.Marshal(loginBody)
-	resp, err := http.Post(e.APIURL+"/auth/v1/login", "application/json", bytes.NewBuffer(bodyBytes))
+	bodyBytes, _ := json.Marshal(signupBody)
+	resp, err := http.Post(e.APIURL+"/auth/v1/signup", "application/json", bytes.NewBuffer(bodyBytes))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var token string
+	if resp.StatusCode == http.StatusOK {
+		var res map[string]interface{}
+		err = json.NewDecoder(resp.Body).Decode(&res)
+		require.NoError(t, err)
+		token = res["access_token"].(string)
+	} else {
+		// Log the signup error
+		body, _ := io.ReadAll(resp.Body)
+		t.Logf("SignUp failed: status=%d body=%s", resp.StatusCode, string(body))
 
-	var res map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&res)
-	require.NoError(t, err)
+		// Assume user exists, try Login
+		loginBody := map[string]string{
+			"tenant":   tenant,
+			"username": uid,
+			"password": "password123456",
+		}
+		bodyBytes, _ := json.Marshal(loginBody)
+		respLogin, err := http.Post(e.APIURL+"/auth/v1/login", "application/json", bytes.NewBuffer(bodyBytes))
+		require.NoError(t, err)
+		defer respLogin.Body.Close()
 
-	token, ok := res["access_token"].(string)
-	require.True(t, ok, "access_token not found in response")
-	return token
-}
+		if respLogin.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(respLogin.Body)
+			t.Logf("Login failed: status=%d body=%s", respLogin.StatusCode, string(body))
+		}
+		require.Equal(t, http.StatusOK, respLogin.StatusCode)
 
-func (e *ServiceEnv) createUserInDB(t *testing.T, username, role string) {
-	ctx := context.Background()
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(e.MongoURI))
-	require.NoError(t, err)
-	defer client.Disconnect(ctx)
-
-	coll := client.Database(e.DBName).Collection("users")
-
-	// Check if exists
-	count, err := coll.CountDocuments(ctx, bson.M{"username": username, "tenant_id": "default"})
-	require.NoError(t, err)
-	if count > 0 {
-		return
+		var res map[string]interface{}
+		err = json.NewDecoder(respLogin.Body).Decode(&res)
+		require.NoError(t, err)
+		token = res["access_token"].(string)
 	}
 
-	// Hash password "password"
-	hash, err := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.DefaultCost)
+	// 2. Check Role
+	if role == "user" {
+		return token
+	}
+
+	// 3. Update Role if needed
+	claims, err := parseTokenClaims(token)
 	require.NoError(t, err)
 
-	_, err = coll.InsertOne(ctx, bson.M{
-		"_id":           uuid.New().String(),
-		"tenant_id":     "default",
-		"username":      username,
-		"password_hash": string(hash),
-		"password_algo": "bcrypt",
-		"roles":         []string{role},
-		"created_at":    time.Now(),
-		"updated_at":    time.Now(),
-	})
+	// Check if role is already present
+	if roles, ok := claims["roles"].([]interface{}); ok {
+		for _, r := range roles {
+			if r.(string) == role {
+				return token
+			}
+		}
+	}
+
+	userID := claims["oid"].(string)
+	sysToken := e.GenerateSystemToken(t)
+
+	updateBody := map[string]interface{}{
+		"roles": []string{role},
+	}
+	updateBytes, _ := json.Marshal(updateBody)
+	req, err := http.NewRequest("PATCH", e.APIURL+"/admin/users/"+userID, bytes.NewBuffer(updateBytes))
 	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+sysToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	respUpdate, err := client.Do(req)
+	require.NoError(t, err)
+	defer respUpdate.Body.Close()
+	require.Equal(t, http.StatusOK, respUpdate.StatusCode)
+
+	// 4. Re-Login to get new token
+	loginBody := map[string]string{
+		"tenant":   tenant,
+		"username": uid,
+		"password": "password123456",
+	}
+	bodyBytes, _ = json.Marshal(loginBody)
+	respLogin, err := http.Post(e.APIURL+"/auth/v1/login", "application/json", bytes.NewBuffer(bodyBytes))
+	require.NoError(t, err)
+	defer respLogin.Body.Close()
+	require.Equal(t, http.StatusOK, respLogin.StatusCode)
+
+	var res map[string]interface{}
+	err = json.NewDecoder(respLogin.Body).Decode(&res)
+	require.NoError(t, err)
+	return res["access_token"].(string)
+
+}
+
+func parseTokenClaims(token string) (map[string]interface{}, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid token format")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, err
+	}
+	var claims map[string]interface{}
+	err = json.Unmarshal(payload, &claims)
+	return claims, err
 }
 
 func (e *ServiceEnv) MakeRequest(t *testing.T, method, path string, body interface{}, token string) *http.Response {

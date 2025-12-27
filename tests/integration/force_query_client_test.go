@@ -61,6 +61,7 @@ func newMinimalQueryServer(t *testing.T) *minimalQueryServer {
 }
 
 func TestIntegration_ForceQueryClient_API(t *testing.T) {
+	t.Parallel()
 	queryStub := newMinimalQueryServer(t)
 
 	cfgMod := func(cfg *config.Config) {

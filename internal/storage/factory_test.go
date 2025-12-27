@@ -29,12 +29,30 @@ func (m *mockMongoProvider) Close(ctx context.Context) error {
 	return nil
 }
 
+// Mock provider creation
+var originalNewMongoProvider = newMongoProvider
+
+func setupMockProvider() {
+	newMongoProvider = func(ctx context.Context, uri, dbName string) (Provider, error) {
+		// Return a dummy client (won't connect but satisfies interface)
+		client, _ := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://mock"))
+		return &mockMongoProvider{client: client, dbName: dbName}, nil
+	}
+}
+
+func teardownMockProvider() {
+	newMongoProvider = originalNewMongoProvider
+}
+
 const (
 	testMongoURI = "mongodb://localhost:27017"
 	testDBName   = "syntrix_test_factory"
 )
 
 func TestNewFactory(t *testing.T) {
+	setupMockProvider()
+	defer teardownMockProvider()
+
 	cfg := &config.Config{
 		Storage: config.StorageConfig{
 			Backends: map[string]config.BackendConfig{
@@ -77,15 +95,38 @@ func TestNewFactory(t *testing.T) {
 	defer cancel()
 
 	f, err := NewFactory(ctx, cfg)
-	if err != nil {
-		t.Skipf("Skipping test: MongoDB not available: %v", err)
-	}
 	require.NoError(t, err)
 	defer f.Close()
 
 	assert.NotNil(t, f.Document())
 	assert.NotNil(t, f.User())
 	assert.NotNil(t, f.Revocation())
+}
+
+func TestNewFactory_TenantConfig(t *testing.T) {
+	setupMockProvider()
+	defer teardownMockProvider()
+
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			Backends: map[string]config.BackendConfig{
+				"primary": {Type: "mongo", Mongo: config.MongoConfig{URI: "mongodb://p", DatabaseName: "db1"}},
+				"tenant1": {Type: "mongo", Mongo: config.MongoConfig{URI: "mongodb://t1", DatabaseName: "db2"}},
+			},
+			Topology: config.TopologyConfig{
+				Document: config.DocumentTopology{BaseTopology: config.BaseTopology{Strategy: "single", Primary: "primary"}},
+				User:     config.CollectionTopology{BaseTopology: config.BaseTopology{Strategy: "single", Primary: "primary"}},
+				Revocation: config.CollectionTopology{BaseTopology: config.BaseTopology{Strategy: "single", Primary: "primary"}},
+			},
+			Tenants: map[string]config.TenantConfig{
+				"t1": {Backend: "tenant1"},
+			},
+		},
+	}
+
+	f, err := NewFactory(context.Background(), cfg)
+	require.NoError(t, err)
+	defer f.Close()
 }
 
 func TestNewFactory_Errors(t *testing.T) {
