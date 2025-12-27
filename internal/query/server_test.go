@@ -488,3 +488,8 @@ func TestServer_WatchCollection_ContextCancel(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 }
+
+func TestTenantOrDefault(t *testing.T) {
+	assert.Equal(t, model.DefaultTenantID, tenantOrDefault(""))
+	assert.Equal(t, "custom", tenantOrDefault("custom"))
+}

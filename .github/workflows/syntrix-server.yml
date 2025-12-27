@@ -52,56 +52,59 @@ jobs:
           # Generate function report
           go tool cover -func=coverage.out > coverage.txt
 
-          # Print formatted table (similar to scripts/coverage.sh)
-          echo -e "\nFunction coverage details (excluding 100%):"
+          # Clean up package names for processing
+          sed 's/github.com\/codetrek\/syntrix\///g' coverage.txt > coverage.clean.txt
+
+          echo -e "\nFunction coverage details (excluding >= 85%):"
           printf "%-60s %-35s %s\n" "LOCATION" "FUNCTION" "COVERAGE"
           echo "---------------------------------------------------------------------------------------------------------"
 
-          # Clean up package names for display
-          sed 's/github.com\/codetrek\/syntrix\///g' coverage.txt | \
-            grep -v "^total:" | \
-            awk '$3 != "100.0%" {printf "%-60s %-35s %s\n", $1, $2, $3}' | \
-            sort -k3 -nr
+          # Print functions with < 85% coverage, sorted
+          grep -v "^total:" coverage.clean.txt | \
+          awk '{
+              cov = $3
+              sub("%", "", cov)
+              if (cov < 85.0) {
+                  printf "%-60s %-35s %s\n", $1, $2, $3
+              }
+          }' | sort -k3 -nr
 
           echo "---------------------------------------------------------------------------------------------------------"
 
-          COUNT=$(grep "100.0%" coverage.txt | wc -l)
-          echo "Functions with 100% coverage: $COUNT"
+          # Calculate and print groups
+          COUNT_100=$(grep -v "^total:" coverage.clean.txt | awk '$3 == "100.0%"' | wc -l)
+          COUNT_95=$(grep -v "^total:" coverage.clean.txt | awk '{cov=$3; sub("%", "", cov); if (cov >= 95.0 && cov < 100.0) print $0}' | wc -l)
+          COUNT_85=$(grep -v "^total:" coverage.clean.txt | awk '{cov=$3; sub("%", "", cov); if (cov >= 85.0 && cov < 95.0) print $0}' | wc -l)
 
-          # Check Total Coverage (>= 85%)
-          TOTAL_COV=$(grep "total:" coverage.txt | awk '{print $3}' | sed 's/%//')
-          echo "Total Coverage: ${TOTAL_COV}%"
+          echo "Functions with 100% coverage: $COUNT_100"
+          echo "Functions with 95%-100% coverage: $COUNT_95"
+          echo "Functions with 85%-95% coverage: $COUNT_85"
 
-          if (( $(echo "$TOTAL_COV < 85.0" | bc -l) )); then
-            echo "::error::Total coverage ${TOTAL_COV}% is below the required 85%"
-            exit 1
-          fi
+          # Print Total
+          grep "^total:" coverage.clean.txt | awk '{printf "%-96s %s\n", "TOTAL", $3}'
 
-          # Check Individual Function Coverage (>= 60%)
-          echo "Checking for functions with coverage < 60%..."
-
-          awk -v threshold="60.0" '
-            $1 != "total:" && $3 != "100.0%" {
-                # Remove package prefix for cleaner output
-                clean_path = $1
-                sub("github.com/codetrek/syntrix/", "", clean_path)
-
-                # Parse coverage
+          # Check thresholds (Total >= 85%, Individual >= 60%)
+          awk -v threshold_total="85.0" -v threshold_func="75.0" '
+            $1 == "total:" {
                 cov = $3
                 sub("%", "", cov)
-
-                if (cov + 0 < threshold) {
-                    # Parse file and line from clean_path (e.g., "internal/foo.go:123:")
-                    split(clean_path, parts, ":")
+                if (cov < threshold_total) {
+                    print "::error::Total coverage " cov "% is below the required " threshold_total "%"
+                    exit 1
+                }
+            }
+            $1 != "total:" {
+                cov = $3
+                sub("%", "", cov)
+                if (cov < threshold_func) {
+                    split($1, parts, ":")
                     file = parts[1]
                     line = parts[2]
-
-                    # Print error annotation
-                    printf "::error file=%s,line=%s::Function %s has coverage %s (< 60%%)\n", file, line, $2, $3
+                    printf "::error file=%s,line=%s::Function %s has coverage %s (< %s%%)\n", file, line, $2, $3, threshold_func
                     failed = 1
                 }
             }
             END {
                 if (failed) exit 1
             }
-          ' coverage.txt
+          ' coverage.clean.txt

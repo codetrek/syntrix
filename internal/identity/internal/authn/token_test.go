@@ -174,3 +174,28 @@ func TestLoadPrivateKey(t *testing.T) {
 	assert.Equal(t, key.N, loadedKey.N)
 	assert.Equal(t, key.E, loadedKey.E)
 }
+
+func TestEnsurePrivateKey(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Case 1: File does not exist, should generate
+	keyPath := filepath.Join(tempDir, "new_key.pem")
+	key, err := EnsurePrivateKey(keyPath)
+	require.NoError(t, err)
+	assert.NotNil(t, key)
+	assert.FileExists(t, keyPath)
+
+	// Case 2: File exists, should load
+	key2, err := EnsurePrivateKey(keyPath)
+	require.NoError(t, err)
+	assert.Equal(t, key.N, key2.N)
+
+	// Case 3: Invalid path (directory creation failure or save failure)
+	// Using a path where directory cannot be created (e.g. file as directory)
+	dummyFile := filepath.Join(tempDir, "dummy")
+	os.WriteFile(dummyFile, []byte("dummy"), 0644)
+	invalidPath := filepath.Join(dummyFile, "key.pem")
+
+	_, err = EnsurePrivateKey(invalidPath)
+	assert.Error(t, err)
+}

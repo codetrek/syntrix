@@ -30,6 +30,23 @@ func TestEnvHelper(t *testing.T) {
 
 		token := env.GetToken(t, username, role)
 		assert.NotEmpty(t, token)
+
+		// Call again to trigger Login path
+		token2 := env.GetToken(t, username, role)
+		assert.NotEmpty(t, token2)
+	})
+
+	t.Run("UserManagement_AdminRole", func(t *testing.T) {
+		username := "testadmin_helper"
+		role := "admin"
+
+		// First call: SignUp -> Update Role
+		token := env.GetToken(t, username, role)
+		assert.NotEmpty(t, token)
+
+		// Second call: Login -> Check Role (already present)
+		token2 := env.GetToken(t, username, role)
+		assert.NotEmpty(t, token2)
 	})
 
 	// Test MakeRequest

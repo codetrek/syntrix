@@ -24,3 +24,11 @@ func TestAuthProvider(t *testing.T) {
 	assert.NotNil(t, provider.Users())
 	assert.NotNil(t, provider.Revocations())
 }
+
+func TestAuthProvider_Error(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	// Invalid URI
+	_, err := NewAuthProvider(ctx, "mongodb://invalid-host:27017", "db")
+	assert.Error(t, err)
+}

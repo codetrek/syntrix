@@ -109,3 +109,44 @@ func TestResolvePath(t *testing.T) {
 
 	assert.Equal(t, "", resolvePath("base", ""))
 }
+
+func TestValidate(t *testing.T) {
+	// Case 1: Missing default tenant
+	cfg := &Config{
+		Storage: StorageConfig{
+			Tenants: map[string]TenantConfig{},
+		},
+	}
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "storage.tenants.default is required")
+
+	// Case 2: Tenant references unknown backend
+	cfg = &Config{
+		Storage: StorageConfig{
+			Tenants: map[string]TenantConfig{
+				"default": {Backend: "unknown_backend"},
+			},
+			Backends: map[string]BackendConfig{
+				"existing_backend": {},
+			},
+		},
+	}
+	err = cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "references unknown backend")
+
+	// Case 3: Valid config
+	cfg = &Config{
+		Storage: StorageConfig{
+			Tenants: map[string]TenantConfig{
+				"default": {Backend: "existing_backend"},
+			},
+			Backends: map[string]BackendConfig{
+				"existing_backend": {},
+			},
+		},
+	}
+	err = cfg.Validate()
+	assert.NoError(t, err)
+}

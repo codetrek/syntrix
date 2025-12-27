@@ -267,3 +267,21 @@ func TestHub_Run_CancelsGracefully(t *testing.T) {
 	hub.Unregister(client)
 	hub.Broadcast(storage.Event{Id: "users/1", Type: storage.EventCreate})
 }
+
+func TestHub_Register_Closed(t *testing.T) {
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	hub := NewHub()
+	go hub.Run(hubCtx)
+
+	// Cancel context to stop hub
+	hubCancel()
+	time.Sleep(10 * time.Millisecond) // Wait for hub to stop
+
+	client := &Client{
+		hub: hub,
+		send: make(chan BaseMessage),
+	}
+
+	// Should return false
+	assert.False(t, hub.Register(client))
+}

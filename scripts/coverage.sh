@@ -51,21 +51,43 @@ if [ $EXIT_CODE -ne 0 ]; then
 fi
 
 if [ "$MODE" == "func" ]; then
-    echo -e "\nFunction coverage details (excluding 100%):"
+    echo -e "\nFunction coverage details (excluding >= 85%):"
     printf "%-60s %-35s %s\n" "LOCATION" "FUNCTION" "COVERAGE"
     echo "---------------------------------------------------------------------------------------------------------"
 
     FUNC_DATA=$(go tool cover -func="$COVERPROFILE" | sed 's/github.com\/codetrek\/syntrix\///g')
 
+    # Print functions with < 85% coverage
     echo "$FUNC_DATA" | \
         grep -v "^total:" | \
-        awk '$3 != "100.0%" {printf "%-60s %-35s %s\n", $1, $2, $3}' | \
+        awk '{
+            cov = $3;
+            sub("%", "", cov);
+            if (cov < 85.0) {
+                printf "%-60s %-35s %s\n", $1, $2, $3
+            }
+        }' | \
         sort -k3 -nr
 
     echo "---------------------------------------------------------------------------------------------------------"
 
-    COUNT=$(echo "$FUNC_DATA" | awk '$3 == "100.0%"' | wc -l)
-    echo "Functions with 100% coverage: $COUNT"
+    COUNT_100=$(echo "$FUNC_DATA" | awk '$3 == "100.0%"' | wc -l)
+    COUNT_95_100=$(echo "$FUNC_DATA" | awk '{cov=$3; sub("%", "", cov); if (cov >= 95.0 && cov < 100.0) print $0}' | wc -l)
+    COUNT_85_95=$(echo "$FUNC_DATA" | awk '{cov=$3; sub("%", "", cov); if (cov >= 85.0 && cov < 95.0) print $0}' | wc -l)
+
+    echo "Functions with 100% coverage: $COUNT_100"
+    echo "Functions with 95%-100% coverage: $COUNT_95_100"
+    echo "Functions with 85%-95% coverage: $COUNT_85_95"
+
+    # Check for < 60% coverage
+    LOW_COVERAGE=$(echo "$FUNC_DATA" | grep -v "^total:" | awk '{cov=$3; sub("%", "", cov); if (cov < 60.0) printf "%-60s %-35s %s\n", $1, $2, $3}')
+
+    if [ ! -z "$LOW_COVERAGE" ]; then
+        echo -e "\nCRITICAL: Functions with < 60% coverage:"
+        echo "---------------------------------------------------------------------------------------------------------"
+        echo "$LOW_COVERAGE"
+        echo "---------------------------------------------------------------------------------------------------------"
+    fi
 
     echo "$FUNC_DATA" | \
         grep "^total:" | \

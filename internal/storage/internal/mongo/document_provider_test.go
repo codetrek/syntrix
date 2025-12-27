@@ -25,3 +25,11 @@ func TestDocumentProvider(t *testing.T) {
 	err = provider.Close(ctx)
 	assert.NoError(t, err)
 }
+
+func TestDocumentProvider_Error(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	// Invalid URI
+	_, err := NewDocumentProvider(ctx, "mongodb://invalid-host:27017", "db", "docs", "sys", 0)
+	assert.Error(t, err)
+}

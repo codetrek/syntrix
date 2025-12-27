@@ -248,7 +248,7 @@ func (h *Handler) adminOnly(handler http.HandlerFunc) http.HandlerFunc {
 
 			isAdmin := false
 			for _, role := range roles {
-				if role == "admin" {
+				if role == "admin" || role == "system" {
 					isAdmin = true
 					break
 				}

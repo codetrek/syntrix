@@ -92,6 +92,58 @@ func TestHandleLogin(t *testing.T) {
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
 
+	t.Run("AccountDisabled", func(t *testing.T) {
+		reqBody := identity.LoginRequest{TenantID: "default", Username: "disabled", Password: "password"}
+		mockAuth.On("SignIn", mock.Anything, reqBody).Return(nil, identity.ErrAccountDisabled).Once()
+
+		body, _ := json.Marshal(reqBody)
+		req := httptest.NewRequest("POST", "/auth/v1/login", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+
+		server.handleLogin(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+
+	t.Run("AccountLocked", func(t *testing.T) {
+		reqBody := identity.LoginRequest{TenantID: "default", Username: "locked", Password: "password"}
+		mockAuth.On("SignIn", mock.Anything, reqBody).Return(nil, identity.ErrAccountLocked).Once()
+
+		body, _ := json.Marshal(reqBody)
+		req := httptest.NewRequest("POST", "/auth/v1/login", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+
+		server.handleLogin(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+
+	t.Run("TenantRequired", func(t *testing.T) {
+		reqBody := identity.LoginRequest{TenantID: "", Username: "user", Password: "password"}
+		mockAuth.On("SignIn", mock.Anything, reqBody).Return(nil, identity.ErrTenantRequired).Once()
+
+		body, _ := json.Marshal(reqBody)
+		req := httptest.NewRequest("POST", "/auth/v1/login", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+
+		server.handleLogin(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("InternalError", func(t *testing.T) {
+		reqBody := identity.LoginRequest{TenantID: "default", Username: "user", Password: "password"}
+		mockAuth.On("SignIn", mock.Anything, reqBody).Return(nil, errors.New("internal error")).Once()
+
+		body, _ := json.Marshal(reqBody)
+		req := httptest.NewRequest("POST", "/auth/v1/login", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+
+		server.handleLogin(w, req)
+
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+	})
+
 	t.Run("InvalidBody", func(t *testing.T) {
 		req := httptest.NewRequest("POST", "/auth/v1/login", bytes.NewReader([]byte("invalid")))
 		w := httptest.NewRecorder()

@@ -2,12 +2,17 @@ package services
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/codetrek/syntrix/internal/config"
+	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage/types"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestManager_Init_Start_Shutdown_NoServices(t *testing.T) {
@@ -27,4 +32,51 @@ func TestManager_Init_Start_Shutdown_NoServices(t *testing.T) {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second)
 	defer shutdownCancel()
 	mgr.Shutdown(shutdownCtx)
+}
+
+type MockStorageFactory struct {
+	mock.Mock
+}
+
+func (m *MockStorageFactory) Document() types.DocumentStore {
+	return nil
+}
+func (m *MockStorageFactory) User() types.UserStore {
+	return nil
+}
+func (m *MockStorageFactory) Revocation() types.TokenRevocationStore {
+	return nil
+}
+func (m *MockStorageFactory) Close() error {
+	args := m.Called()
+	return args.Error(0)
+}
+
+func TestManager_Shutdown_StorageError(t *testing.T) {
+	// Override storage factory
+	originalFactory := storageFactoryFactory
+	defer func() { storageFactoryFactory = originalFactory }()
+
+	mockFactory := new(MockStorageFactory)
+	mockFactory.On("Close").Return(errors.New("storage close error"))
+
+	storageFactoryFactory = func(ctx context.Context, cfg *config.Config) (storage.StorageFactory, error) {
+		return mockFactory, nil
+	}
+
+	cfg := config.LoadConfig()
+	opts := Options{
+		RunQuery: true,
+	}
+	mgr := NewManager(cfg, opts)
+
+	ctx := context.Background()
+	// Init to set storageFactory
+	err := mgr.Init(ctx)
+	require.NoError(t, err)
+
+	// Shutdown
+	mgr.Shutdown(ctx)
+
+	mockFactory.AssertExpectations(t)
 }
