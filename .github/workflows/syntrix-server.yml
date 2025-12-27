@@ -1,0 +1,47 @@
+name: Syntrix Server CI
+
+on:
+  pull_request:
+    branches: [ "main", "master" ]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'pkg/**'
+      - 'config/**'
+      - 'tests/**'
+      - '.github/workflows/backend.yml'
+
+jobs:
+  syntrix-server:
+    name: Syntrix Server (Go)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Start Services
+        run: |
+          docker compose -f .devcontainer/docker-compose.yml up -d mongodb nats mongo-init
+          echo "Waiting for services to initialize..."
+          timeout 60s bash -c 'until docker exec syntrix_mongodb mongosh --eval "db.adminCommand(\"ping\")"; do sleep 1; done'
+          docker compose -f .devcontainer/docker-compose.yml ps
+          docker compose -f .devcontainer/docker-compose.yml logs mongo-init
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Verify Go version
+        run: go version
+
+      - name: Build
+        run: make build
+
+      - name: Test
+        run: make test
