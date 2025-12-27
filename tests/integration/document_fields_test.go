@@ -24,13 +24,7 @@ func TestDocumentSystemFields(t *testing.T) {
 		"field1": "value1",
 	}
 
-	resp := env.MakeRequest(t, "POST", "/api/v1/"+collection, docData, token)
-	require.Equal(t, http.StatusCreated, resp.StatusCode)
-
-	var createdDoc map[string]interface{}
-	err := json.NewDecoder(resp.Body).Decode(&createdDoc)
-	require.NoError(t, err)
-	resp.Body.Close()
+	createdDoc := env.CreateDocument(t, collection, docData, token)
 
 	// Verify System Fields on Create
 	assert.NotEmpty(t, createdDoc["id"])
@@ -54,13 +48,7 @@ func TestDocumentSystemFields(t *testing.T) {
 			"field2": "value2",
 		},
 	}
-	resp = env.MakeRequest(t, "PATCH", fmt.Sprintf("/api/v1/%s/%s", collection, docID), patchData, token)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var patchedDoc map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&patchedDoc)
-	require.NoError(t, err)
-	resp.Body.Close()
+	patchedDoc := env.PatchDocument(t, collection, docID, patchData, token)
 
 	// Verify fields are merged (PATCH behavior)
 	assert.Equal(t, "value1", patchedDoc["field1"], "Existing field should be preserved")
@@ -83,13 +71,7 @@ func TestDocumentSystemFields(t *testing.T) {
 			"field3": "value3",
 		},
 	}
-	resp = env.MakeRequest(t, "PUT", fmt.Sprintf("/api/v1/%s/%s", collection, docID), replaceData, token)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var replacedDoc map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&replacedDoc)
-	require.NoError(t, err)
-	resp.Body.Close()
+	replacedDoc := env.PutDocument(t, collection, docID, replaceData, token)
 
 	// Verify System Fields on Replace
 	assert.Equal(t, float64(3), replacedDoc["version"])
@@ -101,15 +83,15 @@ func TestDocumentSystemFields(t *testing.T) {
 		"doc": map[string]interface{}{
 			"field4":     "value4",
 			"version":    999,
-			"createdAt": 0,
+			"createdAt":  0,
 			"collection": "hacked",
 		},
 	}
-	resp = env.MakeRequest(t, "PATCH", fmt.Sprintf("/api/v1/%s/%s", collection, docID), maliciousData, token)
+	resp := env.MakeRequest(t, "PATCH", fmt.Sprintf("/api/v1/%s/%s", collection, docID), maliciousData, token)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var protectedDoc map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&protectedDoc)
+	err := json.NewDecoder(resp.Body).Decode(&protectedDoc)
 	require.NoError(t, err)
 	resp.Body.Close()
 

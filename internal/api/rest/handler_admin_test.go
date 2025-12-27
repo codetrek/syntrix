@@ -10,18 +10,17 @@ import (
 	"testing"
 
 	"github.com/codetrek/syntrix/internal/identity"
-	"github.com/codetrek/syntrix/internal/storage"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
-// MockAdminAuthService for API tests
-type MockAdminAuthService struct {
-	mock.Mock
+// AdminTestAuthService wraps MockAuthService to provide custom middleware for admin tests
+type AdminTestAuthService struct {
+	*MockAuthService
 }
 
-func (m *MockAdminAuthService) Middleware(next http.Handler) http.Handler {
+func (m *AdminTestAuthService) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Simulate auth middleware by checking a header
 		role := r.Header.Get("X-Role")
@@ -34,50 +33,8 @@ func (m *MockAdminAuthService) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-func (m *MockAdminAuthService) MiddlewareOptional(next http.Handler) http.Handler {
+func (m *AdminTestAuthService) MiddlewareOptional(next http.Handler) http.Handler {
 	return m.Middleware(next)
-}
-
-func (m *MockAdminAuthService) SignIn(ctx context.Context, req identity.LoginRequest) (*identity.TokenPair, error) {
-	args := m.Called(ctx, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*identity.TokenPair), args.Error(1)
-}
-
-func (m *MockAdminAuthService) SignUp(ctx context.Context, req identity.SignupRequest) (*identity.TokenPair, error) {
-	args := m.Called(ctx, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*identity.TokenPair), args.Error(1)
-}
-
-func (m *MockAdminAuthService) Refresh(ctx context.Context, req identity.RefreshRequest) (*identity.TokenPair, error) {
-	args := m.Called(ctx, req)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*identity.TokenPair), args.Error(1)
-}
-
-func (m *MockAdminAuthService) ListUsers(ctx context.Context, limit int, offset int) ([]*storage.User, error) {
-	args := m.Called(ctx, limit, offset)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]*storage.User), args.Error(1)
-}
-
-func (m *MockAdminAuthService) UpdateUser(ctx context.Context, id string, roles []string, disabled bool) error {
-	args := m.Called(ctx, id, roles, disabled)
-	return args.Error(0)
-}
-
-func (m *MockAdminAuthService) GenerateSystemToken(serviceName string) (string, error) {
-	args := m.Called(serviceName)
-	return args.String(0), args.Error(1)
 }
 
 type errReadCloser struct{ err error }
@@ -85,49 +42,9 @@ type errReadCloser struct{ err error }
 func (e errReadCloser) Read(p []byte) (int, error) { return 0, e.err }
 func (e errReadCloser) Close() error               { return nil }
 
-func (m *MockAdminAuthService) Logout(ctx context.Context, refreshToken string) error {
-	args := m.Called(ctx, refreshToken)
-	return args.Error(0)
-}
-
-// MockAdminAuthzService for API tests
-type MockAdminAuthzService struct {
-	mock.Mock
-}
-
-func (m *MockAdminAuthzService) GetRules() *identity.RuleSet {
-	args := m.Called()
-	if args.Get(0) == nil {
-		return nil
-	}
-	return args.Get(0).(*identity.RuleSet)
-}
-
-func (m *MockAdminAuthzService) UpdateRules(content []byte) error {
-	args := m.Called(content)
-	return args.Error(0)
-}
-
-func (m *MockAdminAuthzService) Evaluate(ctx context.Context, path string, action string, req identity.AuthzRequest, existingRes *identity.Resource) (bool, error) {
-	args := m.Called(ctx, path, action, req, existingRes)
-	return args.Bool(0), args.Error(1)
-}
-
-func (m *MockAdminAuthzService) LoadRules(path string) error {
-	return nil
-}
-
-func (m *MockAdminAuthService) ValidateToken(tokenString string) (*identity.Claims, error) {
-	args := m.Called(tokenString)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*identity.Claims), args.Error(1)
-}
-
 func TestAdmin_ListUsers(t *testing.T) {
-	mockAuth := new(MockAdminAuthService)
-	mockAuthz := new(MockAdminAuthzService)
+	mockAuth := &AdminTestAuthService{MockAuthService: new(MockAuthService)}
+	mockAuthz := new(MockAuthzService)
 	server := createTestServer(nil, mockAuth, mockAuthz)
 
 	// Mock ListUsers
@@ -155,8 +72,8 @@ func TestAdmin_ListUsers(t *testing.T) {
 }
 
 func TestAdmin_ListUsers_WithPaging(t *testing.T) {
-	mockAuth := new(MockAdminAuthService)
-	mockAuthz := new(MockAdminAuthzService)
+	mockAuth := &AdminTestAuthService{MockAuthService: new(MockAuthService)}
+	mockAuthz := new(MockAuthzService)
 	server := createTestServer(nil, mockAuth, mockAuthz)
 
 	users := []*identity.User{}
@@ -173,8 +90,8 @@ func TestAdmin_ListUsers_WithPaging(t *testing.T) {
 }
 
 func TestAdmin_UpdateUser(t *testing.T) {
-	mockAuth := new(MockAdminAuthService)
-	mockAuthz := new(MockAdminAuthzService)
+	mockAuth := &AdminTestAuthService{MockAuthService: new(MockAuthService)}
+	mockAuthz := new(MockAuthzService)
 	server := createTestServer(nil, mockAuth, mockAuthz)
 
 	// Mock UpdateUser
@@ -199,8 +116,8 @@ func TestAdmin_UpdateUser(t *testing.T) {
 }
 
 func TestAdmin_UpdateUser_InvalidBody(t *testing.T) {
-	mockAuth := new(MockAdminAuthService)
-	mockAuthz := new(MockAdminAuthzService)
+	mockAuth := &AdminTestAuthService{MockAuthService: new(MockAuthService)}
+	mockAuthz := new(MockAuthzService)
 	server := createTestServer(nil, mockAuth, mockAuthz)
 
 	req := httptest.NewRequest("PATCH", "/admin/users/123", bytes.NewBufferString("{invalid"))
@@ -214,8 +131,8 @@ func TestAdmin_UpdateUser_InvalidBody(t *testing.T) {
 }
 
 func TestAdmin_UpdateUser_Error(t *testing.T) {
-	mockAuth := new(MockAdminAuthService)
-	mockAuthz := new(MockAdminAuthzService)
+	mockAuth := &AdminTestAuthService{MockAuthService: new(MockAuthService)}
+	mockAuthz := new(MockAuthzService)
 	server := createTestServer(nil, mockAuth, mockAuthz)
 
 	body := map[string]interface{}{
@@ -236,8 +153,8 @@ func TestAdmin_UpdateUser_Error(t *testing.T) {
 }
 
 func TestAdmin_PushRules(t *testing.T) {
-	mockAuth := new(MockAdminAuthService)
-	mockAuthz := new(MockAdminAuthzService)
+	mockAuth := &AdminTestAuthService{MockAuthService: new(MockAuthService)}
+	mockAuthz := new(MockAuthzService)
 	server := createTestServer(nil, mockAuth, mockAuthz)
 
 	// Mock UpdateRules
@@ -258,8 +175,8 @@ func TestAdmin_PushRules(t *testing.T) {
 }
 
 func TestAdmin_PushRules_Invalid(t *testing.T) {
-	mockAuth := new(MockAdminAuthService)
-	mockAuthz := new(MockAdminAuthzService)
+	mockAuth := &AdminTestAuthService{MockAuthService: new(MockAuthService)}
+	mockAuthz := new(MockAuthzService)
 	server := createTestServer(nil, mockAuth, mockAuthz)
 
 	rulesContent := []byte("bad")
@@ -276,8 +193,8 @@ func TestAdmin_PushRules_Invalid(t *testing.T) {
 }
 
 func TestAdmin_PushRules_ReadError(t *testing.T) {
-	mockAuth := new(MockAdminAuthService)
-	mockAuthz := new(MockAdminAuthzService)
+	mockAuth := &AdminTestAuthService{MockAuthService: new(MockAuthService)}
+	mockAuthz := new(MockAuthzService)
 	server := createTestServer(nil, mockAuth, mockAuthz)
 
 	req := httptest.NewRequest("POST", "/admin/rules/push", nil)
@@ -292,8 +209,8 @@ func TestAdmin_PushRules_ReadError(t *testing.T) {
 }
 
 func TestAdmin_ListUsers_Error(t *testing.T) {
-	mockAuth := new(MockAdminAuthService)
-	mockAuthz := new(MockAdminAuthzService)
+	mockAuth := &AdminTestAuthService{MockAuthService: new(MockAuthService)}
+	mockAuthz := new(MockAuthzService)
 	server := createTestServer(nil, mockAuth, mockAuthz)
 
 	mockAuth.On("ListUsers", mock.Anything, 50, 0).Return(nil, errors.New("boom"))
@@ -309,8 +226,8 @@ func TestAdmin_ListUsers_Error(t *testing.T) {
 }
 
 func TestAdmin_GetRules(t *testing.T) {
-	mockAuth := new(MockAdminAuthService)
-	mockAuthz := new(MockAdminAuthzService)
+	mockAuth := &AdminTestAuthService{MockAuthService: new(MockAuthService)}
+	mockAuthz := new(MockAuthzService)
 	server := createTestServer(nil, mockAuth, mockAuthz)
 
 	ruleSet := &identity.RuleSet{Version: "1"}
@@ -330,8 +247,8 @@ func TestAdmin_GetRules(t *testing.T) {
 }
 
 func TestAdmin_Health(t *testing.T) {
-	mockAuth := new(MockAdminAuthService)
-	mockAuthz := new(MockAdminAuthzService)
+	mockAuth := &AdminTestAuthService{MockAuthService: new(MockAuthService)}
+	mockAuthz := new(MockAuthzService)
 	server := createTestServer(nil, mockAuth, mockAuthz)
 
 	req := httptest.NewRequest("GET", "/admin/health", nil)
@@ -345,8 +262,8 @@ func TestAdmin_Health(t *testing.T) {
 }
 
 func TestAdmin_AccessDenied(t *testing.T) {
-	mockAuth := new(MockAdminAuthService)
-	mockAuthz := new(MockAdminAuthzService)
+	mockAuth := &AdminTestAuthService{MockAuthService: new(MockAuthService)}
+	mockAuthz := new(MockAuthzService)
 	server := createTestServer(nil, mockAuth, mockAuthz)
 
 	// Create Request with non-admin role

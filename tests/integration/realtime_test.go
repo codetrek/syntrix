@@ -15,67 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Define local types to avoid importing internal packages (Black Box Testing)
-type BaseMessage struct {
-	ID      string          `json:"id,omitempty"`
-	Type    string          `json:"type"`
-	Payload json.RawMessage `json:"payload,omitempty"`
-}
-
-type AuthPayload struct {
-	Token string `json:"token"`
-}
-
-type SubscribePayload struct {
-	Query        Query `json:"query"`
-	IncludeData  bool  `json:"includeData"`
-	SendSnapshot bool  `json:"sendSnapshot"`
-}
-
-type Query struct {
-	Collection string   `json:"collection"`
-	Filters    []Filter `json:"filters,omitempty"`
-}
-
-type Filter struct {
-	Field string      `json:"field"`
-	Op    string      `json:"op"`
-	Value interface{} `json:"value"`
-}
-
-type UnsubscribePayload struct {
-	ID string `json:"id"`
-}
-
-type EventPayload struct {
-	SubID string      `json:"subId"`
-	Delta PublicEvent `json:"delta"`
-}
-
-type PublicEvent struct {
-	Type     string                 `json:"type"` // "create", "update", "delete"
-	Document map[string]interface{} `json:"document,omitempty"`
-	Path     string                 `json:"path"`
-}
-
-type SnapshotPayload struct {
-	Documents []map[string]interface{} `json:"documents"`
-}
-
-const (
-	TypeAuth           = "auth"
-	TypeAuthAck        = "auth_ack"
-	TypeSubscribe      = "subscribe"
-	TypeSubscribeAck   = "subscribe_ack"
-	TypeUnsubscribe    = "unsubscribe"
-	TypeUnsubscribeAck = "unsubscribe_ack"
-	TypeEvent          = "event"
-	TypeSnapshot       = "snapshot"
-	TypeError          = "error"
-
-	EventCreate = "create"
-)
-
 func TestRealtime_FullFlow(t *testing.T) {
 	t.Parallel()
 	env := setupServiceEnv(t, "")
@@ -83,32 +22,10 @@ func TestRealtime_FullFlow(t *testing.T) {
 
 	token := env.GetToken(t, "realtime-user", "user")
 
-	// Convert http URL to ws URL
-	wsURL := "ws" + strings.TrimPrefix(env.RealtimeURL, "http") + "/realtime/ws"
-
-	// Connect to Websocket
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	require.NoError(t, err, "Failed to connect to websocket")
+	// Connect and Authenticate
+	ws := env.ConnectWebSocket(t)
 	defer ws.Close()
-
-	// 1. Authenticate
-	authMsg := BaseMessage{
-		ID:   "auth-1",
-		Type: TypeAuth,
-		Payload: mustMarshal(AuthPayload{
-			Token: token,
-		}),
-	}
-	err = ws.WriteJSON(authMsg)
-	require.NoError(t, err)
-
-	// Read Auth Ack
-	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
-	var ackMsg BaseMessage
-	err = ws.ReadJSON(&ackMsg)
-	require.NoError(t, err)
-	assert.Equal(t, TypeAuthAck, ackMsg.Type)
-	assert.Equal(t, "auth-1", ackMsg.ID)
+	env.AuthenticateWebSocket(t, ws, token)
 
 	// 2. Subscribe
 	collectionName := "realtime_test_col"
@@ -123,7 +40,7 @@ func TestRealtime_FullFlow(t *testing.T) {
 			IncludeData: true,
 		}),
 	}
-	err = ws.WriteJSON(subMsg)
+	err := ws.WriteJSON(subMsg)
 	require.NoError(t, err)
 
 	// Give some time for subscription to register
@@ -436,13 +353,6 @@ func TestRealtime_Stream(t *testing.T) {
 	assert.True(t, receivedEvent, "Should receive Event for new document")
 }
 
-func mustMarshal(v interface{}) []byte {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(err)
-	}
-	return b
-}
 
 func TestRealtime_Filtering(t *testing.T) {
 	t.Parallel()

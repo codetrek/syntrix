@@ -1,10 +1,12 @@
 package integration
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/codetrek/syntrix/pkg/model"
 
@@ -28,13 +30,7 @@ func TestAPIIntegration(t *testing.T) {
 		"age":  42,
 	}
 
-	resp := env.MakeRequest(t, "POST", "/api/v1/"+collection, docData, token)
-	require.Equal(t, http.StatusCreated, resp.StatusCode)
-
-	var createdDoc map[string]interface{}
-	err := json.NewDecoder(resp.Body).Decode(&createdDoc)
-	require.NoError(t, err)
-	resp.Body.Close()
+	createdDoc := env.CreateDocument(t, collection, docData, token)
 
 	assert.NotEmpty(t, createdDoc["id"])
 	// Collection is not returned in flattened response
@@ -43,14 +39,11 @@ func TestAPIIntegration(t *testing.T) {
 
 	docID := createdDoc["id"].(string)
 
-	// 4. Scenario: Get Document
-	resp = env.MakeRequest(t, "GET", fmt.Sprintf("/api/v1/%s/%s", collection, docID), nil, token)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+	// Verify via Internal Query Service (Microservices check)
+	verifyInternalQuery(t, env, collection, docID, "Integration User")
 
-	var fetchedDoc map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&fetchedDoc)
-	require.NoError(t, err)
-	resp.Body.Close()
+	// 4. Scenario: Get Document
+	fetchedDoc := env.GetDocument(t, collection, docID, token)
 
 	assert.Equal(t, createdDoc["id"], fetchedDoc["id"])
 	assert.Equal(t, float64(42), fetchedDoc["age"]) // JSON numbers are floats
@@ -61,13 +54,7 @@ func TestAPIIntegration(t *testing.T) {
 			"age": 43,
 		},
 	}
-	resp = env.MakeRequest(t, "PATCH", fmt.Sprintf("/api/v1/%s/%s", collection, docID), patchData, token)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var patchedDoc map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&patchedDoc)
-	require.NoError(t, err)
-	resp.Body.Close()
+	patchedDoc := env.PatchDocument(t, collection, docID, patchData, token)
 
 	assert.Equal(t, "Integration User", patchedDoc["name"]) // Should remain unchanged
 	assert.Equal(t, float64(43), patchedDoc["age"])         // Should be updated
@@ -79,11 +66,11 @@ func TestAPIIntegration(t *testing.T) {
 			{Field: "name", Op: "==", Value: "Integration User"},
 		},
 	}
-	resp = env.MakeRequest(t, "POST", "/api/v1/query", query, token)
+	resp := env.MakeRequest(t, "POST", "/api/v1/query", query, token)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var queryResults []map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&queryResults)
+	err := json.NewDecoder(resp.Body).Decode(&queryResults)
 	require.NoError(t, err)
 	resp.Body.Close()
 
@@ -128,4 +115,20 @@ func TestAPIIntegration(t *testing.T) {
 	// Verify Delete
 	resp = env.MakeRequest(t, "GET", fmt.Sprintf("/api/v1/%s/%s", collection, docID), nil, token)
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func verifyInternalQuery(t *testing.T, env *ServiceEnv, collection, docID, expectedName string) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	docPath := fmt.Sprintf("%s/%s", collection, docID)
+	queryReqBody, _ := json.Marshal(map[string]string{"path": docPath})
+	queryResp, err := client.Post(fmt.Sprintf("%s/internal/v1/document/get", env.QueryURL), "application/json", bytes.NewBuffer(queryReqBody))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, queryResp.StatusCode)
+
+	var fetchedDoc map[string]interface{}
+	err = json.NewDecoder(queryResp.Body).Decode(&fetchedDoc)
+	require.NoError(t, err)
+	queryResp.Body.Close()
+
+	assert.Equal(t, expectedName, fetchedDoc["name"])
 }

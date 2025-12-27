@@ -17,6 +17,7 @@ import (
 	"github.com/codetrek/syntrix/internal/config"
 	"github.com/codetrek/syntrix/internal/services"
 
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -377,6 +378,46 @@ func (e *ServiceEnv) MakeRequest(t *testing.T, method, path string, body interfa
 	return resp
 }
 
+func (e *ServiceEnv) CreateDocument(t *testing.T, collection string, data map[string]interface{}, token string) map[string]interface{} {
+	resp := e.MakeRequest(t, "POST", "/api/v1/"+collection, data, token)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var doc map[string]interface{}
+	err := json.NewDecoder(resp.Body).Decode(&doc)
+	require.NoError(t, err)
+	resp.Body.Close()
+	return doc
+}
+
+func (e *ServiceEnv) GetDocument(t *testing.T, collection, id, token string) map[string]interface{} {
+	resp := e.MakeRequest(t, "GET", fmt.Sprintf("/api/v1/%s/%s", collection, id), nil, token)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var doc map[string]interface{}
+	err := json.NewDecoder(resp.Body).Decode(&doc)
+	require.NoError(t, err)
+	resp.Body.Close()
+	return doc
+}
+
+func (e *ServiceEnv) PatchDocument(t *testing.T, collection, id string, data map[string]interface{}, token string) map[string]interface{} {
+	resp := e.MakeRequest(t, "PATCH", fmt.Sprintf("/api/v1/%s/%s", collection, id), data, token)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var doc map[string]interface{}
+	err := json.NewDecoder(resp.Body).Decode(&doc)
+	require.NoError(t, err)
+	resp.Body.Close()
+	return doc
+}
+
+func (e *ServiceEnv) PutDocument(t *testing.T, collection, id string, data map[string]interface{}, token string) map[string]interface{} {
+	resp := e.MakeRequest(t, "PUT", fmt.Sprintf("/api/v1/%s/%s", collection, id), data, token)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var doc map[string]interface{}
+	err := json.NewDecoder(resp.Body).Decode(&doc)
+	require.NoError(t, err)
+	resp.Body.Close()
+	return doc
+}
+
 func waitForPort(t *testing.T, port int) {
 	timeout := 5 * time.Second
 	deadline := time.Now().Add(timeout)
@@ -398,4 +439,104 @@ func getFreePort(t *testing.T) int {
 
 	addr := listener.Addr().(*net.TCPAddr)
 	return addr.Port
+}
+
+// --- Realtime/WebSocket Helpers ---
+
+const (
+	TypeAuth           = "auth"
+	TypeAuthAck        = "auth_ack"
+	TypeSubscribe      = "subscribe"
+	TypeSubscribeAck   = "subscribe_ack"
+	TypeUnsubscribe    = "unsubscribe"
+	TypeUnsubscribeAck = "unsubscribe_ack"
+	TypeEvent          = "event"
+	TypeSnapshot       = "snapshot"
+	TypeError          = "error"
+
+	EventCreate = "create"
+)
+
+type BaseMessage struct {
+	ID      string          `json:"id,omitempty"`
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+type AuthPayload struct {
+	Token string `json:"token"`
+}
+
+type SubscribePayload struct {
+	Query        Query `json:"query"`
+	IncludeData  bool  `json:"includeData"`
+	SendSnapshot bool  `json:"sendSnapshot"`
+}
+
+type Query struct {
+	Collection string   `json:"collection"`
+	Filters    []Filter `json:"filters,omitempty"`
+}
+
+type Filter struct {
+	Field string      `json:"field"`
+	Op    string      `json:"op"`
+	Value interface{} `json:"value"`
+}
+
+type UnsubscribePayload struct {
+	ID string `json:"id"`
+}
+
+type EventPayload struct {
+	SubID string      `json:"subId"`
+	Delta PublicEvent `json:"delta"`
+}
+
+type PublicEvent struct {
+	Type     string                 `json:"type"` // "create", "update", "delete"
+	Document map[string]interface{} `json:"document,omitempty"`
+	Path     string                 `json:"path"`
+}
+
+type SnapshotPayload struct {
+	Documents []map[string]interface{} `json:"documents"`
+}
+
+func (e *ServiceEnv) ConnectWebSocket(t *testing.T) *websocket.Conn {
+	wsURL := "ws" + strings.TrimPrefix(e.RealtimeURL, "http") + "/realtime/ws"
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err, "Failed to connect to websocket")
+	return ws
+}
+
+func (e *ServiceEnv) AuthenticateWebSocket(t *testing.T, ws *websocket.Conn, token string) {
+	authMsg := BaseMessage{
+		ID:   "auth-" + t.Name(),
+		Type: TypeAuth,
+		Payload: mustMarshal(AuthPayload{
+			Token: token,
+		}),
+	}
+	err := ws.WriteJSON(authMsg)
+	require.NoError(t, err, "Failed to send auth message")
+
+	// Wait for auth_ack
+	msg := e.ReadWebSocketMessage(t, ws)
+	require.Equal(t, TypeAuthAck, msg.Type, "Expected auth_ack")
+}
+
+func (e *ServiceEnv) ReadWebSocketMessage(t *testing.T, ws *websocket.Conn) BaseMessage {
+	var msg BaseMessage
+	err := ws.ReadJSON(&msg)
+	require.NoError(t, err, "Failed to read websocket message")
+	return msg
+}
+
+func mustMarshal(v interface{}) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }

@@ -170,4 +170,60 @@ func TestReplication_FullFlow(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "Document should be returned in pull")
+
+	// 5. Scenario: Delete Document
+	deleteDocData := map[string]interface{}{
+		"id":      docID,
+		"version": float64(1),
+	}
+
+	deleteBody := rest.ReplicaPushRequest{
+		Collection: collectionName,
+		Changes: []rest.ReplicaChange{
+			{
+				Action: "delete",
+				Doc:    deleteDocData,
+			},
+		},
+	}
+
+	deleteBytes, _ := json.Marshal(deleteBody)
+	deleteReq, err := http.NewRequest("POST", pushURL, bytes.NewBuffer(deleteBytes))
+	require.NoError(t, err)
+	deleteReq.Header.Set("Content-Type", "application/json")
+	deleteReq.Header.Set("Authorization", "Bearer "+token)
+
+	deleteResp, err := client.Do(deleteReq)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, deleteResp.StatusCode)
+	deleteResp.Body.Close()
+
+	// 6. Pull to verify deletion
+	pullURL = fmt.Sprintf("%s/replication/v1/pull?collection=%s&checkpoint=%s", env.APIURL, collectionName, pullResult.Checkpoint)
+	pullReq, err = http.NewRequest("GET", pullURL, nil)
+	require.NoError(t, err)
+	pullReq.Header.Set("Authorization", "Bearer "+token)
+
+	pullResp, err = client.Do(pullReq)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, pullResp.StatusCode)
+
+	err = json.NewDecoder(pullResp.Body).Decode(&pullResult)
+	pullResp.Body.Close()
+	require.NoError(t, err)
+
+	assert.NotEmpty(t, pullResult.Documents)
+	found = false
+	for _, doc := range pullResult.Documents {
+		if doc["id"] == docID {
+			if val, ok := doc["deleted"]; ok {
+				assert.True(t, val.(bool), "Document should be marked as deleted")
+			} else {
+				t.Error("Document missing deleted field")
+			}
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "Deleted document should be returned in pull")
 }

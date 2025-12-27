@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -107,24 +106,14 @@ func TestMultiTenant_RealtimeIsolation(t *testing.T) {
 	collection := "live_updates"
 
 	// Connect Client A (Tenant A)
-	wsURL := "ws" + strings.TrimPrefix(env.RealtimeURL, "http") + "/realtime/ws"
-	wsA, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	require.NoError(t, err)
+	wsA := env.ConnectWebSocket(t)
 	defer wsA.Close()
 
 	// Authenticate A
-	err = wsA.WriteJSON(BaseMessage{
-		ID:   "auth-a",
-		Type: TypeAuth,
-		Payload: mustMarshal(AuthPayload{
-			Token: tokenA,
-		}),
-	})
-	require.NoError(t, err)
-	readUntilType(t, wsA, TypeAuthAck)
+	env.AuthenticateWebSocket(t, wsA, tokenA)
 
 	// Subscribe A
-	err = wsA.WriteJSON(BaseMessage{
+	err := wsA.WriteJSON(BaseMessage{
 		ID:   "sub-a",
 		Type: TypeSubscribe,
 		Payload: mustMarshal(SubscribePayload{
@@ -136,20 +125,11 @@ func TestMultiTenant_RealtimeIsolation(t *testing.T) {
 	readUntilType(t, wsA, TypeSubscribeAck)
 
 	// Connect Client B (Tenant B)
-	wsB, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	require.NoError(t, err)
+	wsB := env.ConnectWebSocket(t)
 	defer wsB.Close()
 
 	// Authenticate B
-	err = wsB.WriteJSON(BaseMessage{
-		ID:   "auth-b",
-		Type: TypeAuth,
-		Payload: mustMarshal(AuthPayload{
-			Token: tokenB,
-		}),
-	})
-	require.NoError(t, err)
-	readUntilType(t, wsB, TypeAuthAck)
+	env.AuthenticateWebSocket(t, wsB, tokenB)
 
 	// Subscribe B
 	err = wsB.WriteJSON(BaseMessage{

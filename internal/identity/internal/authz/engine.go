@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -259,6 +260,10 @@ func structToMap(v interface{}) map[string]interface{} {
 	if v == nil {
 		return nil
 	}
+	val := reflect.ValueOf(v)
+	if val.Kind() == reflect.Ptr && val.IsNil() {
+		return nil
+	}
 	b, _ := json.Marshal(v)
 	var m map[string]interface{}
 	json.Unmarshal(b, &m)
@@ -356,9 +361,66 @@ func (e *ruleEngine) UpdateRules(content []byte) error {
 		return err
 	}
 
-	// Validate rules? (e.g. check if CEL expressions compile)
-	// For now, just update.
+	if err := e.validateRules(&rules); err != nil {
+		return err
+	}
+
 	e.rules = &rules
 	e.programMap = sync.Map{} // Clear cache
 	return nil
+}
+
+func (e *ruleEngine) validateRules(rules *RuleSet) error {
+	return e.validateMatchBlocks(rules.Match, []string{})
+}
+
+func (e *ruleEngine) validateMatchBlocks(blocks map[string]MatchBlock, parentVars []string) error {
+	for pattern, block := range blocks {
+		vars := extractVars(pattern)
+		currentVars := append([]string{}, parentVars...)
+		currentVars = append(currentVars, vars...)
+
+		varOpts := []cel.EnvOption{}
+		for _, v := range currentVars {
+			varOpts = append(varOpts, cel.Declarations(decls.NewVar(v, decls.String)))
+		}
+		// Add dummy_var for validation of $(var) replacement
+		varOpts = append(varOpts, cel.Declarations(decls.NewVar("dummy_var", decls.String)))
+
+		env, err := e.celEnv.Extend(varOpts...)
+		if err != nil {
+			return err
+		}
+
+		for _, condition := range block.Allow {
+			// Replace $(var) with dummy_var for validation
+			cleanCondition := condition
+			for _, v := range currentVars {
+				cleanCondition = strings.ReplaceAll(cleanCondition, "$("+v+")", "dummy_var")
+			}
+
+			if _, issues := env.Compile(cleanCondition); issues != nil && issues.Err() != nil {
+				return fmt.Errorf("invalid CEL expression %q: %w", condition, issues.Err())
+			}
+		}
+		if err := e.validateMatchBlocks(block.Match, currentVars); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func extractVars(pattern string) []string {
+	var vars []string
+	parts := strings.Split(pattern, "/")
+	for _, part := range parts {
+		if strings.HasPrefix(part, "{") && strings.HasSuffix(part, "}") {
+			varName := part[1 : len(part)-1]
+			if strings.HasSuffix(varName, "=**") {
+				varName = strings.TrimSuffix(varName, "=**")
+			}
+			vars = append(vars, varName)
+		}
+	}
+	return vars
 }

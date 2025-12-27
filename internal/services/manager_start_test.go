@@ -16,7 +16,6 @@ import (
 	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -59,10 +58,12 @@ func TestManager_Start_RealtimeBackground_Failure(t *testing.T) {
 	defer bgCancel()
 
 	mgr.Start(bgCtx)
-	time.Sleep(120 * time.Millisecond)
-	bgCancel()
 
-	assert.GreaterOrEqual(t, stub.calls.Load(), int32(1))
+	assert.Eventually(t, func() bool {
+		return stub.calls.Load() >= 1
+	}, 1*time.Second, 10*time.Millisecond, "Should retry and call stub at least once")
+
+	bgCancel()
 }
 
 func TestManager_Start_RealtimeBackground_Success(t *testing.T) {
@@ -75,9 +76,10 @@ func TestManager_Start_RealtimeBackground_Success(t *testing.T) {
 	defer bgCancel()
 
 	mgr.Start(bgCtx)
-	time.Sleep(80 * time.Millisecond)
 
-	assert.Equal(t, int32(1), stub.calls.Load())
+	assert.Eventually(t, func() bool {
+		return stub.calls.Load() == 1
+	}, 1*time.Second, 10*time.Millisecond, "Should call stub exactly once")
 }
 
 func TestManager_Start_RealtimeBackground_RetryThenSuccess(t *testing.T) {
@@ -90,9 +92,10 @@ func TestManager_Start_RealtimeBackground_RetryThenSuccess(t *testing.T) {
 	defer bgCancel()
 
 	mgr.Start(bgCtx)
-	time.Sleep(140 * time.Millisecond)
 
-	assert.Equal(t, int32(2), stub.calls.Load())
+	assert.Eventually(t, func() bool {
+		return stub.calls.Load() == 2
+	}, 1*time.Second, 10*time.Millisecond, "Should call stub twice (retry then success)")
 }
 
 type storageBackendStub struct {
@@ -145,8 +148,9 @@ func TestManager_Start_TriggerEvaluator_CallsWatch(t *testing.T) {
 
 	mgr.Start(bgCtx)
 
-	time.Sleep(30 * time.Millisecond)
-	require.Equal(t, int32(1), backend.watchCalls.Load())
+	assert.Eventually(t, func() bool {
+		return backend.watchCalls.Load() == 1
+	}, 1*time.Second, 10*time.Millisecond, "Should call Watch exactly once")
 }
 
 func TestManager_Start_TriggerWorker_CallsStart(t *testing.T) {
@@ -161,8 +165,9 @@ func TestManager_Start_TriggerWorker_CallsStart(t *testing.T) {
 
 	mgr.Start(bgCtx)
 
-	time.Sleep(20 * time.Millisecond)
-	require.Equal(t, int32(1), worker.called.Load())
+	assert.Eventually(t, func() bool {
+		return worker.called.Load() == 1
+	}, 1*time.Second, 10*time.Millisecond, "Should call Start exactly once")
 }
 
 type rtQueryStub struct {

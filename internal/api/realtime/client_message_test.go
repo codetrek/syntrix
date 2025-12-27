@@ -15,40 +15,11 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
-type mockQueryForClient struct{}
-
-func (m *mockQueryForClient) GetDocument(ctx context.Context, tenant string, path string) (model.Document, error) {
-	return nil, nil
-}
-func (m *mockQueryForClient) CreateDocument(ctx context.Context, tenant string, doc model.Document) error {
-	return nil
-}
-func (m *mockQueryForClient) ReplaceDocument(ctx context.Context, tenant string, data model.Document, pred model.Filters) (model.Document, error) {
-	return nil, nil
-}
-func (m *mockQueryForClient) PatchDocument(ctx context.Context, tenant string, data model.Document, pred model.Filters) (model.Document, error) {
-	return nil, nil
-}
-func (m *mockQueryForClient) DeleteDocument(ctx context.Context, tenant string, path string, pred model.Filters) error {
-	return nil
-}
-func (m *mockQueryForClient) ExecuteQuery(ctx context.Context, tenant string, q model.Query) ([]model.Document, error) {
-	return nil, nil
-}
-func (m *mockQueryForClient) WatchCollection(ctx context.Context, tenant string, collection string) (<-chan storage.Event, error) {
-	return nil, nil
-}
-func (m *mockQueryForClient) Pull(ctx context.Context, tenant string, req storage.ReplicationPullRequest) (*storage.ReplicationPullResponse, error) {
-	return &storage.ReplicationPullResponse{Documents: []*storage.Document{{Fullpath: "users/1", Collection: "users", Data: map[string]interface{}{"foo": "bar"}}}}, nil
-}
-func (m *mockQueryForClient) Push(ctx context.Context, tenant string, req storage.ReplicationPushRequest) (*storage.ReplicationPushResponse, error) {
-	return nil, nil
-}
-
 func TestClientHandleMessage_AuthAck(t *testing.T) {
-	c := &Client{hub: NewHub(), queryService: &mockQueryForClient{}, send: make(chan BaseMessage, 1), subscriptions: make(map[string]Subscription)}
+	c := &Client{hub: NewHub(), queryService: &MockQueryService{}, send: make(chan BaseMessage, 1), subscriptions: make(map[string]Subscription)}
 	c.handleMessage(BaseMessage{Type: TypeAuth, ID: "req"})
 
 	select {
@@ -63,7 +34,7 @@ func TestClientHandleMessage_AuthAck(t *testing.T) {
 func TestClientHandleMessage_AuthError(t *testing.T) {
 	c := &Client{
 		hub:          NewHub(),
-		queryService: &mockQueryForClient{},
+		queryService: &MockQueryService{},
 		send:         make(chan BaseMessage, 1),
 		auth:         &mockAuthService{},
 	}
@@ -95,7 +66,7 @@ func TestClientHandleMessage_AuthError(t *testing.T) {
 func TestClientHandleMessage_AuthSuccess(t *testing.T) {
 	c := &Client{
 		hub:          NewHub(),
-		queryService: &mockQueryForClient{},
+		queryService: &MockQueryService{},
 		send:         make(chan BaseMessage, 1),
 		auth:         &mockAuthService{},
 	}
@@ -129,7 +100,7 @@ func (m *mockAuthServiceSystem) ValidateToken(tokenString string) (*identity.Cla
 func TestClientHandleMessage_AuthSystemRole(t *testing.T) {
 	c := &Client{
 		hub:          NewHub(),
-		queryService: &mockQueryForClient{},
+		queryService: setupMockQuery(),
 		send:         make(chan BaseMessage, 1),
 		auth:         &mockAuthServiceSystem{},
 	}
@@ -149,7 +120,7 @@ func TestClientHandleMessage_AuthSystemRole(t *testing.T) {
 }
 
 func TestClientHandleMessage_SubscribeSnapshot(t *testing.T) {
-	c := &Client{hub: NewHub(), queryService: &mockQueryForClient{}, send: make(chan BaseMessage, 2), subscriptions: make(map[string]Subscription), authenticated: true}
+	c := &Client{hub: NewHub(), queryService: setupMockQuery(), send: make(chan BaseMessage, 2), subscriptions: make(map[string]Subscription), authenticated: true}
 	payload := SubscribePayload{Query: model.Query{Collection: "users"}, IncludeData: true, SendSnapshot: true}
 	b, _ := json.Marshal(payload)
 
@@ -163,7 +134,7 @@ func TestClientHandleMessage_SubscribeSnapshot(t *testing.T) {
 }
 
 func TestClientHandleMessage_Unsubscribe(t *testing.T) {
-	c := &Client{hub: NewHub(), queryService: &mockQueryForClient{}, send: make(chan BaseMessage, 1), subscriptions: map[string]Subscription{"sub": {}}, authenticated: true}
+	c := &Client{hub: NewHub(), queryService: setupMockQuery(), send: make(chan BaseMessage, 1), subscriptions: map[string]Subscription{"sub": {}}, authenticated: true}
 	payload := UnsubscribePayload{ID: "sub"}
 	b, _ := json.Marshal(payload)
 
@@ -186,7 +157,7 @@ func TestReadPump_InvalidJSONContinues(t *testing.T) {
 
 	hub := NewHub()
 	go hub.Run(hubCtx)
-	qs := &mockQueryForClient{}
+	qs := setupMockQuery()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ServeWs(hub, qs, nil, Config{EnableAuth: false}, w, r)
 	}))
@@ -216,7 +187,7 @@ func TestServeWs_RejectsCrossOrigin(t *testing.T) {
 
 	hub := NewHub()
 	go hub.Run(hubCtx)
-	qs := &mockQueryForClient{}
+	qs := setupMockQuery()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ServeWs(hub, qs, nil, Config{EnableAuth: false}, w, r)
 	}))
@@ -231,7 +202,7 @@ func TestServeWs_RejectsCrossOrigin(t *testing.T) {
 }
 
 func TestHandleMessage_SubscribeCompileError(t *testing.T) {
-	c := &Client{hub: NewHub(), queryService: &mockQueryForClient{}, send: make(chan BaseMessage, 1), subscriptions: make(map[string]Subscription), authenticated: true}
+	c := &Client{hub: NewHub(), queryService: setupMockQuery(), send: make(chan BaseMessage, 1), subscriptions: make(map[string]Subscription), authenticated: true}
 	payload := SubscribePayload{Query: model.Query{Filters: []model.Filter{{Field: "age", Op: "!", Value: 1}}}}
 	b, _ := json.Marshal(payload)
 
@@ -242,7 +213,7 @@ func TestHandleMessage_SubscribeCompileError(t *testing.T) {
 }
 
 func TestHandleMessage_SubscribeBadJSON(t *testing.T) {
-	c := &Client{hub: NewHub(), queryService: &mockQueryForClient{}, send: make(chan BaseMessage, 1), subscriptions: make(map[string]Subscription), authenticated: true}
+	c := &Client{hub: NewHub(), queryService: setupMockQuery(), send: make(chan BaseMessage, 1), subscriptions: make(map[string]Subscription), authenticated: true}
 
 	c.handleMessage(BaseMessage{Type: TypeSubscribe, ID: "sub-bad", Payload: []byte("{bad")})
 
@@ -353,7 +324,7 @@ func TestServeWs_ReadWriteCycle(t *testing.T) {
 	hub := NewHub()
 	go hub.Run(hubCtx)
 
-	qs := &mockQueryForClient{}
+	qs := setupMockQuery()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ServeWs(hub, qs, nil, Config{EnableAuth: false}, w, r)
 	}))
@@ -386,4 +357,13 @@ func TestServeWs_ReadWriteCycle(t *testing.T) {
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	assert.NoError(t, conn.ReadJSON(&resp))
 	assert.Equal(t, TypeSnapshot, resp.Type)
+}
+
+func setupMockQuery() *MockQueryService {
+	m := new(MockQueryService)
+	// Mock Pull for Snapshot
+	m.On("Pull", mock.Anything, mock.Anything, mock.Anything).Return(&storage.ReplicationPullResponse{
+		Documents: []*storage.Document{{Id: "1", Data: map[string]interface{}{"name": "test"}}},
+	}, nil).Maybe()
+	return m
 }
