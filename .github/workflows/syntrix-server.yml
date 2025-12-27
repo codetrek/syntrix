@@ -88,18 +88,19 @@ jobs:
             $1 == "total:" {
                 cov = $3
                 sub("%", "", cov)
-                if (cov < threshold_total) {
+                if (cov + 0 < threshold_total + 0) {
                     print "::error::Total coverage " cov "% is below the required " threshold_total "%"
-                    exit 1
+                    failed = 1
                 }
             }
             $1 != "total:" {
                 cov = $3
                 sub("%", "", cov)
-                if (cov < threshold_func) {
+                if (cov + 0 < threshold_func + 0) {
                     split($1, parts, ":")
                     file = parts[1]
                     line = parts[2]
+                    # Print error annotation (captured by GitHub Actions UI)
                     printf "::error file=%s,line=%s::[%s] Function %s has coverage %s (< %s%%)\n", file, line, file, $2, $3, threshold_func
                     failed = 1
                 }
