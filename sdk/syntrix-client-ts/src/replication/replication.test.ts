@@ -52,7 +52,9 @@ describe('Replication Scaffolding', () => {
 
     const mockTokenProvider2 = { getToken: async () => 'test', setToken: () => {}, setRefreshToken: () => {}, refreshToken: async () => 'test' };
     const realtime = new RealtimeListener('ws://test', mockTokenProvider2 as any);
-    realtime.connect();
+    // Mock connect to avoid real network attempt and unhandled rejection
+    realtime.connect = mock(async () => {});
+    await realtime.connect();
     realtime.disconnect();
     realtime.onEvent(() => {});
   });
