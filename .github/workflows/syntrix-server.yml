@@ -55,7 +55,7 @@ jobs:
           # Run tests with coverage, excluding cmd/ directory
           go test -coverprofile=coverage.out $(go list ./... | grep -v "/cmd/") | \
             sed 's/of statements//g; s/github.com\/codetrek\/syntrix\///g' | \
-            awk -v threshold="$threshold_package" '{
+            awk -v threshold="$threshold_package" '
               $1 != "?" {
                 cov = $5;
                 sub("%", "", cov);
@@ -66,9 +66,9 @@ jobs:
                 } else {
                     printf "%-3s %-40s %-10s %-10s %s\n", $1, $2, $3, $4, $5
                 }
-                END { if (failed) exit 1 }
               }
-          }' || failed=1
+              END { if (failed) exit 1 }
+            ' || failed=1
 
           # Generate function report
           go tool cover -func=coverage.out > coverage.txt
@@ -100,15 +100,6 @@ jobs:
 
           echo "---------------------------------------------------------------------------------------------------------"
 
-          # Calculate and print groups
-          COUNT_100=$(grep -v "^total:" coverage.clean.txt | awk '$3 == "100.0%"' | wc -l)
-          COUNT_95=$(grep -v "^total:" coverage.clean.txt | awk '{cov=$3; sub("%", "", cov); if (cov + 0 >= 95.0 && cov + 0 < 100.0) print $0}' | wc -l)
-          COUNT_85=$(grep -v "^total:" coverage.clean.txt | awk '{cov=$3; sub("%", "", cov); if (cov + 0 >= 85.0 && cov + 0 < 95.0) print $0}' | wc -l)
-
-          echo "Functions with 100% coverage: $COUNT_100"
-          echo "Functions with 95%-100% coverage: $COUNT_95"
-          echo "Functions with 85%-95% coverage: $COUNT_85"
-
           # Print Total
           grep "^total:" coverage.clean.txt | awk -v threshold_total="$threshold_total" '{
             if ($3 + 0 < threshold_total + 0) {
@@ -118,8 +109,19 @@ jobs:
             } else {
               printf "%-96s %s\n", "TOTAL", $3
             }
-            END { if (failed) exit 1 }
-          }' || failed=1
+          }
+          END { if (failed) exit 1 }' || failed=1
+          echo "---------------------------------------------------------------------------------------------------------"
+
+          # Calculate and print groups
+          COUNT_100=$(grep -v "^total:" coverage.clean.txt | awk '$3 == "100.0%"' | wc -l)
+          COUNT_95=$(grep -v "^total:" coverage.clean.txt | awk '{cov=$3; sub("%", "", cov); if (cov + 0 >= 95.0 && cov + 0 < 100.0) print $0}' | wc -l)
+          COUNT_85=$(grep -v "^total:" coverage.clean.txt | awk '{cov=$3; sub("%", "", cov); if (cov + 0 >= 85.0 && cov + 0 < 95.0) print $0}' | wc -l)
+
+          echo "Functions with 100% coverage: $COUNT_100"
+          echo "Functions with 95%-100% coverage: $COUNT_95"
+          echo "Functions with 85%-95% coverage: $COUNT_85"
+
 
           # Check thresholds (Total >= 90%, Individual >= 80%)
           awk -v threshold_total="$threshold_total" -v threshold_func="$threshold_func" -v failed="$failed" '
