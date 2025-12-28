@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -220,4 +221,282 @@ func TestNewFactory_ReadWriteSplit(t *testing.T) {
 	assert.NotNil(t, f.Document())
 	assert.NotNil(t, f.User())
 	assert.NotNil(t, f.Revocation())
+}
+
+func TestNewFactory_ProviderInitError(t *testing.T) {
+	// Save original provider creator
+	origNewMongoProvider := newMongoProvider
+	defer func() { newMongoProvider = origNewMongoProvider }()
+
+	// Mock provider creation to fail
+	newMongoProvider = func(ctx context.Context, uri, dbName string) (Provider, error) {
+		return nil, errors.New("connection failed")
+	}
+
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			Backends: map[string]config.BackendConfig{
+				"primary": {Type: "mongo", Mongo: config.MongoConfig{URI: "mongodb://fail", DatabaseName: "db"}},
+			},
+		},
+	}
+
+	_, err := NewFactory(context.Background(), cfg)
+	assert.ErrorContains(t, err, "failed to initialize backend primary")
+}
+
+func TestNewFactory_RouterErrors(t *testing.T) {
+	// Mock provider creation to succeed
+	origNewMongoProvider := newMongoProvider
+	defer func() { newMongoProvider = origNewMongoProvider }()
+
+	newMongoProvider = func(ctx context.Context, uri, dbName string) (Provider, error) {
+		client, _ := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://mock"))
+		return &mockMongoProvider{client: client, dbName: dbName}, nil
+	}
+
+	ctx := context.Background()
+
+	t.Run("Document Unsupported Strategy", func(t *testing.T) {
+		cfg := &config.Config{
+			Storage: config.StorageConfig{
+				Backends: map[string]config.BackendConfig{
+					"primary": {Type: "mongo"},
+				},
+				Topology: config.TopologyConfig{
+					Document: config.DocumentTopology{
+						BaseTopology: config.BaseTopology{Primary: "primary", Strategy: "unknown"},
+					},
+				},
+			},
+		}
+		_, err := NewFactory(ctx, cfg)
+		assert.ErrorContains(t, err, "unsupported strategy: unknown")
+	})
+
+	t.Run("Document Replica Missing", func(t *testing.T) {
+		cfg := &config.Config{
+			Storage: config.StorageConfig{
+				Backends: map[string]config.BackendConfig{
+					"primary": {Type: "mongo"},
+				},
+				Topology: config.TopologyConfig{
+					Document: config.DocumentTopology{
+						BaseTopology: config.BaseTopology{Primary: "primary", Strategy: "read_write_split", Replica: "missing"},
+					},
+				},
+			},
+		}
+		_, err := NewFactory(ctx, cfg)
+		assert.ErrorContains(t, err, "backend not found: missing")
+	})
+
+	t.Run("User Primary Missing", func(t *testing.T) {
+		cfg := &config.Config{
+			Storage: config.StorageConfig{
+				Backends: map[string]config.BackendConfig{
+					"primary": {Type: "mongo"},
+				},
+				Topology: config.TopologyConfig{
+					Document: config.DocumentTopology{BaseTopology: config.BaseTopology{Primary: "primary", Strategy: "single"}},
+					User: config.CollectionTopology{
+						BaseTopology: config.BaseTopology{Primary: "missing"},
+					},
+				},
+			},
+		}
+		_, err := NewFactory(ctx, cfg)
+		assert.ErrorContains(t, err, "backend not found: missing")
+	})
+
+	t.Run("User Unsupported Strategy", func(t *testing.T) {
+		cfg := &config.Config{
+			Storage: config.StorageConfig{
+				Backends: map[string]config.BackendConfig{
+					"primary": {Type: "mongo"},
+				},
+				Topology: config.TopologyConfig{
+					Document: config.DocumentTopology{BaseTopology: config.BaseTopology{Primary: "primary", Strategy: "single"}},
+					User: config.CollectionTopology{
+						BaseTopology: config.BaseTopology{Primary: "primary", Strategy: "unknown"},
+					},
+				},
+			},
+		}
+		_, err := NewFactory(ctx, cfg)
+		assert.ErrorContains(t, err, "unsupported strategy: unknown")
+	})
+
+	t.Run("User Replica Missing", func(t *testing.T) {
+		cfg := &config.Config{
+			Storage: config.StorageConfig{
+				Backends: map[string]config.BackendConfig{
+					"primary": {Type: "mongo"},
+				},
+				Topology: config.TopologyConfig{
+					Document: config.DocumentTopology{BaseTopology: config.BaseTopology{Primary: "primary", Strategy: "single"}},
+					User: config.CollectionTopology{
+						BaseTopology: config.BaseTopology{Primary: "primary", Strategy: "read_write_split", Replica: "missing"},
+					},
+				},
+			},
+		}
+		_, err := NewFactory(ctx, cfg)
+		assert.ErrorContains(t, err, "backend not found: missing")
+	})
+
+	t.Run("Revocation Primary Missing", func(t *testing.T) {
+		cfg := &config.Config{
+			Storage: config.StorageConfig{
+				Backends: map[string]config.BackendConfig{
+					"primary": {Type: "mongo"},
+				},
+				Topology: config.TopologyConfig{
+					Document: config.DocumentTopology{BaseTopology: config.BaseTopology{Primary: "primary", Strategy: "single"}},
+					User:     config.CollectionTopology{BaseTopology: config.BaseTopology{Primary: "primary", Strategy: "single"}},
+					Revocation: config.CollectionTopology{
+						BaseTopology: config.BaseTopology{Primary: "missing"},
+					},
+				},
+			},
+		}
+		_, err := NewFactory(ctx, cfg)
+		assert.ErrorContains(t, err, "backend not found: missing")
+	})
+
+	t.Run("Revocation Unsupported Strategy", func(t *testing.T) {
+		cfg := &config.Config{
+			Storage: config.StorageConfig{
+				Backends: map[string]config.BackendConfig{
+					"primary": {Type: "mongo"},
+				},
+				Topology: config.TopologyConfig{
+					Document: config.DocumentTopology{BaseTopology: config.BaseTopology{Primary: "primary", Strategy: "single"}},
+					User:     config.CollectionTopology{BaseTopology: config.BaseTopology{Primary: "primary", Strategy: "single"}},
+					Revocation: config.CollectionTopology{
+						BaseTopology: config.BaseTopology{Primary: "primary", Strategy: "unknown"},
+					},
+				},
+			},
+		}
+		_, err := NewFactory(ctx, cfg)
+		assert.ErrorContains(t, err, "unsupported strategy: unknown")
+	})
+
+	t.Run("Revocation Replica Missing", func(t *testing.T) {
+		cfg := &config.Config{
+			Storage: config.StorageConfig{
+				Backends: map[string]config.BackendConfig{
+					"primary": {Type: "mongo"},
+				},
+				Topology: config.TopologyConfig{
+					Document: config.DocumentTopology{BaseTopology: config.BaseTopology{Primary: "primary", Strategy: "single"}},
+					User:     config.CollectionTopology{BaseTopology: config.BaseTopology{Primary: "primary", Strategy: "single"}},
+					Revocation: config.CollectionTopology{
+						BaseTopology: config.BaseTopology{Primary: "primary", Strategy: "read_write_split", Replica: "missing"},
+					},
+				},
+			},
+		}
+		_, err := NewFactory(ctx, cfg)
+		assert.ErrorContains(t, err, "backend not found: missing")
+	})
+}
+
+func TestNewFactory_TenantErrors(t *testing.T) {
+	origNewMongoProvider := newMongoProvider
+	defer func() { newMongoProvider = origNewMongoProvider }()
+
+	newMongoProvider = func(ctx context.Context, uri, dbName string) (Provider, error) {
+		client, _ := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://mock"))
+		return &mockMongoProvider{client: client, dbName: dbName}, nil
+	}
+
+	ctx := context.Background()
+
+	t.Run("Tenant Document Backend Missing", func(t *testing.T) {
+		cfg := &config.Config{
+			Storage: config.StorageConfig{
+				Backends: map[string]config.BackendConfig{
+					"primary": {Type: "mongo"},
+				},
+				Topology: config.TopologyConfig{
+					Document: config.DocumentTopology{BaseTopology: config.BaseTopology{Primary: "primary", Strategy: "single"}},
+				},
+				Tenants: map[string]config.TenantConfig{
+					"t1": {Backend: "missing"},
+				},
+			},
+		}
+		_, err := NewFactory(ctx, cfg)
+		assert.ErrorContains(t, err, "backend not found: missing")
+	})
+}
+
+func TestNewFactory_DefaultTenantSkipped(t *testing.T) {
+	setupMockProvider()
+	defer teardownMockProvider()
+
+	cfg := &config.Config{
+		Storage: config.StorageConfig{
+			Backends: map[string]config.BackendConfig{
+				"primary": {Type: "mongo", Mongo: config.MongoConfig{URI: "mongodb://p", DatabaseName: "db1"}},
+			},
+			Topology: config.TopologyConfig{
+				Document: config.DocumentTopology{BaseTopology: config.BaseTopology{Strategy: "single", Primary: "primary"}},
+				User:     config.CollectionTopology{BaseTopology: config.BaseTopology{Strategy: "single", Primary: "primary"}},
+				Revocation: config.CollectionTopology{BaseTopology: config.BaseTopology{Strategy: "single", Primary: "primary"}},
+			},
+			Tenants: map[string]config.TenantConfig{
+				"default": {Backend: "primary"}, // Should be skipped
+			},
+		},
+	}
+
+	f, err := NewFactory(context.Background(), cfg)
+	require.NoError(t, err)
+	defer f.Close()
+}
+
+type mockGenericProvider struct{}
+
+func (m *mockGenericProvider) Close(ctx context.Context) error {
+	return nil
+}
+
+func TestFactory_GetMongoProvider_Errors(t *testing.T) {
+	f := &factory{
+		providers: map[string]Provider{
+			"generic": &mockGenericProvider{},
+		},
+	}
+
+	t.Run("Backend Not Found", func(t *testing.T) {
+		_, err := f.getMongoProvider("missing")
+		assert.ErrorContains(t, err, "backend not found: missing")
+	})
+
+	t.Run("Not A Mongo Provider", func(t *testing.T) {
+		_, err := f.getMongoProvider("generic")
+		assert.ErrorContains(t, err, "is not a mongo provider")
+	})
+}
+
+type errorClosingProvider struct {
+	mockMongoProvider
+}
+
+func (e *errorClosingProvider) Close(ctx context.Context) error {
+	return errors.New("close failed")
+}
+
+func TestFactory_CloseError(t *testing.T) {
+	f := &factory{
+		providers: map[string]Provider{
+			"p1": &errorClosingProvider{},
+		},
+	}
+	err := f.Close()
+	assert.ErrorContains(t, err, "errors closing providers")
+	assert.ErrorContains(t, err, "close failed")
 }

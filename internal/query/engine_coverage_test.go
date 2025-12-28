@@ -2,6 +2,8 @@ package query
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/codetrek/syntrix/internal/storage"
@@ -242,4 +244,247 @@ func TestEngine_Push_Coverage(t *testing.T) {
 
 func ptr(i int64) *int64 {
 	return &i
+}
+
+func TestFlattenStorageDocument_Nil(t *testing.T) {
+	res := flattenStorageDocument(nil)
+	assert.Nil(t, res)
+}
+
+func TestFlattenStorageDocument_Deleted(t *testing.T) {
+	doc := &storage.Document{
+		Fullpath:   "col/doc1",
+		Collection: "col",
+		Data:       map[string]interface{}{"foo": "bar"},
+		Deleted:    true,
+	}
+	res := flattenStorageDocument(doc)
+	assert.True(t, res["deleted"].(bool))
+}
+
+func TestExtractIDFromFullpath_Invalid(t *testing.T) {
+	id := extractIDFromFullpath("col")
+	assert.Equal(t, "", id)
+}
+
+func TestExtractIDFromFullpath_Valid(t *testing.T) {
+	id := extractIDFromFullpath("col/doc1")
+	assert.Equal(t, "doc1", id)
+}
+
+func TestReplaceDocument_StorageError(t *testing.T) {
+	mockStorage := new(MockStorageBackend)
+	engine := NewEngine(mockStorage, "")
+
+	doc := model.Document{"id": "doc1", "collection": "col", "foo": "bar"}
+
+	// Get returns error
+	mockStorage.On("Get", mock.Anything, "default", "col/doc1").Return(nil, errors.New("db error"))
+
+	_, err := engine.ReplaceDocument(context.Background(), "default", doc, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "db error")
+}
+
+func TestReplaceDocument_CreateError(t *testing.T) {
+	mockStorage := new(MockStorageBackend)
+	engine := NewEngine(mockStorage, "")
+
+	doc := model.Document{"id": "doc1", "collection": "col", "foo": "bar"}
+
+	// Get returns NotFound
+	mockStorage.On("Get", mock.Anything, "default", "col/doc1").Return(nil, model.ErrNotFound)
+	// Create returns error
+	mockStorage.On("Create", mock.Anything, "default", mock.Anything).Return(errors.New("create error"))
+
+	_, err := engine.ReplaceDocument(context.Background(), "default", doc, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "create error")
+}
+
+func TestReplaceDocument_UpdateError(t *testing.T) {
+	mockStorage := new(MockStorageBackend)
+	engine := NewEngine(mockStorage, "")
+
+	doc := model.Document{"id": "doc1", "collection": "col", "foo": "bar"}
+
+	// Get returns success
+	mockStorage.On("Get", mock.Anything, "default", "col/doc1").Return(&storage.Document{}, nil).Once()
+	// Update returns error
+	mockStorage.On("Update", mock.Anything, "default", "col/doc1", mock.Anything, mock.Anything).Return(errors.New("update error"))
+
+	_, err := engine.ReplaceDocument(context.Background(), "default", doc, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "update error")
+}
+
+func TestReplaceDocument_GetAfterUpdateError(t *testing.T) {
+	mockStorage := new(MockStorageBackend)
+	engine := NewEngine(mockStorage, "")
+
+	doc := model.Document{"id": "doc1", "collection": "col", "foo": "bar"}
+
+	// Get returns success
+	mockStorage.On("Get", mock.Anything, "default", "col/doc1").Return(&storage.Document{}, nil).Once()
+	// Update returns success
+	mockStorage.On("Update", mock.Anything, "default", "col/doc1", mock.Anything, mock.Anything).Return(nil)
+	// Get after update returns error
+	mockStorage.On("Get", mock.Anything, "default", "col/doc1").Return(nil, errors.New("get error")).Once()
+
+	_, err := engine.ReplaceDocument(context.Background(), "default", doc, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "get error")
+}
+
+func TestWatchCollection_RequestError(t *testing.T) {
+	mockStorage := new(MockStorageBackend)
+	engine := NewEngine(mockStorage, "http://invalid-url")
+
+	// This should fail creating request or doing request
+	// Since we use http.NewRequestWithContext, invalid URL might not fail immediately if it's just scheme/host
+	// But client.Do will fail
+
+	_, err := engine.WatchCollection(context.Background(), "default", "col")
+	assert.Error(t, err)
+}
+
+func TestWatchCollection_BadStatus(t *testing.T) {
+	mockStorage := new(MockStorageBackend)
+	engine := NewEngine(mockStorage, "http://mock-csp")
+
+	// Mock HTTP Client
+	mockTransport := &MockTransport{
+		RoundTripFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       http.NoBody,
+			}, nil
+		},
+	}
+	engine.SetHTTPClient(&http.Client{Transport: mockTransport})
+
+	_, err := engine.WatchCollection(context.Background(), "default", "col")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "csp watch failed")
+}
+
+func TestPull_QueryEmpty(t *testing.T) {
+	mockStorage := new(MockStorageBackend)
+	engine := NewEngine(mockStorage, "")
+
+	mockStorage.On("Query", mock.Anything, "default", mock.Anything).Return(nil, nil)
+
+	resp, err := engine.Pull(context.Background(), "default", storage.ReplicationPullRequest{
+		Collection: "col",
+		Checkpoint: 100,
+		Limit:      10,
+	})
+
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Empty(t, resp.Documents)
+	assert.Equal(t, int64(100), resp.Checkpoint)
+}
+
+func TestPush_DeleteNotFound(t *testing.T) {
+	mockStorage := new(MockStorageBackend)
+	engine := NewEngine(mockStorage, "")
+
+	req := storage.ReplicationPushRequest{
+		Collection: "col",
+		Changes: []storage.ReplicationPushChange{
+			{
+				Doc: &storage.Document{
+					Fullpath: "col/doc1",
+					Deleted:  true,
+				},
+			},
+		},
+	}
+
+	mockStorage.On("Get", mock.Anything, "default", "col/doc1").Return(&storage.Document{Version: 1}, nil)
+	mockStorage.On("Delete", mock.Anything, "default", "col/doc1", mock.Anything).Return(model.ErrNotFound)
+
+	resp, err := engine.Push(context.Background(), "default", req)
+	assert.NoError(t, err)
+	assert.Empty(t, resp.Conflicts)
+}
+
+func TestPush_UpdateConflict(t *testing.T) {
+	mockStorage := new(MockStorageBackend)
+	engine := NewEngine(mockStorage, "")
+
+	baseVer := int64(1)
+	req := storage.ReplicationPushRequest{
+		Collection: "col",
+		Changes: []storage.ReplicationPushChange{
+			{
+				Doc: &storage.Document{
+					Fullpath: "col/doc1",
+					Data:     map[string]interface{}{"foo": "bar"},
+				},
+				BaseVersion: &baseVer,
+			},
+		},
+	}
+
+	// Get returns existing doc with version 2 (conflict)
+	mockStorage.On("Get", mock.Anything, "default", "col/doc1").Return(&storage.Document{
+		Fullpath: "col/doc1",
+		Version:  2,
+		Data:     map[string]interface{}{"foo": "baz"},
+	}, nil)
+
+	resp, err := engine.Push(context.Background(), "default", req)
+	assert.NoError(t, err)
+	assert.Len(t, resp.Conflicts, 1)
+	assert.Equal(t, int64(2), resp.Conflicts[0].Version)
+}
+
+func TestPush_UpdatePreconditionFailed(t *testing.T) {
+	mockStorage := new(MockStorageBackend)
+	engine := NewEngine(mockStorage, "")
+
+	baseVer := int64(1)
+	req := storage.ReplicationPushRequest{
+		Collection: "col",
+		Changes: []storage.ReplicationPushChange{
+			{
+				Doc: &storage.Document{
+					Fullpath: "col/doc1",
+					Data:     map[string]interface{}{"foo": "bar"},
+				},
+				BaseVersion: &baseVer,
+			},
+		},
+	}
+
+	// Get returns existing doc with version 1 (match)
+	mockStorage.On("Get", mock.Anything, "default", "col/doc1").Return(&storage.Document{
+		Fullpath: "col/doc1",
+		Version:  1,
+	}, nil).Once()
+
+	// Update fails with PreconditionFailed (race condition)
+	mockStorage.On("Update", mock.Anything, "default", "col/doc1", mock.Anything, mock.Anything).Return(model.ErrPreconditionFailed)
+
+	// Fetch latest for conflict
+	mockStorage.On("Get", mock.Anything, "default", "col/doc1").Return(&storage.Document{
+		Fullpath: "col/doc1",
+		Version:  2,
+	}, nil).Once()
+
+	resp, err := engine.Push(context.Background(), "default", req)
+	assert.NoError(t, err)
+	assert.Len(t, resp.Conflicts, 1)
+	assert.Equal(t, int64(2), resp.Conflicts[0].Version)
+}
+
+// MockTransport for HTTP Client
+type MockTransport struct {
+	RoundTripFunc func(req *http.Request) (*http.Response, error)
+}
+
+func (m *MockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return m.RoundTripFunc(req)
 }
