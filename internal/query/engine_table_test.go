@@ -257,6 +257,11 @@ func TestEngine_ReplaceDocument_TableDriven(t *testing.T) {
 			doc:         model.Document{"id": "1"},
 			expectError: true,
 		},
+		{
+			name:        "Missing ID",
+			doc:         model.Document{"collection": "test"},
+			expectError: true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -367,12 +372,12 @@ func TestEngine_PatchDocument_TableDriven(t *testing.T) {
 
 func TestEngine_Pull_TableDriven(t *testing.T) {
 	type testCase struct {
-		name           string
-		req            storage.ReplicationPullRequest
-		mockSetup      func(*MockStorageBackend)
-		expectedDocs   []*storage.Document
-		expectedCP     int64
-		expectError    bool
+		name         string
+		req          storage.ReplicationPullRequest
+		mockSetup    func(*MockStorageBackend)
+		expectedDocs []*storage.Document
+		expectedCP   int64
+		expectError  bool
 	}
 
 	tests := []testCase{
@@ -396,7 +401,7 @@ func TestEngine_Pull_TableDriven(t *testing.T) {
 				{Id: "test/1", UpdatedAt: 101},
 				{Id: "test/2", UpdatedAt: 102},
 			},
-			expectedCP: 102,
+			expectedCP:  102,
 			expectError: false,
 		},
 		{

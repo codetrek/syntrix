@@ -487,3 +487,153 @@ func TestClient_Push_Error(t *testing.T) {
 	_, err := client.Push(context.Background(), "default", req)
 	assert.Error(t, err)
 }
+
+func TestClient_NetworkErrors(t *testing.T) {
+	// Create a client with a URL that will cause connection failure
+	// Using a closed port or invalid host
+	client := NewClient("http://localhost:0")
+
+	ctx := context.Background()
+
+	t.Run("GetDocument connection error", func(t *testing.T) {
+		_, err := client.GetDocument(ctx, "default", "test/1")
+		assert.Error(t, err)
+	})
+
+	t.Run("CreateDocument connection error", func(t *testing.T) {
+		err := client.CreateDocument(ctx, "default", model.Document{"id": "1"})
+		assert.Error(t, err)
+	})
+
+	t.Run("ReplaceDocument connection error", func(t *testing.T) {
+		_, err := client.ReplaceDocument(ctx, "default", model.Document{"id": "1"}, nil)
+		assert.Error(t, err)
+	})
+
+	t.Run("PatchDocument connection error", func(t *testing.T) {
+		_, err := client.PatchDocument(ctx, "default", model.Document{"id": "1"}, nil)
+		assert.Error(t, err)
+	})
+
+	t.Run("DeleteDocument connection error", func(t *testing.T) {
+		err := client.DeleteDocument(ctx, "default", "test/1", nil)
+		assert.Error(t, err)
+	})
+
+	t.Run("ExecuteQuery connection error", func(t *testing.T) {
+		_, err := client.ExecuteQuery(ctx, "default", model.Query{})
+		assert.Error(t, err)
+	})
+
+	t.Run("WatchCollection connection error", func(t *testing.T) {
+		_, err := client.WatchCollection(ctx, "default", "test")
+		assert.Error(t, err)
+	})
+
+	t.Run("Pull connection error", func(t *testing.T) {
+		_, err := client.Pull(ctx, "default", storage.ReplicationPullRequest{})
+		assert.Error(t, err)
+	})
+
+	t.Run("Push connection error", func(t *testing.T) {
+		_, err := client.Push(ctx, "default", storage.ReplicationPushRequest{})
+		assert.Error(t, err)
+	})
+}
+
+func TestClient_WatchCollection_Errors(t *testing.T) {
+	t.Run("Bad Status Code", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer ts.Close()
+
+		client := NewClient(ts.URL)
+		_, err := client.WatchCollection(context.Background(), "default", "test")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected status code: 500")
+	})
+
+	t.Run("Invalid URL", func(t *testing.T) {
+		// Control character in URL to force NewRequest error
+		client := NewClient("http://example.com" + string(byte(0x7f)))
+		_, err := client.WatchCollection(context.Background(), "default", "test")
+		assert.Error(t, err)
+	})
+}
+
+func TestClient_Replication_Errors(t *testing.T) {
+	t.Run("Pull Bad Status", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+		}))
+		defer ts.Close()
+
+		client := NewClient(ts.URL)
+		_, err := client.Pull(context.Background(), "default", storage.ReplicationPullRequest{})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected status code: 400")
+	})
+
+	t.Run("Pull Decode Error", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("invalid-json"))
+		}))
+		defer ts.Close()
+
+		client := NewClient(ts.URL)
+		_, err := client.Pull(context.Background(), "default", storage.ReplicationPullRequest{})
+		assert.Error(t, err)
+	})
+
+	t.Run("Push Bad Status", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer ts.Close()
+
+		client := NewClient(ts.URL)
+		_, err := client.Push(context.Background(), "default", storage.ReplicationPushRequest{})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected status code: 500")
+	})
+
+	t.Run("Push Decode Error", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("invalid-json"))
+		}))
+		defer ts.Close()
+
+		client := NewClient(ts.URL)
+		_, err := client.Push(context.Background(), "default", storage.ReplicationPushRequest{})
+		assert.Error(t, err)
+	})
+}
+
+func TestClient_ExecuteQuery_Errors(t *testing.T) {
+	t.Run("Bad Status", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+		}))
+		defer ts.Close()
+
+		client := NewClient(ts.URL)
+		_, err := client.ExecuteQuery(context.Background(), "default", model.Query{})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected status code: 400")
+	})
+
+	t.Run("Decode Error", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("invalid-json"))
+		}))
+		defer ts.Close()
+
+		client := NewClient(ts.URL)
+		_, err := client.ExecuteQuery(context.Background(), "default", model.Query{})
+		assert.Error(t, err)
+	})
+}

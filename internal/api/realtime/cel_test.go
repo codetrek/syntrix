@@ -68,3 +68,53 @@ func TestFormatValue_VariousTypes(t *testing.T) {
 	_, err = formatValue(map[string]interface{}{"x": 1})
 	assert.Error(t, err)
 }
+
+func TestCompileFiltersToCEL_Empty(t *testing.T) {
+	prg, err := compileFiltersToCEL(nil)
+	assert.NoError(t, err)
+	assert.Nil(t, prg)
+
+	prg, err = compileFiltersToCEL([]model.Filter{})
+	assert.NoError(t, err)
+	assert.Nil(t, prg)
+}
+
+func TestCompileFiltersToCEL_FilterError(t *testing.T) {
+	// Unsupported operator
+	filters := []model.Filter{
+		{Field: "age", Op: "invalid_op", Value: 10},
+	}
+	_, err := compileFiltersToCEL(filters)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported operator")
+}
+
+func TestCompileFiltersToCEL_ValueError(t *testing.T) {
+	// Unsupported value type
+	filters := []model.Filter{
+		{Field: "age", Op: "==", Value: map[string]interface{}{"a": 1}},
+	}
+	_, err := compileFiltersToCEL(filters)
+	assert.Error(t, err)
+}
+
+func TestFormatValue_NestedError(t *testing.T) {
+	// Slice with unsupported type
+	val := []interface{}{
+		"valid",
+		map[string]interface{}{"invalid": true},
+	}
+	_, err := formatValue(val)
+	assert.Error(t, err)
+}
+
+func TestCompileFiltersToCEL_CompileError(t *testing.T) {
+	// Trigger compile error by using a field name containing a single quote,
+	// which is not escaped by the current implementation of filterToExpression.
+	filters := []model.Filter{
+		{Field: "foo'bar", Op: "==", Value: 1},
+	}
+	_, err := compileFiltersToCEL(filters)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "CEL compile error")
+}

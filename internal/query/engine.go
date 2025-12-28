@@ -83,11 +83,11 @@ func flattenStorageDocument(doc *storage.Document) model.Document {
 }
 
 func extractIDFromFullpath(fullpath string) string {
-	idx := strings.LastIndex(fullpath, "/")
-	if idx == -1 {
-		return fullpath
+	parts := strings.Split(fullpath, "/")
+	if len(parts)%2 != 0 {
+		return ""
 	}
-	return fullpath[idx+1:]
+	return parts[len(parts)-1]
 }
 
 // ReplaceDocument replaces a document or creates it if it doesn't exist (Upsert).

@@ -9,6 +9,7 @@ import (
 	"github.com/codetrek/syntrix/internal/storage/internal/mongo"
 	"github.com/codetrek/syntrix/internal/storage/internal/router"
 	"github.com/codetrek/syntrix/internal/storage/types"
+	"github.com/codetrek/syntrix/pkg/model"
 	mongodriver "go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -63,7 +64,7 @@ func NewFactory(ctx context.Context, cfg *config.Config) (StorageFactory, error)
 
 	tenantDocRouters := make(map[string]types.DocumentRouter)
 	for tID, tCfg := range cfg.Storage.Tenants {
-		if tID == "default" {
+		if tID == model.DefaultTenantID {
 			continue
 		}
 		p, err := f.getMongoProvider(tCfg.Backend)
@@ -83,7 +84,7 @@ func NewFactory(ctx context.Context, cfg *config.Config) (StorageFactory, error)
 
 	tenantUserRouters := make(map[string]types.UserRouter)
 	for tID, tCfg := range cfg.Storage.Tenants {
-		if tID == "default" {
+		if tID == model.DefaultTenantID {
 			continue
 		}
 		p, err := f.getMongoProvider(tCfg.Backend)
@@ -103,7 +104,7 @@ func NewFactory(ctx context.Context, cfg *config.Config) (StorageFactory, error)
 
 	tenantRevRouters := make(map[string]types.RevocationRouter)
 	for tID, tCfg := range cfg.Storage.Tenants {
-		if tID == "default" {
+		if tID == model.DefaultTenantID {
 			continue
 		}
 		p, err := f.getMongoProvider(tCfg.Backend)
