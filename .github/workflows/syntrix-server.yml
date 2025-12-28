@@ -51,9 +51,12 @@ jobs:
           threshold_package=85.0
           threshold_total=90.0
 
+          set -o pipefail
           failed=0
           # Run tests with coverage, excluding cmd/ directory
-          go test -coverprofile=coverage.out $(go list ./... | grep -v "/cmd/") | \
+          go test -covermode=atomic -coverprofile=coverage.out $(go list ./... | grep -v "/cmd/") | tee test_output.txt
+
+          cat test_output.txt | \
             sed 's/of statements//g; s/github.com\/codetrek\/syntrix\///g' | \
             awk -v threshold="$threshold_package" '
               $1 != "?" {
