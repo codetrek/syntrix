@@ -1,10 +1,11 @@
-package trigger
+package evaluator
 
 import (
 	"context"
 	"testing"
 
 	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/trigger"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,14 +17,14 @@ func TestCELEvaluator(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		trigger   *Trigger
+		trigger   *trigger.Trigger
 		event     *storage.Event
 		wantMatch bool
 		wantErr   bool
 	}{
 		{
 			name: "Simple match",
-			trigger: &Trigger{
+			trigger: &trigger.Trigger{
 				Events:     []string{"create"},
 				Collection: "users",
 				Condition:  "event.document.age > 18",
@@ -40,7 +41,7 @@ func TestCELEvaluator(t *testing.T) {
 		},
 		{
 			name: "Simple no match",
-			trigger: &Trigger{
+			trigger: &trigger.Trigger{
 				Events:     []string{"create"},
 				Collection: "users",
 				Condition:  "event.document.age > 18",
@@ -57,7 +58,7 @@ func TestCELEvaluator(t *testing.T) {
 		},
 		{
 			name: "Event type mismatch",
-			trigger: &Trigger{
+			trigger: &trigger.Trigger{
 				Events:     []string{"delete"},
 				Collection: "users",
 				Condition:  "true",
@@ -73,7 +74,7 @@ func TestCELEvaluator(t *testing.T) {
 		},
 		{
 			name: "Collection mismatch",
-			trigger: &Trigger{
+			trigger: &trigger.Trigger{
 				Events:     []string{"create"},
 				Collection: "orders",
 				Condition:  "true",
@@ -89,7 +90,7 @@ func TestCELEvaluator(t *testing.T) {
 		},
 		{
 			name: "Collection wildcard match",
-			trigger: &Trigger{
+			trigger: &trigger.Trigger{
 				Events:     []string{"create"},
 				Collection: "chats/*/members",
 				Condition:  "true",
@@ -105,7 +106,7 @@ func TestCELEvaluator(t *testing.T) {
 		},
 		{
 			name: "Collection wildcard no match",
-			trigger: &Trigger{
+			trigger: &trigger.Trigger{
 				Events:     []string{"create"},
 				Collection: "chats/*/members",
 				Condition:  "true",
@@ -121,7 +122,7 @@ func TestCELEvaluator(t *testing.T) {
 		},
 		{
 			name: "Complex condition",
-			trigger: &Trigger{
+			trigger: &trigger.Trigger{
 				Events:     []string{"update"},
 				Collection: "users",
 				Condition:  "event.document.role == 'admin' && event.document.active == true",
@@ -141,7 +142,7 @@ func TestCELEvaluator(t *testing.T) {
 		},
 		{
 			name: "Invalid CEL",
-			trigger: &Trigger{
+			trigger: &trigger.Trigger{
 				Events:     []string{"create"},
 				Collection: "users",
 				Condition:  "invalid syntax ???",
@@ -157,7 +158,7 @@ func TestCELEvaluator(t *testing.T) {
 		},
 		{
 			name: "Check Before State",
-			trigger: &Trigger{
+			trigger: &trigger.Trigger{
 				Events:     []string{"update"},
 				Collection: "users",
 				Condition:  "event.before.status == 'pending' && event.document.status == 'active'",
@@ -178,7 +179,7 @@ func TestCELEvaluator(t *testing.T) {
 		},
 		{
 			name: "Check Timestamp",
-			trigger: &Trigger{
+			trigger: &trigger.Trigger{
 				Events:     []string{"create"},
 				Collection: "logs",
 				Condition:  "event.timestamp > 0",

@@ -14,11 +14,11 @@ import (
 
 func TestEngine_ExecuteQuery(t *testing.T) {
 	type testCase struct {
-		name        string
-		query       model.Query
-		mockSetup   func(*MockStorageBackend)
+		name         string
+		query        model.Query
+		mockSetup    func(*MockStorageBackend)
 		expectedDocs []model.Document
-		expectError bool
+		expectError  bool
 	}
 
 	tests := []testCase{
@@ -76,7 +76,7 @@ func TestEngine_ExecuteQuery(t *testing.T) {
 				m.On("Query", mock.Anything, "default", mock.Anything).Return([]*storage.Document{}, nil)
 			},
 			expectedDocs: []model.Document{},
-			expectError: false,
+			expectError:  false,
 		},
 	}
 
@@ -402,7 +402,8 @@ func TestPush_DeleteNotFound(t *testing.T) {
 		},
 	}
 
-	mockStorage.On("Get", mock.Anything, "default", "col/doc1").Return(&storage.Document{Version: 1}, nil)
+	mockStorage.On("Get", mock.Anything, "default", "col/doc1").Return(&storage.Document{Version: 1}, nil).Once()
+	mockStorage.On("Get", mock.Anything, "default", "col/doc1").Return(nil, model.ErrNotFound)
 	mockStorage.On("Delete", mock.Anything, "default", "col/doc1", mock.Anything).Return(model.ErrNotFound)
 
 	resp, err := engine.Push(context.Background(), "default", req)

@@ -16,6 +16,7 @@ import (
 	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -135,22 +136,37 @@ func (c *triggerConsumerStub) Start(ctx context.Context) error {
 	return nil
 }
 
-func TestManager_Start_TriggerEvaluator_CallsWatch(t *testing.T) {
+type mockTriggerService struct {
+	mock.Mock
+}
+
+func (m *mockTriggerService) Start(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+func (m *mockTriggerService) LoadTriggers(triggers []*trigger.Trigger) error {
+	args := m.Called(triggers)
+	return args.Error(0)
+}
+
+func TestManager_Start_TriggerEvaluator_CallsStart(t *testing.T) {
 	cfg := config.LoadConfig()
 	mgr := NewManager(cfg, Options{RunTriggerEvaluator: true})
 
-	backend := &storageBackendStub{}
-	mgr.docStore = backend
-	mgr.triggerService = trigger.NewTriggerService(&fakeEvaluator{}, &fakePublisher{})
+	mockTS := new(mockTriggerService)
+	mgr.triggerService = mockTS
 
 	bgCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	mockTS.On("Start", bgCtx).Return(nil)
+
 	mgr.Start(bgCtx)
 
-	assert.Eventually(t, func() bool {
-		return backend.watchCalls.Load() == 1
-	}, 1*time.Second, 10*time.Millisecond, "Should call Watch exactly once")
+	// Wait for Start to be called
+	time.Sleep(50 * time.Millisecond)
+	mockTS.AssertExpectations(t)
 }
 
 func TestManager_Start_TriggerWorker_CallsStart(t *testing.T) {

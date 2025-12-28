@@ -1,4 +1,4 @@
-package trigger
+package pubsub
 
 import (
 	"context"
@@ -9,53 +9,62 @@ import (
 	"sync"
 	"time"
 
+	"github.com/codetrek/syntrix/internal/trigger/internal/worker"
+	"github.com/codetrek/syntrix/internal/trigger/types"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// Consumer consumes delivery tasks from NATS and dispatches them to the worker.
-type Consumer struct {
+// natsConsumer consumes delivery tasks from NATS and dispatches them to the worker.
+type natsConsumer struct {
 	js          jetstream.JetStream
-	worker      Worker
+	worker      worker.DeliveryWorker
 	stream      string
 	numWorkers  int
 	workerChans []chan jetstream.Msg
 	wg          sync.WaitGroup
+	metrics     types.Metrics
 }
 
-// NewConsumer creates a new Consumer.
-func NewConsumer(nc *nats.Conn, worker Worker, numWorkers int) (*Consumer, error) {
+// NewTaskConsumer creates a new TaskConsumer.
+func NewTaskConsumer(nc *nats.Conn, w worker.DeliveryWorker, numWorkers int, metrics types.Metrics) (TaskConsumer, error) {
 	if nc == nil {
 		return nil, fmt.Errorf("nats connection cannot be nil")
 	}
 
-	js, err := jetstream.New(nc)
+	js, err := jetStreamNew(nc)
 	if err != nil {
 		return nil, err
 	}
 
+	return NewTaskConsumerFromJS(js, w, numWorkers, metrics)
+}
+
+// NewTaskConsumerFromJS creates a new TaskConsumer using an existing JetStream context.
+func NewTaskConsumerFromJS(js jetstream.JetStream, w worker.DeliveryWorker, numWorkers int, metrics types.Metrics) (TaskConsumer, error) {
 	if numWorkers <= 0 {
 		numWorkers = 16
 	}
+	if metrics == nil {
+		metrics = &types.NoopMetrics{}
+	}
 
-	return &Consumer{
+	return &natsConsumer{
 		js:         js,
-		worker:     worker,
+		worker:     w,
 		stream:     "TRIGGERS",
 		numWorkers: numWorkers,
+		metrics:    metrics,
 	}, nil
 }
 
 // Start begins consuming messages. It blocks until the context is cancelled.
-func (c *Consumer) Start(ctx context.Context) error {
+func (c *natsConsumer) Start(ctx context.Context) error {
 	// Ensure Stream exists
-	// In production, streams should be managed by IaC or migration tools.
-	// Here we ensure it exists for development convenience.
 	_, err := c.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:      c.stream,
-		Subjects:  []string{"triggers.>"},
-		Storage:   jetstream.FileStorage,
-		Retention: jetstream.WorkQueuePolicy, // WorkQueue policy ensures each message is processed by only one consumer
+		Name:     c.stream,
+		Subjects: []string{"triggers.>"},
+		Storage:  jetstream.MemoryStorage,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to ensure stream: %w", err)
@@ -74,13 +83,12 @@ func (c *Consumer) Start(ctx context.Context) error {
 	// Initialize Worker Pool
 	c.workerChans = make([]chan jetstream.Msg, c.numWorkers)
 	for i := 0; i < c.numWorkers; i++ {
-		c.workerChans[i] = make(chan jetstream.Msg, 100) // Buffer size 100
+		c.workerChans[i] = make(chan jetstream.Msg, 100)
 		c.wg.Add(1)
 		go c.workerLoop(ctx, i)
 	}
 
-	// Consume messages using Consume (Push-like callback)
-	// This is non-blocking and handles the pull loop internally.
+	// Consume messages
 	cc, err := consumer.Consume(func(msg jetstream.Msg) {
 		c.dispatch(msg)
 	})
@@ -91,51 +99,48 @@ func (c *Consumer) Start(ctx context.Context) error {
 
 	log.Printf("Trigger Consumer started with %d workers, waiting for messages...", c.numWorkers)
 
-	// Block until context is done
 	<-ctx.Done()
 
-	// Shutdown
 	log.Println("Stopping Trigger Consumer...")
-	cc.Stop() // Stop consuming new messages
+	cc.Stop()
 
-	// Close all worker channels
 	for _, ch := range c.workerChans {
 		close(ch)
 	}
-	c.wg.Wait() // Wait for workers to drain
+	c.wg.Wait()
 	return nil
 }
 
-func (c *Consumer) dispatch(msg jetstream.Msg) {
-	// Peek at payload to determine partition key
-	var task DeliveryTask
+func (c *natsConsumer) dispatch(msg jetstream.Msg) {
+	var task types.DeliveryTask
 	if err := json.Unmarshal(msg.Data(), &task); err != nil {
 		log.Printf("[Error] Invalid payload in dispatch: %v", err)
-		msg.Term() // Terminate invalid messages
+		c.metrics.IncConsumeFailure("unknown", "unknown", "unmarshal_error")
+		msg.Term()
 		return
 	}
 
-	// Hash Collection Path + DocKey to select worker
-	// This ensures all events for the same document go to the same worker (serial execution per document)
 	h := fnv.New32a()
 	h.Write([]byte(task.Collection))
 	h.Write([]byte(task.DocKey))
 	hash := h.Sum32()
 	workerIdx := int(hash % uint32(c.numWorkers))
 
-	// Send to worker
 	c.workerChans[workerIdx] <- msg
 }
 
-func (c *Consumer) workerLoop(ctx context.Context, id int) {
+func (c *natsConsumer) workerLoop(ctx context.Context, id int) {
 	defer c.wg.Done()
 
 	for msg := range c.workerChans[id] {
-		// Process message
 		if err := c.processMsg(ctx, msg); err != nil {
+			if types.IsFatal(err) {
+				log.Printf("[Error] [Worker %d] Fatal error processing message: %v. Terminating.", id, err)
+				msg.Term()
+				continue
+			}
 			log.Printf("[Error] [Worker %d] Failed to process message: %v", id, err)
 
-			// Retry Logic
 			md, metaErr := msg.Metadata()
 			if metaErr != nil {
 				log.Printf("[Error] Failed to get message metadata: %v", metaErr)
@@ -143,18 +148,16 @@ func (c *Consumer) workerLoop(ctx context.Context, id int) {
 				continue
 			}
 
-			var task DeliveryTask
+			var task types.DeliveryTask
 			if jsonErr := json.Unmarshal(msg.Data(), &task); jsonErr != nil {
 				log.Printf("[Error] Invalid payload for retry check: %v", jsonErr)
 				msg.Term()
 				continue
 			}
 
-			// Check Max Attempts
-			// NumDelivered starts at 1
 			maxAttempts := task.RetryPolicy.MaxAttempts
 			if maxAttempts == 0 {
-				maxAttempts = 3 // Default
+				maxAttempts = 3
 			}
 
 			if int(md.NumDelivered) >= maxAttempts {
@@ -163,14 +166,12 @@ func (c *Consumer) workerLoop(ctx context.Context, id int) {
 				continue
 			}
 
-			// Calculate Backoff
 			attempt := int(md.NumDelivered)
 			initialBackoff := time.Duration(task.RetryPolicy.InitialBackoff)
 			if initialBackoff == 0 {
 				initialBackoff = 1 * time.Second
 			}
 
-			// Exponential backoff: initial * 2^(attempt-1)
 			backoff := initialBackoff * (1 << (attempt - 1))
 
 			maxBackoff := time.Duration(task.RetryPolicy.MaxBackoff)
@@ -186,18 +187,16 @@ func (c *Consumer) workerLoop(ctx context.Context, id int) {
 	}
 }
 
-func (c *Consumer) processMsg(ctx context.Context, msg jetstream.Msg) error {
-	var task DeliveryTask
+func (c *natsConsumer) processMsg(ctx context.Context, msg jetstream.Msg) error {
+	start := time.Now()
+	var task types.DeliveryTask
 	if err := json.Unmarshal(msg.Data(), &task); err != nil {
-		// If payload is invalid, we should probably Terminate it to avoid infinite loop.
-		// But for safety, let's log and return error.
+		c.metrics.IncConsumeFailure("unknown", "unknown", "unmarshal_error")
 		return fmt.Errorf("invalid payload: %w", err)
 	}
 
 	log.Printf("[Info] Processing trigger task: %s", task.TriggerID)
 
-	// Execute task
-	// We create a new context with timeout for the task execution
 	timeout := time.Duration(task.Timeout)
 	if timeout == 0 {
 		timeout = 10 * time.Second
@@ -205,5 +204,12 @@ func (c *Consumer) processMsg(ctx context.Context, msg jetstream.Msg) error {
 	taskCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	return c.worker.ProcessTask(taskCtx, &task)
+	err := c.worker.ProcessTask(taskCtx, &task)
+	if err != nil {
+		c.metrics.IncConsumeFailure(task.Tenant, task.Collection, err.Error())
+	} else {
+		c.metrics.IncConsumeSuccess(task.Tenant, task.Collection, task.SubjectHashed)
+	}
+	c.metrics.ObserveConsumeLatency(task.Tenant, task.Collection, time.Since(start))
+	return err
 }

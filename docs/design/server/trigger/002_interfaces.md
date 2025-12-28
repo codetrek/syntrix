@@ -36,6 +36,12 @@ type TriggerFactory interface {
     Engine() TriggerEngine
     Close() error
 }
+
+// NewFactory creates a new TriggerFactory.
+// The implementation details (defaultTriggerFactory, defaultTriggerEngine) are unexported.
+func NewFactory(store storage.DocumentStore, nats *nats.Conn, auth identity.AuthN, opts ...FactoryOption) TriggerFactory {
+    // ...
+}
 ```
 
 ### Adapter Interfaces
@@ -58,7 +64,7 @@ Migration note (low priority)
 
 ## Package Layout
 
-- `internal/trigger/engine`: orchestration and exposed interfaces.
+- `internal/trigger/engine`: orchestration and expose interfaces.
 - `internal/trigger/internal/watcher`: storage watch + checkpoint adapter.
 - `internal/trigger/internal/pubsub`: NATS publisher/consumer + config.
 - `internal/trigger/internal/worker`: HTTP worker, auth/signature helpers.
@@ -67,15 +73,7 @@ Migration note (low priority)
 
 ## Migration Steps
 
-1) Define `TriggerEngine` and `TriggerFactory` interfaces + factory struct wiring existing pieces.
-2) Carve DocumentWatcher adapter from current `TriggerService.Watch` (checkpoint handling stays, but hidden).
-3) Move NATS publisher/consumer into `internal/trigger/internal/pubsub` and expose via interfaces.
-4) Keep evaluator logic; inject via factory.
-5) Move DeliveryWorker to adapter package; keep behavior (auth token + signature) but make HTTP client configurable.
-6) Update existing wiring code to use factory/engine, leaving public behavior unchanged.
-7) Add tenant validations and subject-safe docKey encoding/decoding in publisher/consumer; adjust task payload to carry decoded DocKey to worker.
-8) Make checkpoint keys tenant-scoped (`sys/checkpoints/trigger_evaluator/<tenant>`), optionally extended with collection when filtering is enabled.
-9) Add unit tests for factory wiring, watcher checkpoint behavior, publisher/consumer error paths, worker HTTP success/failure, tenant mismatch rejection, docKey encoding/decoding, subject-length guard (hash fallback preserves payload docKey), tenant/collection name validation failures, and hash-flag propagation to payload/metrics.
+> **Moved to Task 010**: The detailed migration steps have been integrated into the "Plan / Milestones" section of `tasks/010.2025-12-28-trigger-engine-refactor.md`.
 
 ## Testing Plan
 

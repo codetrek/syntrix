@@ -8,12 +8,41 @@ import (
 	"testing"
 
 	"github.com/codetrek/syntrix/internal/config"
+	"github.com/codetrek/syntrix/internal/identity"
 	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/internal/trigger"
+	"github.com/codetrek/syntrix/internal/trigger/engine"
 
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
+
+// MockFactory implements engine.TriggerFactory for testing
+type MockFactory struct {
+	mock.Mock
+}
+
+func (m *MockFactory) Engine() engine.TriggerEngine {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil
+	}
+	return args.Get(0).(engine.TriggerEngine)
+}
+
+func (m *MockFactory) Consumer(numWorkers int) (engine.TaskConsumer, error) {
+	args := m.Called(numWorkers)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(engine.TaskConsumer), args.Error(1)
+}
+
+func (m *MockFactory) Close() error {
+	args := m.Called()
+	return args.Error(0)
+}
 
 func TestManager_InitTriggerServices_Success_WithHooks(t *testing.T) {
 	cfg := config.LoadConfig()
@@ -21,36 +50,31 @@ func TestManager_InitTriggerServices_Success_WithHooks(t *testing.T) {
 	mgr := NewManager(cfg, Options{RunTriggerEvaluator: true, RunTriggerWorker: true})
 
 	origConnector := natsConnector
-	origPub := triggerPublisherFactory
-	origCons := triggerConsumerFactory
-	origEval := triggerEvaluatorFactory
+	origFactory := triggerFactoryFactory
 	defer func() {
 		natsConnector = origConnector
-		triggerPublisherFactory = origPub
-		triggerConsumerFactory = origCons
-		triggerEvaluatorFactory = origEval
+		triggerFactoryFactory = origFactory
 	}()
 
 	fakeConn := &nats.Conn{}
 	natsConnector = func(string, ...nats.Option) (*nats.Conn, error) { return fakeConn, nil }
 
-	pub := &fakePublisher{}
-	triggerPublisherFactory = func(*nats.Conn) (trigger.EventPublisher, error) {
-		pub.created = true
-		return pub, nil
+	mockFactory := new(MockFactory)
+	triggerFactoryFactory = func(storage.DocumentStore, *nats.Conn, identity.AuthN) (engine.TriggerFactory, error) {
+		return mockFactory, nil
 	}
 
-	triggerConsumerFactory = func(_ *nats.Conn, _ trigger.Worker, _ int) (*trigger.Consumer, error) {
-		return (*trigger.Consumer)(nil), nil
-	}
+	cons := &fakeConsumer{}
+	mockFactory.On("Consumer", cfg.Trigger.WorkerCount).Return(cons, nil)
 
-	triggerEvaluatorFactory = func() (trigger.Evaluator, error) { return &fakeEvaluator{}, nil }
+	eval := &fakeEvaluator{}
+	mockFactory.On("Engine").Return(eval)
 
 	err := mgr.initTriggerServices()
 	assert.NoError(t, err)
 	assert.NotNil(t, mgr.triggerService)
 	assert.Same(t, fakeConn, mgr.natsConn)
-	assert.True(t, pub.created)
+	mockFactory.AssertExpectations(t)
 }
 
 func TestManager_InitTriggerServices_WorkerOnly(t *testing.T) {
@@ -58,25 +82,27 @@ func TestManager_InitTriggerServices_WorkerOnly(t *testing.T) {
 	mgr := NewManager(cfg, Options{RunTriggerWorker: true})
 
 	origConnector := natsConnector
-	origCons := triggerConsumerFactory
+	origFactory := triggerFactoryFactory
 	defer func() {
 		natsConnector = origConnector
-		triggerConsumerFactory = origCons
+		triggerFactoryFactory = origFactory
 	}()
 
 	fakeConn := &nats.Conn{}
 	natsConnector = func(string, ...nats.Option) (*nats.Conn, error) { return fakeConn, nil }
 
-	consCreated := false
-	triggerConsumerFactory = func(_ *nats.Conn, _ trigger.Worker, _ int) (*trigger.Consumer, error) {
-		consCreated = true
-		return (*trigger.Consumer)(nil), nil
+	mockFactory := new(MockFactory)
+	triggerFactoryFactory = func(storage.DocumentStore, *nats.Conn, identity.AuthN) (engine.TriggerFactory, error) {
+		return mockFactory, nil
 	}
+
+	cons := &fakeConsumer{}
+	mockFactory.On("Consumer", cfg.Trigger.WorkerCount).Return(cons, nil)
 
 	err := mgr.initTriggerServices()
 	assert.NoError(t, err)
-	assert.True(t, consCreated)
 	assert.Same(t, fakeConn, mgr.natsConn)
+	mockFactory.AssertExpectations(t)
 }
 
 func TestManager_InitTriggerServices_EvaluatorOnly_WithRules(t *testing.T) {
@@ -90,112 +116,91 @@ func TestManager_InitTriggerServices_EvaluatorOnly_WithRules(t *testing.T) {
 	mgr := NewManager(cfg, Options{RunTriggerEvaluator: true})
 
 	origConnector := natsConnector
-	origPub := triggerPublisherFactory
-	origEval := triggerEvaluatorFactory
+	origFactory := triggerFactoryFactory
 	defer func() {
 		natsConnector = origConnector
-		triggerPublisherFactory = origPub
-		triggerEvaluatorFactory = origEval
+		triggerFactoryFactory = origFactory
 	}()
 
 	fakeConn := &nats.Conn{}
 	natsConnector = func(string, ...nats.Option) (*nats.Conn, error) { return fakeConn, nil }
 
-	pub := &fakePublisher{}
-	triggerPublisherFactory = func(*nats.Conn) (trigger.EventPublisher, error) {
-		pub.created = true
-		return pub, nil
+	mockFactory := new(MockFactory)
+	triggerFactoryFactory = func(storage.DocumentStore, *nats.Conn, identity.AuthN) (engine.TriggerFactory, error) {
+		return mockFactory, nil
 	}
 
-	triggerEvaluatorFactory = func() (trigger.Evaluator, error) { return &fakeEvaluator{}, nil }
+	eval := &fakeEvaluator{}
+	mockFactory.On("Engine").Return(eval)
 
 	err := mgr.initTriggerServices()
 	assert.NoError(t, err)
 	assert.NotNil(t, mgr.triggerService)
-	assert.True(t, pub.created)
+	mockFactory.AssertExpectations(t)
 }
 
-func TestManager_InitTriggerServices_PublisherError(t *testing.T) {
-	cfg := config.LoadConfig()
-	mgr := NewManager(cfg, Options{RunTriggerEvaluator: true})
-
-	origConnector := natsConnector
-	origPub := triggerPublisherFactory
-	origEval := triggerEvaluatorFactory
-	defer func() {
-		natsConnector = origConnector
-		triggerPublisherFactory = origPub
-		triggerEvaluatorFactory = origEval
-	}()
-
-	natsConnector = func(string, ...nats.Option) (*nats.Conn, error) { return &nats.Conn{}, nil }
-	triggerEvaluatorFactory = func() (trigger.Evaluator, error) { return &fakeEvaluator{}, nil }
-	triggerPublisherFactory = func(*nats.Conn) (trigger.EventPublisher, error) { return nil, fmt.Errorf("pub err") }
-
-	err := mgr.initTriggerServices()
-	assert.Error(t, err)
-}
-
-func TestManager_InitTriggerServices_EvaluatorError(t *testing.T) {
-	cfg := config.LoadConfig()
-	mgr := NewManager(cfg, Options{RunTriggerEvaluator: true})
-
-	origConnector := natsConnector
-	origEval := triggerEvaluatorFactory
-	defer func() {
-		natsConnector = origConnector
-		triggerEvaluatorFactory = origEval
-	}()
-
-	natsConnector = func(string, ...nats.Option) (*nats.Conn, error) { return &nats.Conn{}, nil }
-	triggerEvaluatorFactory = func() (trigger.Evaluator, error) { return nil, fmt.Errorf("eval err") }
-
-	err := mgr.initTriggerServices()
-	assert.Error(t, err)
-}
-
-func TestManager_InitTriggerServices_NatsConnectError(t *testing.T) {
-	cfg := config.LoadConfig()
-	mgr := NewManager(cfg, Options{RunTriggerEvaluator: true, RunTriggerWorker: true})
-
-	origConnector := natsConnector
-	defer func() { natsConnector = origConnector }()
-
-	natsConnector = func(string, ...nats.Option) (*nats.Conn, error) { return nil, fmt.Errorf("connect err") }
-
-	err := mgr.initTriggerServices()
-	assert.Error(t, err)
-	assert.Nil(t, mgr.natsConn)
-}
-
-func TestManager_InitTriggerServices_WorkerInitError(t *testing.T) {
+func TestManager_InitTriggerServices_ConsumerError(t *testing.T) {
 	cfg := config.LoadConfig()
 	mgr := NewManager(cfg, Options{RunTriggerWorker: true})
 
 	origConnector := natsConnector
-	origCons := triggerConsumerFactory
+	origFactory := triggerFactoryFactory
 	defer func() {
 		natsConnector = origConnector
-		triggerConsumerFactory = origCons
+		triggerFactoryFactory = origFactory
 	}()
 
-	natsConnector = func(string, ...nats.Option) (*nats.Conn, error) { return &nats.Conn{}, nil }
+	fakeConn := &nats.Conn{}
+	natsConnector = func(string, ...nats.Option) (*nats.Conn, error) { return fakeConn, nil }
 
-	triggerConsumerFactory = func(_ *nats.Conn, _ trigger.Worker, _ int) (*trigger.Consumer, error) {
-		return nil, fmt.Errorf("cons err")
+	mockFactory := new(MockFactory)
+	triggerFactoryFactory = func(storage.DocumentStore, *nats.Conn, identity.AuthN) (engine.TriggerFactory, error) {
+		return mockFactory, nil
+	}
+
+	mockFactory.On("Consumer", cfg.Trigger.WorkerCount).Return(nil, fmt.Errorf("cons error"))
+
+	err := mgr.initTriggerServices()
+	assert.ErrorContains(t, err, "cons error")
+	mockFactory.AssertExpectations(t)
+}
+
+func TestManager_InitTriggerServices_NatsError(t *testing.T) {
+	cfg := config.LoadConfig()
+	mgr := NewManager(cfg, Options{RunTriggerEvaluator: true})
+
+	origConnector := natsConnector
+	defer func() { natsConnector = origConnector }()
+
+	natsConnector = func(string, ...nats.Option) (*nats.Conn, error) {
+		return nil, fmt.Errorf("nats error")
 	}
 
 	err := mgr.initTriggerServices()
-	assert.Error(t, err)
+	assert.ErrorContains(t, err, "nats error")
 }
+
+// Fakes
 
 type fakeEvaluator struct{}
 
-func (f *fakeEvaluator) Evaluate(context.Context, *trigger.Trigger, *storage.Event) (bool, error) {
-	return true, nil
+func (f *fakeEvaluator) LoadTriggers(triggers []*trigger.Trigger) error {
+	return nil
 }
 
-func (f *fakeEvaluator) Validate(*trigger.Trigger) error { return nil }
+func (f *fakeEvaluator) Start(ctx context.Context) error {
+	return nil
+}
+
+func (f *fakeEvaluator) Close() error {
+	return nil
+}
+
+type fakeConsumer struct{}
+
+func (f *fakeConsumer) Start(ctx context.Context) error {
+	return nil
+}
 
 type fakePublisher struct{ created bool }
 
@@ -203,3 +208,5 @@ func (f *fakePublisher) Publish(context.Context, *trigger.DeliveryTask) error {
 	f.created = true
 	return nil
 }
+
+func (f *fakePublisher) Close() {}

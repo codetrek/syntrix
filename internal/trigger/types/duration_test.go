@@ -1,4 +1,4 @@
-package trigger
+package types
 
 import (
 	"encoding/json"

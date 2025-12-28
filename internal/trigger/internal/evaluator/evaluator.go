@@ -1,4 +1,4 @@
-package trigger
+package evaluator
 
 import (
 	"context"
@@ -7,12 +7,13 @@ import (
 	"sync"
 
 	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/trigger"
 	"github.com/google/cel-go/cel"
 )
 
 // Evaluator is responsible for matching events against trigger conditions.
 type Evaluator interface {
-	Evaluate(ctx context.Context, trigger *Trigger, event *storage.Event) (bool, error)
+	Evaluate(ctx context.Context, t *trigger.Trigger, event *storage.Event) (bool, error)
 }
 
 // celeEvaluator implements Evaluator using Google CEL.
@@ -37,10 +38,10 @@ func NewEvaluator() (Evaluator, error) {
 	}, nil
 }
 
-func (e *celeEvaluator) Evaluate(ctx context.Context, trigger *Trigger, event *storage.Event) (bool, error) {
+func (e *celeEvaluator) Evaluate(ctx context.Context, t *trigger.Trigger, event *storage.Event) (bool, error) {
 	// 1. Check event type (create, update, delete)
 	eventTypeMatch := false
-	for _, evt := range trigger.Events {
+	for _, evt := range t.Events {
 		if string(event.Type) == evt {
 			eventTypeMatch = true
 			break
@@ -55,7 +56,7 @@ func (e *celeEvaluator) Evaluate(ctx context.Context, trigger *Trigger, event *s
 	// But for now assuming Document is present or we check Path/Collection from somewhere else.
 	// The storage.Event struct has Document *Document.
 	if event.Document != nil {
-		matched, err := path.Match(trigger.Collection, event.Document.Collection)
+		matched, err := path.Match(t.Collection, event.Document.Collection)
 		if err != nil {
 			return false, fmt.Errorf("invalid collection pattern: %w", err)
 		}
@@ -65,11 +66,11 @@ func (e *celeEvaluator) Evaluate(ctx context.Context, trigger *Trigger, event *s
 	}
 
 	// 3. Evaluate CEL condition
-	if trigger.Condition == "" {
+	if t.Condition == "" {
 		return true, nil
 	}
 
-	prg, err := e.getProgram(trigger.Condition)
+	prg, err := e.getProgram(t.Condition)
 	if err != nil {
 		return false, fmt.Errorf("failed to get CEL program: %w", err)
 	}

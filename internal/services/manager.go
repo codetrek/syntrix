@@ -26,8 +26,8 @@ type Options struct {
 }
 
 type triggerService interface {
-	Watch(ctx context.Context, backend storage.DocumentStore) error
-	LoadTriggers(triggers []*trigger.Trigger)
+	Start(ctx context.Context) error
+	LoadTriggers(triggers []*trigger.Trigger) error
 }
 
 type triggerConsumer interface {

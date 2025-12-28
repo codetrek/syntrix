@@ -249,13 +249,17 @@ func (e *Engine) Pull(ctx context.Context, tenant string, req storage.Replicatio
 		Filters: []model.Filter{
 			{
 				Field: "updatedAt",
-				Op:    ">",
+				Op:    ">=",
 				Value: req.Checkpoint,
 			},
 		},
 		OrderBy: []model.Order{
 			{
 				Field:     "updatedAt",
+				Direction: "asc",
+			},
+			{
+				Field:     "id",
 				Direction: "asc",
 			},
 		},
@@ -360,14 +364,14 @@ func (e *Engine) Push(ctx context.Context, tenant string, req storage.Replicatio
 						conflicts = append(conflicts, latest)
 					}
 				} else if err == model.ErrNotFound {
-					// Already deleted or not found, which is fine for delete
-					// But if we had a base version, it might be a conflict?
-					// If client wants to delete v1, but it's already deleted (v2), is it a conflict?
-					// Usually yes, but for now let's ignore if not found.
-					// Actually, if ErrNotFound is returned by Delete with filters, it means conflict or not found.
-					// If we want to be strict, we should return conflict.
-					// But if it's already deleted, maybe we don't care.
-					// Let's assume if it's not found, it's fine.
+					// Check if it exists (conflict) or really not found (success)
+					latest, getErr := e.storage.Get(ctx, tenant, doc.Fullpath)
+					if getErr == nil && latest != nil {
+						// It exists, so it was a version mismatch (conflict)
+						conflicts = append(conflicts, latest)
+					} else {
+						// Really not found, treat as success (idempotent delete)
+					}
 				} else {
 					return nil, err
 				}

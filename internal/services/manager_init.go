@@ -16,15 +16,16 @@ import (
 	"github.com/codetrek/syntrix/internal/query"
 	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/internal/trigger"
+	"github.com/codetrek/syntrix/internal/trigger/engine"
 
 	"github.com/nats-io/nats.go"
 )
 
 // natsConnector allows test injection to avoid real network.
 var natsConnector = nats.Connect
-var triggerPublisherFactory = trigger.NewEventPublisher
-var triggerConsumerFactory = trigger.NewConsumer
-var triggerEvaluatorFactory = trigger.NewEvaluator
+var triggerFactoryFactory = func(store storage.DocumentStore, nats *nats.Conn, auth identity.AuthN) (engine.TriggerFactory, error) {
+	return engine.NewFactory(store, nats, auth, engine.WithStartFromNow(true))
+}
 var storageFactoryFactory = func(ctx context.Context, cfg *config.Config) (storage.StorageFactory, error) {
 	return storage.NewFactory(ctx, cfg)
 }
@@ -179,18 +180,13 @@ func (m *Manager) initTriggerServices() error {
 	}
 	m.natsConn = nc
 
+	factory, err := triggerFactoryFactory(m.docStore, nc, m.authService)
+	if err != nil {
+		return fmt.Errorf("failed to create trigger factory: %w", err)
+	}
+
 	if m.opts.RunTriggerEvaluator {
-		evaluator, err := triggerEvaluatorFactory()
-		if err != nil {
-			return fmt.Errorf("failed to create CEL evaluator: %w", err)
-		}
-
-		publisher, err := triggerPublisherFactory(nc)
-		if err != nil {
-			return fmt.Errorf("failed to create NATS publisher: %w", err)
-		}
-
-		m.triggerService = trigger.NewTriggerService(evaluator, publisher)
+		m.triggerService = factory.Engine()
 
 		rulesFile := m.cfg.Trigger.RulesFile
 		if rulesFile != "" {
@@ -198,7 +194,9 @@ func (m *Manager) initTriggerServices() error {
 			if err != nil {
 				log.Printf("[Warning] Failed to load trigger rules from %s: %v", rulesFile, err)
 			} else {
-				m.triggerService.LoadTriggers(triggers)
+				if err := m.triggerService.LoadTriggers(triggers); err != nil {
+					return fmt.Errorf("failed to load triggers: %w", err)
+				}
 				log.Printf("Loaded %d triggers from %s", len(triggers), rulesFile)
 			}
 		}
@@ -207,11 +205,11 @@ func (m *Manager) initTriggerServices() error {
 	}
 
 	if m.opts.RunTriggerWorker {
-		worker := trigger.NewDeliveryWorker(m.authService)
-		m.triggerConsumer, err = triggerConsumerFactory(nc, worker, m.cfg.Trigger.WorkerCount)
+		cons, err := factory.Consumer(m.cfg.Trigger.WorkerCount)
 		if err != nil {
 			return fmt.Errorf("failed to create trigger consumer: %w", err)
 		}
+		m.triggerConsumer = cons
 
 		log.Println("Initialized Trigger Worker Service")
 	}
