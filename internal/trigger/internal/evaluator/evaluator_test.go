@@ -2,6 +2,7 @@ package evaluator
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/codetrek/syntrix/internal/storage"
@@ -207,4 +208,161 @@ func TestCELEvaluator(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCELEvaluator_CacheEviction(t *testing.T) {
+	// Test cache eviction by filling the cache to its limit
+	// Note: MaxCacheSize is 1000, so we'll test the eviction logic differently
+	evaluator, err := NewEvaluator()
+	require.NoError(t, err)
+
+	celEval := evaluator.(*celeEvaluator)
+
+	// Directly populate the cache to near capacity
+	// We'll manually add entries to test eviction behavior
+	celEval.cacheMutex.Lock()
+	for i := 0; i < MaxCacheSize-1; i++ {
+		cond := fmt.Sprintf("event.document.field%d == %d", i, i)
+		celEval.prgCache[cond] = nil // placeholder, not a real program
+		celEval.cacheOrder = append(celEval.cacheOrder, cond)
+	}
+	celEval.cacheMutex.Unlock()
+
+	// Now add one more via Evaluate to trigger eviction check
+	event := &storage.Event{
+		Type: storage.EventCreate,
+		Document: &storage.Document{
+			Collection: "test",
+			Data:       map[string]interface{}{"newfield": 1},
+		},
+	}
+
+	trig := &trigger.Trigger{
+		Events:     []string{"create"},
+		Collection: "test",
+		Condition:  "event.document.newfield == 1",
+	}
+
+	_, err = evaluator.Evaluate(context.Background(), trig, event)
+	assert.NoError(t, err)
+
+	// Cache should be at max capacity
+	assert.Equal(t, MaxCacheSize, len(celEval.prgCache))
+
+	// Add another one to trigger eviction
+	trig2 := &trigger.Trigger{
+		Events:     []string{"create"},
+		Collection: "test",
+		Condition:  "event.document.newfield == 2",
+	}
+	_, err = evaluator.Evaluate(context.Background(), trig2, event)
+	assert.NoError(t, err)
+
+	// Cache should still be at max capacity after eviction
+	assert.Equal(t, MaxCacheSize, len(celEval.prgCache))
+
+	// The oldest entry should be evicted
+	_, exists := celEval.prgCache["event.document.field0 == 0"]
+	assert.False(t, exists, "Oldest condition should be evicted")
+}
+
+func TestCELEvaluator_DeleteEventWithBeforeOnly(t *testing.T) {
+	evaluator, err := NewEvaluator()
+	require.NoError(t, err)
+
+	trig := &trigger.Trigger{
+		Events:     []string{"delete"},
+		Collection: "users",
+		Condition:  "true",
+	}
+
+	event := &storage.Event{
+		Type:     storage.EventDelete,
+		Document: nil,
+		Before: &storage.Document{
+			Collection: "users",
+			Data:       map[string]interface{}{"name": "deleted-user"},
+		},
+	}
+
+	match, err := evaluator.Evaluate(context.Background(), trig, event)
+	assert.NoError(t, err)
+	assert.True(t, match)
+}
+
+func TestCELEvaluator_CollectionMismatchWithBeforeOnly(t *testing.T) {
+	evaluator, err := NewEvaluator()
+	require.NoError(t, err)
+
+	trig := &trigger.Trigger{
+		Events:     []string{"delete"},
+		Collection: "orders",
+		Condition:  "true",
+	}
+
+	event := &storage.Event{
+		Type:     storage.EventDelete,
+		Document: nil,
+		Before: &storage.Document{
+			Collection: "users",
+			Data:       map[string]interface{}{"name": "deleted-user"},
+		},
+	}
+
+	match, err := evaluator.Evaluate(context.Background(), trig, event)
+	assert.NoError(t, err)
+	assert.False(t, match)
+}
+
+func TestCELEvaluator_CELNonBoolReturn(t *testing.T) {
+	evaluator, err := NewEvaluator()
+	require.NoError(t, err)
+
+	// CEL that returns non-boolean
+	trig := &trigger.Trigger{
+		Events:     []string{"create"},
+		Collection: "users",
+		Condition:  "event.document.name", // Returns string, not bool
+	}
+
+	event := &storage.Event{
+		Type: storage.EventCreate,
+		Document: &storage.Document{
+			Collection: "users",
+			Data:       map[string]interface{}{"name": "test"},
+		},
+	}
+
+	_, err = evaluator.Evaluate(context.Background(), trig, event)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "must return boolean")
+}
+
+func TestCELEvaluator_CacheHit(t *testing.T) {
+	evaluator, err := NewEvaluator()
+	require.NoError(t, err)
+
+	trig := &trigger.Trigger{
+		Events:     []string{"create"},
+		Collection: "users",
+		Condition:  "event.document.age > 18",
+	}
+
+	event := &storage.Event{
+		Type: storage.EventCreate,
+		Document: &storage.Document{
+			Collection: "users",
+			Data:       map[string]interface{}{"age": 25},
+		},
+	}
+
+	// First call - cache miss
+	match1, err := evaluator.Evaluate(context.Background(), trig, event)
+	assert.NoError(t, err)
+	assert.True(t, match1)
+
+	// Second call - cache hit
+	match2, err := evaluator.Evaluate(context.Background(), trig, event)
+	assert.NoError(t, err)
+	assert.True(t, match2)
 }

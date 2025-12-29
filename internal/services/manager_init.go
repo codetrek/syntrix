@@ -186,7 +186,11 @@ func (m *Manager) initTriggerServices() error {
 	}
 
 	if m.opts.RunTriggerEvaluator {
-		m.triggerService = factory.Engine()
+		engine, err := factory.Engine()
+		if err != nil {
+			return fmt.Errorf("failed to create trigger engine: %w", err)
+		}
+		m.triggerService = engine
 
 		rulesFile := m.cfg.Trigger.RulesFile
 		if rulesFile != "" {

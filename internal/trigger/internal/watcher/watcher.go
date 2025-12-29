@@ -79,3 +79,9 @@ func (w *defaultWatcher) SaveCheckpoint(ctx context.Context, token interface{}) 
 	}
 	return nil
 }
+
+// Close releases resources held by the watcher.
+// The watcher does not own the store, so this is a no-op.
+func (w *defaultWatcher) Close() error {
+	return nil
+}

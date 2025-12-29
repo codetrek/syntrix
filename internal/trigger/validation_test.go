@@ -129,6 +129,39 @@ func TestValidateTrigger(t *testing.T) {
 			},
 			wantErr: "url is required",
 		},
+		{
+			name: "invalid url scheme",
+			trigger: &Trigger{
+				ID:         "valid-id",
+				Tenant:     "valid-tenant",
+				Collection: "users",
+				Events:     []string{"create"},
+				URL:        "ftp://example.com",
+			},
+			wantErr: "url must use http or https scheme",
+		},
+		{
+			name: "url without host",
+			trigger: &Trigger{
+				ID:         "valid-id",
+				Tenant:     "valid-tenant",
+				Collection: "users",
+				Events:     []string{"create"},
+				URL:        "http://",
+			},
+			wantErr: "url must have a host",
+		},
+		{
+			name: "valid https url",
+			trigger: &Trigger{
+				ID:         "valid-id",
+				Tenant:     "valid-tenant",
+				Collection: "users",
+				Events:     []string{"create"},
+				URL:        "https://example.com/webhook",
+			},
+			wantErr: "",
+		},
 	}
 
 	for _, tt := range tests {

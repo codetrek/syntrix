@@ -3,6 +3,7 @@ package trigger
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 )
 
@@ -51,6 +52,18 @@ func ValidateTrigger(t *Trigger) error {
 
 	if t.URL == "" {
 		return errors.New("url is required")
+	}
+
+	// Validate URL format
+	parsedURL, err := url.Parse(t.URL)
+	if err != nil {
+		return fmt.Errorf("invalid url: %w", err)
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return fmt.Errorf("url must use http or https scheme: %s", t.URL)
+	}
+	if parsedURL.Host == "" {
+		return fmt.Errorf("url must have a host: %s", t.URL)
 	}
 
 	return nil

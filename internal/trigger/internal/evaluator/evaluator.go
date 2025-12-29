@@ -3,6 +3,7 @@ package evaluator
 import (
 	"context"
 	"fmt"
+	"log"
 	"path"
 	"sync"
 
@@ -13,6 +14,9 @@ import (
 
 var celNewEnv = cel.NewEnv
 
+// MaxCacheSize is the maximum number of CEL programs to cache.
+const MaxCacheSize = 1000
+
 // Evaluator is responsible for matching events against trigger conditions.
 type Evaluator interface {
 	Evaluate(ctx context.Context, t *trigger.Trigger, event *storage.Event) (bool, error)
@@ -22,6 +26,7 @@ type Evaluator interface {
 type celeEvaluator struct {
 	env        *cel.Env
 	prgCache   map[string]cel.Program
+	cacheOrder []string // Track insertion order for simple FIFO eviction
 	cacheMutex sync.RWMutex
 }
 
@@ -35,8 +40,9 @@ func NewEvaluator() (Evaluator, error) {
 	}
 
 	return &celeEvaluator{
-		env:      env,
-		prgCache: make(map[string]cel.Program),
+		env:        env,
+		prgCache:   make(map[string]cel.Program),
+		cacheOrder: make([]string, 0, MaxCacheSize),
 	}, nil
 }
 
@@ -54,11 +60,16 @@ func (e *celeEvaluator) Evaluate(ctx context.Context, t *trigger.Trigger, event 
 	}
 
 	// 2. Check collection
-	// Handle case where event.Document might be nil (e.g. delete event might only have ID/Path)
-	// But for now assuming Document is present or we check Path/Collection from somewhere else.
-	// The storage.Event struct has Document *Document.
+	// Handle case where event.Document might be nil (e.g. delete event might only have Before)
+	var collectionToMatch string
 	if event.Document != nil {
-		matched, err := path.Match(t.Collection, event.Document.Collection)
+		collectionToMatch = event.Document.Collection
+	} else if event.Before != nil {
+		collectionToMatch = event.Before.Collection
+	}
+
+	if collectionToMatch != "" {
+		matched, err := path.Match(t.Collection, collectionToMatch)
 		if err != nil {
 			return false, fmt.Errorf("invalid collection pattern: %w", err)
 		}
@@ -156,6 +167,15 @@ func (e *celeEvaluator) getProgram(condition string) (cel.Program, error) {
 		return nil, err
 	}
 
+	// Evict oldest entry if cache is full (simple FIFO)
+	if len(e.prgCache) >= MaxCacheSize {
+		oldest := e.cacheOrder[0]
+		delete(e.prgCache, oldest)
+		e.cacheOrder = e.cacheOrder[1:]
+		log.Printf("[Info] CEL cache full, evicted oldest entry")
+	}
+
 	e.prgCache[condition] = prg
+	e.cacheOrder = append(e.cacheOrder, condition)
 	return prg, nil
 }
