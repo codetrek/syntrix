@@ -421,6 +421,6 @@ func (s *stubAuthN) ListUsers(ctx context.Context, limit int, offset int) ([]*st
 func (s *stubAuthN) UpdateUser(ctx context.Context, id string, roles []string, disabled bool) error {
 	return nil
 }
-func (s *stubAuthN) Logout(ctx context.Context, refreshToken string) error { return nil }
-func (s *stubAuthN) GenerateSystemToken(serviceName string) (string, error) { return "", nil }
+func (s *stubAuthN) Logout(ctx context.Context, refreshToken string) error      { return nil }
+func (s *stubAuthN) GenerateSystemToken(serviceName string) (string, error)     { return "", nil }
 func (s *stubAuthN) ValidateToken(tokenString string) (*identity.Claims, error) { return nil, nil }

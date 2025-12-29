@@ -27,7 +27,7 @@ func NewDocumentProvider(ctx context.Context, uri string, dbName string, dataCol
 	}
 
 	db := client.Database(dbName)
-	
+
 	// We use the concrete type to call EnsureIndexes
 	dStore := &documentStore{
 		client:              client,
@@ -36,12 +36,12 @@ func NewDocumentProvider(ctx context.Context, uri string, dbName string, dataCol
 		sysCollection:       sysColl,
 		softDeleteRetention: softDeleteRetention,
 	}
-	
+
 	if err := dStore.EnsureIndexes(ctx); err != nil {
 		client.Disconnect(ctx)
 		return nil, err
 	}
-	
+
 	return &documentProvider{store: dStore}, nil
 }
 

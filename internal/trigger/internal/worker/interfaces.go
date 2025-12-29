@@ -10,6 +10,7 @@ import (
 type SecretProvider interface {
 	GetSecret(ctx context.Context, ref string) (string, error)
 }
+
 // DeliveryWorker processes delivery tasks by making HTTP requests.
 type DeliveryWorker interface {
 	// ProcessTask executes the delivery task.

@@ -115,8 +115,8 @@ func TestNewFactory_TenantConfig(t *testing.T) {
 				"tenant1": {Type: "mongo", Mongo: config.MongoConfig{URI: "mongodb://t1", DatabaseName: "db2"}},
 			},
 			Topology: config.TopologyConfig{
-				Document: config.DocumentTopology{BaseTopology: config.BaseTopology{Strategy: "single", Primary: "primary"}},
-				User:     config.CollectionTopology{BaseTopology: config.BaseTopology{Strategy: "single", Primary: "primary"}},
+				Document:   config.DocumentTopology{BaseTopology: config.BaseTopology{Strategy: "single", Primary: "primary"}},
+				User:       config.CollectionTopology{BaseTopology: config.BaseTopology{Strategy: "single", Primary: "primary"}},
 				Revocation: config.CollectionTopology{BaseTopology: config.BaseTopology{Strategy: "single", Primary: "primary"}},
 			},
 			Tenants: map[string]config.TenantConfig{
@@ -175,11 +175,11 @@ func TestNewFactory_ReadWriteSplit(t *testing.T) {
 		Storage: config.StorageConfig{
 			Backends: map[string]config.BackendConfig{
 				"primary": {
-					Type: "mongo",
+					Type:  "mongo",
 					Mongo: config.MongoConfig{URI: "mongodb://primary", DatabaseName: "db"},
 				},
 				"replica": {
-					Type: "mongo",
+					Type:  "mongo",
 					Mongo: config.MongoConfig{URI: "mongodb://replica", DatabaseName: "db"},
 				},
 			},
@@ -443,8 +443,8 @@ func TestNewFactory_DefaultTenantSkipped(t *testing.T) {
 				"primary": {Type: "mongo", Mongo: config.MongoConfig{URI: "mongodb://p", DatabaseName: "db1"}},
 			},
 			Topology: config.TopologyConfig{
-				Document: config.DocumentTopology{BaseTopology: config.BaseTopology{Strategy: "single", Primary: "primary"}},
-				User:     config.CollectionTopology{BaseTopology: config.BaseTopology{Strategy: "single", Primary: "primary"}},
+				Document:   config.DocumentTopology{BaseTopology: config.BaseTopology{Strategy: "single", Primary: "primary"}},
+				User:       config.CollectionTopology{BaseTopology: config.BaseTopology{Strategy: "single", Primary: "primary"}},
 				Revocation: config.CollectionTopology{BaseTopology: config.BaseTopology{Strategy: "single", Primary: "primary"}},
 			},
 			Tenants: map[string]config.TenantConfig{

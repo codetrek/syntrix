@@ -449,7 +449,7 @@ func TestMiddleware_TableDriven(t *testing.T) {
 
 func TestListUsers_TableDriven(t *testing.T) {
 	cfg := config.AuthNConfig{
-		PrivateKeyFile:  getTestKeyPath(t),
+		PrivateKeyFile: getTestKeyPath(t),
 	}
 
 	tests := []struct {
@@ -493,7 +493,7 @@ func TestListUsers_TableDriven(t *testing.T) {
 
 func TestUpdateUser_TableDriven(t *testing.T) {
 	cfg := config.AuthNConfig{
-		PrivateKeyFile:  getTestKeyPath(t),
+		PrivateKeyFile: getTestKeyPath(t),
 	}
 
 	tests := []struct {
