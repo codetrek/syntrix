@@ -18,3 +18,5 @@ Index of task planning documents for Syntrix.
 - [008.2025-12-27-sdk-auth-realtime-review.md](008.2025-12-27-sdk-auth-realtime-review.md) — SDK WS/SSE Auth + Multi-Tenant Review. Status: In Progress.
 - [009.2025-12-27-unit-test-optimization.md](009.2025-12-27-unit-test-optimization.md) — Unit Test Suite Optimization. Status: Completed.
 - [010.2025-12-28-trigger-engine-refactor.md](010.2025-12-28-trigger-engine-refactor.md) — Trigger Engine Refactor & Factory Wiring. Status: Planned.
+- [011.2025-12-29-consumer-graceful-shutdown.md](011.2025-12-29-consumer-graceful-shutdown.md) — Consumer Graceful Shutdown. Status: Complete.
+- [012.2025-12-29-rest-api-hardening.md](012.2025-12-29-rest-api-hardening.md) — REST API Security Hardening & Code Quality. Status: In Progress.

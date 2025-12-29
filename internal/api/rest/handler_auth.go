@@ -12,64 +12,69 @@ import (
 func (h *Handler) handleSignUp(w http.ResponseWriter, r *http.Request) {
 	var req identity.SignupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid request body")
 		return
 	}
 
 	tokenPair, err := h.auth.SignUp(r.Context(), req)
 	if err != nil {
 		if errors.Is(err, identity.ErrTenantRequired) {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Tenant is required")
 			return
 		}
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Signup failed")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(tokenPair)
+	writeJSON(w, http.StatusOK, tokenPair)
 }
 
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req identity.LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid request body")
 		return
 	}
 
 	tokenPair, err := h.auth.SignIn(r.Context(), req)
 	if err != nil {
-		if errors.Is(err, identity.ErrInvalidCredentials) || errors.Is(err, identity.ErrAccountDisabled) || errors.Is(err, identity.ErrAccountLocked) {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
+		if errors.Is(err, identity.ErrInvalidCredentials) {
+			writeError(w, http.StatusUnauthorized, ErrCodeUnauthorized, "Invalid credentials")
+			return
+		}
+		if errors.Is(err, identity.ErrAccountDisabled) {
+			writeError(w, http.StatusUnauthorized, ErrCodeUnauthorized, "Account is disabled")
+			return
+		}
+		if errors.Is(err, identity.ErrAccountLocked) {
+			writeError(w, http.StatusUnauthorized, ErrCodeUnauthorized, "Account is locked")
 			return
 		}
 		if errors.Is(err, identity.ErrTenantRequired) {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Tenant is required")
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "Login failed")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(tokenPair)
+	writeJSON(w, http.StatusOK, tokenPair)
 }
 
 func (h *Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	var req identity.RefreshRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid request body")
 		return
 	}
 
 	tokenPair, err := h.auth.Refresh(r.Context(), req)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, ErrCodeUnauthorized, "Invalid or expired refresh token")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(tokenPair)
+	writeJSON(w, http.StatusOK, tokenPair)
 }
 
 func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -89,12 +94,12 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if refreshToken == "" {
-		http.Error(w, "Missing refresh token", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Missing refresh token")
 		return
 	}
 
 	if err := h.auth.Logout(r.Context(), refreshToken); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "Logout failed")
 		return
 	}
 

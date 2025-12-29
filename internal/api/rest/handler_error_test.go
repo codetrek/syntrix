@@ -30,7 +30,7 @@ func TestAuthHandlerErrors(t *testing.T) {
 		server.handleSignUp(w, req)
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
-		assert.Contains(t, w.Body.String(), identity.ErrTenantRequired.Error())
+		assert.Contains(t, w.Body.String(), "Tenant is required")
 	})
 
 	t.Run("Login_AccountLocked", func(t *testing.T) {
@@ -44,7 +44,7 @@ func TestAuthHandlerErrors(t *testing.T) {
 		server.handleLogin(w, req)
 
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
-		assert.Contains(t, w.Body.String(), identity.ErrAccountLocked.Error())
+		assert.Contains(t, w.Body.String(), "Account is locked")
 	})
 
 	t.Run("Login_TenantRequired", func(t *testing.T) {
@@ -287,7 +287,7 @@ func TestDocumentHandlerErrors(t *testing.T) {
 		server.ServeHTTP(rr, req)
 
 		assert.Equal(t, http.StatusInternalServerError, rr.Code)
-		assert.Contains(t, rr.Body.String(), "db error")
+		assert.Contains(t, rr.Body.String(), "Internal server error")
 	})
 
 	t.Run("ReplaceDocument_InternalError", func(t *testing.T) {
@@ -302,7 +302,7 @@ func TestDocumentHandlerErrors(t *testing.T) {
 		server.ServeHTTP(rr, req)
 
 		assert.Equal(t, http.StatusInternalServerError, rr.Code)
-		assert.Contains(t, rr.Body.String(), "db error")
+		assert.Contains(t, rr.Body.String(), "Internal server error")
 	})
 
 	t.Run("DeleteDocument_InvalidBody", func(t *testing.T) {
@@ -375,5 +375,5 @@ func TestDocumentHandler_TenantError(t *testing.T) {
 
 	// Should fail with 401 Unauthorized because tenant is missing
 	assert.Equal(t, http.StatusUnauthorized, rr.Code)
-	assert.Contains(t, rr.Body.String(), "tenant is required")
+	assert.Contains(t, rr.Body.String(), "Tenant identification required")
 }

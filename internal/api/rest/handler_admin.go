@@ -27,7 +27,7 @@ func (h *Handler) handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
 
 	users, err := h.auth.ListUsers(r.Context(), limit, offset)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "Failed to list users")
 		return
 	}
 
@@ -37,8 +37,7 @@ func (h *Handler) handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
 		u.PasswordAlgo = ""
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(users)
+	writeJSON(w, http.StatusOK, users)
 }
 
 type UpdateUserRequest struct {
@@ -49,18 +48,18 @@ type UpdateUserRequest struct {
 func (h *Handler) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
-		http.Error(w, "Missing user ID", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Missing user ID")
 		return
 	}
 
 	var req UpdateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid request body")
 		return
 	}
 
 	if err := h.auth.UpdateUser(r.Context(), id, req.Roles, req.Disabled); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "Failed to update user")
 		return
 	}
 
@@ -69,19 +68,18 @@ func (h *Handler) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) 
 
 func (h *Handler) handleAdminGetRules(w http.ResponseWriter, r *http.Request) {
 	rules := h.authz.GetRules()
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(rules)
+	writeJSON(w, http.StatusOK, rules)
 }
 
 func (h *Handler) handleAdminPushRules(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "Failed to read body", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Failed to read request body")
 		return
 	}
 
 	if err := h.authz.UpdateRules(body); err != nil {
-		http.Error(w, "Invalid rules: "+err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid rules format")
 		return
 	}
 

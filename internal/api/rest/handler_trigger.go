@@ -2,7 +2,6 @@ package rest
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 
@@ -31,13 +30,21 @@ type TriggerWriteRequest struct {
 func (h *Handler) handleTriggerGet(w http.ResponseWriter, r *http.Request) {
 	var req TriggerGetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid request body")
 		return
 	}
 
 	if len(req.Paths) == 0 {
-		http.Error(w, "paths cannot be empty", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "paths cannot be empty")
 		return
+	}
+
+	// Validate all paths before processing
+	for _, path := range req.Paths {
+		if err := validateDocumentPath(path); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "invalid path: "+path)
+			return
+		}
 	}
 
 	tenantID, ok := h.tenantOrError(w, r)
@@ -50,29 +57,36 @@ func (h *Handler) handleTriggerGet(w http.ResponseWriter, r *http.Request) {
 		doc, err := h.engine.GetDocument(r.Context(), tenantID, path)
 		if err != nil {
 			if err == model.ErrNotFound {
-				continue // Skip not found documents? Or return null? Docs say "documents" list, implying found ones.
+				continue // Skip not found documents
 			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "Failed to retrieve document")
 			return
 		}
 		docs = append(docs, doc)
 	}
 
 	resp := TriggerGetResponse{Documents: docs}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) handleTriggerWrite(w http.ResponseWriter, r *http.Request) {
 	var req TriggerWriteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid request body")
 		return
 	}
 
 	if len(req.Writes) == 0 {
-		http.Error(w, "writes cannot be empty", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "writes cannot be empty")
 		return
+	}
+
+	// Validate all paths before processing
+	for _, op := range req.Writes {
+		if err := validateDocumentPath(op.Path); err != nil {
+			writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "invalid path: "+op.Path)
+			return
+		}
 	}
 
 	tenantID, ok := h.tenantOrError(w, r)
@@ -83,7 +97,7 @@ func (h *Handler) handleTriggerWrite(w http.ResponseWriter, r *http.Request) {
 	for _, op := range req.Writes {
 		collection, id, err := splitPath(op.Path)
 		if err != nil {
-			http.Error(w, "invalid path", http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "invalid path")
 			return
 		}
 
@@ -115,12 +129,12 @@ func (h *Handler) handleTriggerWrite(w http.ResponseWriter, r *http.Request) {
 		case "delete":
 			err = h.engine.DeleteDocument(r.Context(), tenantID, op.Path, op.IfMatch)
 		default:
-			http.Error(w, "invalid write type", http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "invalid write type")
 			return
 		}
 
 		if err != nil {
-			http.Error(w, err.Error(), mapStorageError(err))
+			writeStorageError(w, err)
 			return
 		}
 	}
@@ -131,25 +145,20 @@ func (h *Handler) handleTriggerWrite(w http.ResponseWriter, r *http.Request) {
 func splitPath(path string) (string, string, error) {
 	parts := strings.Split(path, "/")
 	if len(parts) < 2 {
-		return "", "", errors.New("invalid path")
+		return "", "", errInvalidPath
 	}
 	collection := strings.Join(parts[:len(parts)-1], "/")
 	id := parts[len(parts)-1]
 	if collection == "" || id == "" {
-		return "", "", errors.New("invalid path")
+		return "", "", errInvalidPath
 	}
 	return collection, id, nil
 }
 
-func mapStorageError(err error) int {
-	switch {
-	case errors.Is(err, model.ErrNotFound):
-		return http.StatusNotFound
-	case errors.Is(err, model.ErrExists):
-		return http.StatusConflict
-	case errors.Is(err, model.ErrPreconditionFailed):
-		return http.StatusConflict
-	default:
-		return http.StatusInternalServerError
-	}
-}
+// errInvalidPath is returned when a path cannot be split into collection and document ID
+var errInvalidPath = stringError("invalid path")
+
+// stringError is a simple error type for static error messages
+type stringError string
+
+func (e stringError) Error() string { return string(e) }

@@ -163,7 +163,7 @@ func TestHandleTriggerWrite_UpdateError(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Equal(t, http.StatusPreconditionFailed, w.Code)
 	mockEngine.AssertExpectations(t)
 }
 

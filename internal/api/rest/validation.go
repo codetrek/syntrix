@@ -10,6 +10,44 @@ import (
 	"github.com/codetrek/syntrix/pkg/model"
 )
 
+// ValidationConfig holds configurable limits for validation
+type ValidationConfig struct {
+	MaxQueryLimit       int // Maximum allowed limit for queries (default: 1000)
+	MaxReplicationLimit int // Maximum allowed limit for replication (default: 1000)
+	MaxPathLength       int // Maximum allowed path length (default: 1024)
+	MaxIDLength         int // Maximum allowed document ID length (default: 64)
+}
+
+// DefaultValidationConfig returns the default validation configuration
+func DefaultValidationConfig() ValidationConfig {
+	return ValidationConfig{
+		MaxQueryLimit:       1000,
+		MaxReplicationLimit: 1000,
+		MaxPathLength:       1024,
+		MaxIDLength:         64,
+	}
+}
+
+// validationConfig is the package-level configuration used by validation functions
+var validationConfig = DefaultValidationConfig()
+
+// SetValidationConfig updates the validation configuration
+func SetValidationConfig(cfg ValidationConfig) {
+	if cfg.MaxQueryLimit <= 0 {
+		cfg.MaxQueryLimit = DefaultValidationConfig().MaxQueryLimit
+	}
+	if cfg.MaxReplicationLimit <= 0 {
+		cfg.MaxReplicationLimit = DefaultValidationConfig().MaxReplicationLimit
+	}
+	if cfg.MaxPathLength <= 0 {
+		cfg.MaxPathLength = DefaultValidationConfig().MaxPathLength
+	}
+	if cfg.MaxIDLength <= 0 {
+		cfg.MaxIDLength = DefaultValidationConfig().MaxIDLength
+	}
+	validationConfig = cfg
+}
+
 var (
 	pathRegex = regexp.MustCompile(`^[a-zA-Z0-9_\-\./]+$`)
 	idRegex   = regexp.MustCompile(`^[a-zA-Z0-9_\-\.]{1,64}$`)
@@ -18,6 +56,10 @@ var (
 func validatePathSyntax(path string) error {
 	if path == "" {
 		return errors.New("path cannot be empty")
+	}
+
+	if len(path) > validationConfig.MaxPathLength {
+		return fmt.Errorf("path length cannot exceed %d characters", validationConfig.MaxPathLength)
 	}
 
 	if !pathRegex.MatchString(path) {
@@ -81,8 +123,8 @@ func validateQuery(q model.Query) error {
 	if q.Limit < 0 {
 		return errors.New("limit cannot be negative")
 	}
-	if q.Limit > 1000 {
-		return errors.New("limit cannot exceed 1000")
+	if q.Limit > validationConfig.MaxQueryLimit {
+		return fmt.Errorf("limit cannot exceed %d", validationConfig.MaxQueryLimit)
 	}
 	for _, f := range q.Filters {
 		if f.Field == "" {
@@ -116,8 +158,8 @@ func validateReplicationPull(req storage.ReplicationPullRequest) error {
 	if req.Limit < 0 {
 		return errors.New("limit cannot be negative")
 	}
-	if req.Limit > 1000 {
-		return errors.New("limit cannot exceed 1000")
+	if req.Limit > validationConfig.MaxReplicationLimit {
+		return fmt.Errorf("limit cannot exceed %d", validationConfig.MaxReplicationLimit)
 	}
 	return nil
 }

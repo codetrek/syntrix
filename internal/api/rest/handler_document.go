@@ -9,11 +9,42 @@ import (
 	"github.com/codetrek/syntrix/pkg/model"
 )
 
+// decodeBody decodes request body into dst, using cached body from context if available.
+// This avoids double JSON parsing when authorized middleware has already parsed the body.
+func decodeBody[T any](r *http.Request, dst *T) error {
+	if cached := getParsedBody(r.Context()); cached != nil {
+		// Re-marshal and unmarshal to properly convert to the target type
+		// This is still more efficient than parsing from stream twice
+		bytes, err := json.Marshal(cached)
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal(bytes, dst)
+	}
+	// Fallback to decoding from body stream
+	return json.NewDecoder(r.Body).Decode(dst)
+}
+
+// decodeBodyAsDocument decodes request body directly into model.Document.
+// Optimized path that avoids re-marshaling when cached body is available.
+func decodeBodyAsDocument(r *http.Request) (model.Document, error) {
+	if cached := getParsedBody(r.Context()); cached != nil {
+		// Direct conversion - most efficient path
+		return model.Document(cached), nil
+	}
+	// Fallback to decoding from body stream
+	var data model.Document
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
 func (h *Handler) handleGetDocument(w http.ResponseWriter, r *http.Request) {
 	path := r.PathValue("path")
 
 	if err := validateDocumentPath(path); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid document path")
 		return
 	}
 
@@ -24,34 +55,29 @@ func (h *Handler) handleGetDocument(w http.ResponseWriter, r *http.Request) {
 
 	doc, err := h.engine.GetDocument(r.Context(), tenant, path)
 	if err != nil {
-		if errors.Is(err, model.ErrNotFound) {
-			http.Error(w, "Document not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeStorageError(w, err)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(doc)
+	writeJSON(w, http.StatusOK, doc)
 }
 
 func (h *Handler) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
 	collection := r.PathValue("path")
 
 	if err := validateCollection(collection); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid collection path")
 		return
 	}
 
-	var data model.Document
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	data, err := decodeBodyAsDocument(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid request body")
 		return
 	}
 
 	if err := data.ValidateDocument(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid document data")
 		return
 	}
 
@@ -67,23 +93,17 @@ func (h *Handler) handleCreateDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.engine.CreateDocument(r.Context(), tenant, data); err != nil {
-		if errors.Is(err, model.ErrExists) {
-			http.Error(w, "Document already exists", http.StatusConflict)
-		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
+		writeStorageError(w, err)
 		return
 	}
 
 	doc, err := h.engine.GetDocument(r.Context(), tenant, path)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, ErrCodeInternalError, "Failed to retrieve created document")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(doc)
+	writeJSON(w, http.StatusCreated, doc)
 }
 
 func (h *Handler) handleReplaceDocument(w http.ResponseWriter, r *http.Request) {
@@ -91,29 +111,29 @@ func (h *Handler) handleReplaceDocument(w http.ResponseWriter, r *http.Request) 
 
 	collection, docID, err := validateAndExplodeFullpath(path)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid document path")
 		return
 	}
 	if docID == "" {
-		http.Error(w, "Invalid document path: missing document ID", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid document path: missing document ID")
 		return
 	}
 
 	var data UpdateDocumentRequest
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := decodeBody(r, &data); err != nil {
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid request body")
 		return
 	}
 
 	if err := data.Doc.ValidateDocument(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid document data")
 		return
 	}
 
 	data.Doc.StripProtectedFields()
 
 	if id := data.Doc.GetID(); id != "" && id != docID {
-		http.Error(w, "Document ID cannot be changed", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Document ID cannot be changed")
 		return
 	}
 
@@ -127,16 +147,11 @@ func (h *Handler) handleReplaceDocument(w http.ResponseWriter, r *http.Request) 
 
 	doc, err := h.engine.ReplaceDocument(r.Context(), tenant, data.Doc, data.IfMatch)
 	if err != nil {
-		if errors.Is(err, model.ErrPreconditionFailed) {
-			http.Error(w, "Version conflict", http.StatusPreconditionFailed)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeStorageError(w, err)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(doc)
+	writeJSON(w, http.StatusOK, doc)
 }
 
 func (h *Handler) handlePatchDocument(w http.ResponseWriter, r *http.Request) {
@@ -144,34 +159,34 @@ func (h *Handler) handlePatchDocument(w http.ResponseWriter, r *http.Request) {
 
 	collection, docID, err := validateAndExplodeFullpath(path)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid document path")
 		return
 	}
 	if docID == "" {
-		http.Error(w, "Invalid document path: missing document ID", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid document path: missing document ID")
 		return
 	}
 
 	var data UpdateDocumentRequest
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := decodeBody(r, &data); err != nil {
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid request body")
 		return
 	}
 
 	if err := data.Doc.ValidateDocument(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid document data")
 		return
 	}
 
 	data.Doc.StripProtectedFields()
 
 	if id := data.Doc.GetID(); id != "" && id != docID {
-		http.Error(w, "Document ID cannot be changed", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Document ID cannot be changed")
 		return
 	}
 
 	if data.Doc.IsEmpty() {
-		http.Error(w, "No data to update", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "No data to update")
 		return
 	}
 
@@ -184,27 +199,18 @@ func (h *Handler) handlePatchDocument(w http.ResponseWriter, r *http.Request) {
 
 	doc, err := h.engine.PatchDocument(r.Context(), tenant, data.Doc, data.IfMatch)
 	if err != nil {
-		if errors.Is(err, model.ErrNotFound) {
-			http.Error(w, "Document not found", http.StatusNotFound)
-			return
-		}
-		if errors.Is(err, model.ErrPreconditionFailed) {
-			http.Error(w, "Version conflict", http.StatusPreconditionFailed)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeStorageError(w, err)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(doc)
+	writeJSON(w, http.StatusOK, doc)
 }
 
 func (h *Handler) handleDeleteDocument(w http.ResponseWriter, r *http.Request) {
 	path := r.PathValue("path")
 
 	if err := validateDocumentPath(path); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid document path")
 		return
 	}
 
@@ -212,7 +218,7 @@ func (h *Handler) handleDeleteDocument(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil {
 		if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
 			if !errors.Is(err, io.EOF) {
-				http.Error(w, "Invalid request body", http.StatusBadRequest)
+				writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid request body")
 				return
 			}
 		}
@@ -224,15 +230,7 @@ func (h *Handler) handleDeleteDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.engine.DeleteDocument(r.Context(), tenant, path, data.IfMatch); err != nil {
-		if errors.Is(err, model.ErrNotFound) {
-			http.Error(w, "Document not found", http.StatusNotFound)
-			return
-		}
-		if errors.Is(err, model.ErrPreconditionFailed) {
-			http.Error(w, "Version conflict", http.StatusPreconditionFailed)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeStorageError(w, err)
 		return
 	}
 

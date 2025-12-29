@@ -42,7 +42,7 @@ func TestAuthorized_GetDocumentError(t *testing.T) {
 	target(rr, req)
 
 	assert.Equal(t, http.StatusInternalServerError, rr.Code)
-	assert.Contains(t, rr.Body.String(), "Internal Server Error")
+	assert.Contains(t, rr.Body.String(), "Failed to check resource")
 }
 
 // MockAuthService_NoContext is a mock that calls next but doesn't set any context
@@ -103,7 +103,7 @@ func TestTriggerProtected_NoRoles(t *testing.T) {
 	target(rr, req)
 
 	assert.Equal(t, http.StatusForbidden, rr.Code)
-	assert.Contains(t, rr.Body.String(), "Forbidden")
+	assert.Contains(t, rr.Body.String(), "Access denied")
 }
 
 // TestAdminOnly_NoRoles covers the case where ContextKeyRoles is missing
@@ -124,7 +124,7 @@ func TestAdminOnly_NoRoles(t *testing.T) {
 	target(rr, req)
 
 	assert.Equal(t, http.StatusForbidden, rr.Code)
-	assert.Contains(t, rr.Body.String(), "Forbidden")
+	assert.Contains(t, rr.Body.String(), "Access denied")
 }
 
 func TestClaimsToMap_NilDates(t *testing.T) {
