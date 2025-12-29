@@ -1,8 +1,8 @@
 #!/bin/bash
 
 threshold_func=80.0
-threshold_print=85.0
 threshold_package=85.0
+threshold_print=90.0
 threshold_total=90.0
 
 set -o pipefail
@@ -10,13 +10,15 @@ failed=0
 # Run tests with coverage, excluding cmd/ directory
 go test -covermode=atomic -coverprofile=coverage.out $(go list ./... | \
   grep -v "/cmd/") | \
-  sed 's/of statements//g; s/github.com\/codetrek\/syntrix\///g' | \
   tee test_output.txt
+
+sed -i 's/of statements//g; s/github.com\/codetrek\/syntrix\///g' test_output.txt
 
 echo
 echo -e "\nPackage coverage details:"
 echo "---------------------------------------------------------------------------------------------------------"
 cat test_output.txt | \
+  grep "^ok" | grep -vE "^ok\stests/" | \
   awk -v threshold="$threshold_package" '
     $1 != "?" {
       cov = $5;
