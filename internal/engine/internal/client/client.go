@@ -1,4 +1,4 @@
-package query
+package client
 
 import (
 	"bufio"
@@ -18,8 +18,8 @@ type Client struct {
 	httpClient *http.Client
 }
 
-// NewClient creates a new Query Service Client.
-func NewClient(baseURL string) *Client {
+// New creates a new Query Service Client.
+func New(baseURL string) *Client {
 	return &Client{
 		baseURL:    baseURL,
 		httpClient: &http.Client{},
@@ -191,7 +191,6 @@ func (c *Client) WatchCollection(ctx context.Context, tenant string, collection 
 			}
 			var evt storage.Event
 			if err := json.Unmarshal(line, &evt); err != nil {
-				// Log error?
 				continue
 			}
 			select {

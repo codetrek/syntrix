@@ -4,15 +4,15 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/codetrek/syntrix/internal/engine"
 	"github.com/codetrek/syntrix/internal/identity"
-	"github.com/codetrek/syntrix/internal/query"
 	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/pkg/model"
 
 	"github.com/stretchr/testify/mock"
 )
 
-// MockQueryService is a mock implementation of query.Service
+// MockQueryService is a mock implementation of engine.Service
 type MockQueryService struct {
 	mock.Mock
 }
@@ -232,7 +232,7 @@ func (s *TestServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-func createTestServer(engine query.Service, auth identity.AuthN, authz identity.AuthZ) *TestServer {
+func createTestServer(engine engine.Service, auth identity.AuthN, authz identity.AuthZ) *TestServer {
 	if auth == nil {
 		auth = new(MockAuthService)
 	}

@@ -12,21 +12,21 @@ import (
 	"github.com/codetrek/syntrix/internal/api/realtime"
 	"github.com/codetrek/syntrix/internal/config"
 	"github.com/codetrek/syntrix/internal/csp"
+	"github.com/codetrek/syntrix/internal/engine"
 	"github.com/codetrek/syntrix/internal/identity"
-	"github.com/codetrek/syntrix/internal/query"
 	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/internal/trigger"
-	"github.com/codetrek/syntrix/internal/trigger/engine"
+	triggerengine "github.com/codetrek/syntrix/internal/trigger/engine"
 
 	"github.com/nats-io/nats.go"
 )
 
 // natsConnector allows test injection to avoid real network.
 var natsConnector = nats.Connect
-var triggerFactoryFactory = func(store storage.DocumentStore, nats *nats.Conn, auth identity.AuthN, opts ...engine.FactoryOption) (engine.TriggerFactory, error) {
+var triggerFactoryFactory = func(store storage.DocumentStore, nats *nats.Conn, auth identity.AuthN, opts ...triggerengine.FactoryOption) (triggerengine.TriggerFactory, error) {
 	// Default options
-	defaultOpts := []engine.FactoryOption{engine.WithStartFromNow(true)}
-	return engine.NewFactory(store, nats, auth, append(defaultOpts, opts...)...)
+	defaultOpts := []triggerengine.FactoryOption{triggerengine.WithStartFromNow(true)}
+	return triggerengine.NewFactory(store, nats, auth, append(defaultOpts, opts...)...)
 }
 var storageFactoryFactory = func(ctx context.Context, cfg *config.Config) (storage.StorageFactory, error) {
 	return storage.NewFactory(ctx, cfg)
@@ -41,7 +41,7 @@ func (m *Manager) Init(ctx context.Context) error {
 		return err
 	}
 
-	var queryService query.Service
+	var queryService engine.Service
 
 	if m.opts.RunQuery {
 		qs := m.initQueryServices()
@@ -52,7 +52,7 @@ func (m *Manager) Init(ctx context.Context) error {
 
 	if m.opts.RunAPI {
 		if queryService == nil {
-			queryService = query.NewClient(m.cfg.Gateway.QueryServiceURL)
+			queryService = engine.NewClient(m.cfg.Gateway.QueryServiceURL)
 		}
 		if err := m.initAPIServer(queryService); err != nil {
 			return err
@@ -106,24 +106,24 @@ func (m *Manager) initAuthService(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) initQueryServices() query.Service {
+func (m *Manager) initQueryServices() engine.Service {
 	if !m.opts.RunQuery {
 		return nil
 	}
 
 	// Use routed store which handles OpRead/OpWrite internally
-	engine := query.NewEngine(m.docStore, m.cfg.Query.CSPServiceURL)
+	service := engine.NewService(m.docStore, m.cfg.Query.CSPServiceURL)
 	m.servers = append(m.servers, &http.Server{
 		Addr:    listenAddr(m.opts.ListenHost, m.cfg.Query.Port),
-		Handler: query.NewServer(engine),
+		Handler: engine.NewHTTPHandler(service),
 	})
 	m.serverNames = append(m.serverNames, "Query Service")
 
 	log.Println("Initialized Local Query Engine")
-	return engine
+	return service
 }
 
-func (m *Manager) initAPIServer(queryService query.Service) error {
+func (m *Manager) initAPIServer(queryService engine.Service) error {
 	var authzEngine identity.AuthZ
 
 	if m.cfg.Identity.AuthZ.RulesFile != "" {
@@ -182,7 +182,7 @@ func (m *Manager) initTriggerServices() error {
 	}
 	m.natsConn = nc
 
-	factory, err := triggerFactoryFactory(m.docStore, nc, m.authService, engine.WithStreamName(m.cfg.Trigger.StreamName))
+	factory, err := triggerFactoryFactory(m.docStore, nc, m.authService, triggerengine.WithStreamName(m.cfg.Trigger.StreamName))
 	if err != nil {
 		return fmt.Errorf("failed to create trigger factory: %w", err)
 	}

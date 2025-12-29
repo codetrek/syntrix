@@ -2,9 +2,9 @@ package identity
 
 import (
 	"github.com/codetrek/syntrix/internal/config"
+	"github.com/codetrek/syntrix/internal/engine"
 	"github.com/codetrek/syntrix/internal/identity/internal/authn"
 	"github.com/codetrek/syntrix/internal/identity/internal/authz"
-	"github.com/codetrek/syntrix/internal/query"
 	"github.com/codetrek/syntrix/internal/storage"
 )
 
@@ -31,6 +31,6 @@ func NewAuthN(cfg config.AuthNConfig, users storage.UserStore, revocations stora
 }
 
 // NewAuthZ creates a new authorization engine.
-func NewAuthZ(cfg config.AuthZConfig, qs query.Service) (AuthZ, error) {
+func NewAuthZ(cfg config.AuthZConfig, qs engine.Service) (AuthZ, error) {
 	return authz.NewEngine(cfg, qs)
 }

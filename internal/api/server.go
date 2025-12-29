@@ -5,8 +5,8 @@ import (
 
 	"github.com/codetrek/syntrix/internal/api/realtime"
 	"github.com/codetrek/syntrix/internal/api/rest"
+	"github.com/codetrek/syntrix/internal/engine"
 	"github.com/codetrek/syntrix/internal/identity"
-	"github.com/codetrek/syntrix/internal/query"
 )
 
 type Server struct {
@@ -15,7 +15,7 @@ type Server struct {
 	realtime *realtime.Server
 }
 
-func NewServer(engine query.Service, auth identity.AuthN, authz identity.AuthZ, rt *realtime.Server) *Server {
+func NewServer(engine engine.Service, auth identity.AuthN, authz identity.AuthZ, rt *realtime.Server) *Server {
 	s := &Server{
 		mux:      http.NewServeMux(),
 		rest:     rest.NewHandler(engine, auth, authz),

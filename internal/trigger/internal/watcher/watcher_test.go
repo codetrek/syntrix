@@ -146,3 +146,26 @@ func TestClose(t *testing.T) {
 	err := w.Close()
 	assert.NoError(t, err)
 }
+
+func TestWatch_GetError(t *testing.T) {
+	mockStore := new(MockDocumentStore)
+	w := NewWatcher(mockStore, "tenant1", WatcherOptions{})
+
+	// Get returns unexpected error
+	mockStore.On("Get", mock.Anything, "default", "sys/checkpoints/trigger_evaluator/tenant1").Return(nil, assert.AnError)
+
+	_, err := w.Watch(context.Background())
+	assert.Error(t, err)
+	mockStore.AssertExpectations(t)
+}
+
+func TestSaveCheckpoint_UpdateError(t *testing.T) {
+	mockStore := new(MockDocumentStore)
+	w := NewWatcher(mockStore, "tenant1", WatcherOptions{})
+
+	mockStore.On("Update", mock.Anything, "default", "sys/checkpoints/trigger_evaluator/tenant1", mock.Anything, mock.Anything).Return(assert.AnError)
+
+	err := w.SaveCheckpoint(context.Background(), "new-token")
+	assert.Error(t, err)
+	mockStore.AssertExpectations(t)
+}

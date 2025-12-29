@@ -1,4 +1,4 @@
-package query
+package client
 
 import (
 	"context"
@@ -36,7 +36,7 @@ func TestClient_GetDocument(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	doc, err := client.GetDocument(context.Background(), "default", "test/1")
 	assert.NoError(t, err)
 	assert.Equal(t, expectedDoc, doc)
@@ -52,7 +52,7 @@ func TestClient_CreateDocument(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	doc := model.Document{"id": "1", "collection": "test"}
 	err := client.CreateDocument(context.Background(), "default", doc)
 	assert.NoError(t, err)
@@ -78,7 +78,7 @@ func TestClient_WatchCollection(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
@@ -101,7 +101,7 @@ func TestClient_ErrorHandling(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	_, err := client.GetDocument(context.Background(), "default", "test/1")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unexpected status code: 500")
@@ -113,7 +113,7 @@ func TestClient_GetDocument_NotFound(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	_, err := client.GetDocument(context.Background(), "default", "test/1")
 	assert.ErrorIs(t, err, model.ErrNotFound)
 }
@@ -125,7 +125,7 @@ func TestClient_GetDocument_DecodeError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	res, err := client.GetDocument(context.Background(), "default", "test/1")
 	assert.Error(t, err)
 	assert.Nil(t, res)
@@ -137,7 +137,7 @@ func TestClient_CreateDocument_BadStatus(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	err := client.CreateDocument(context.Background(), "default", model.Document{"collection": "c"})
 	assert.Error(t, err)
 }
@@ -148,7 +148,7 @@ func TestClient_ReplaceDocument_BadStatus(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	res, err := client.ReplaceDocument(context.Background(), "default", model.Document{"collection": "c", "id": "1"}, nil)
 	assert.Error(t, err)
 	assert.Nil(t, res)
@@ -161,7 +161,7 @@ func TestClient_PatchDocument_Statuses(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		client := NewClient(ts.URL)
+		client := New(ts.URL)
 		res, err := client.PatchDocument(context.Background(), "default", model.Document{"collection": "c", "id": "1"}, nil)
 		assert.ErrorIs(t, err, model.ErrNotFound)
 		assert.Nil(t, res)
@@ -173,7 +173,7 @@ func TestClient_PatchDocument_Statuses(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		client := NewClient(ts.URL)
+		client := New(ts.URL)
 		res, err := client.PatchDocument(context.Background(), "default", model.Document{"collection": "c", "id": "1"}, nil)
 		assert.Error(t, err)
 		assert.Nil(t, res)
@@ -187,7 +187,7 @@ func TestClient_DeleteDocument_Statuses(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		client := NewClient(ts.URL)
+		client := New(ts.URL)
 		err := client.DeleteDocument(context.Background(), "default", "c/1", nil)
 		assert.ErrorIs(t, err, model.ErrNotFound)
 	})
@@ -198,7 +198,7 @@ func TestClient_DeleteDocument_Statuses(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		client := NewClient(ts.URL)
+		client := New(ts.URL)
 		err := client.DeleteDocument(context.Background(), "default", "c/1", nil)
 		assert.Error(t, err)
 	})
@@ -209,7 +209,7 @@ func TestClient_DeleteDocument_Statuses(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		client := NewClient(ts.URL)
+		client := New(ts.URL)
 		err := client.DeleteDocument(context.Background(), "default", "c/1", nil)
 		assert.ErrorIs(t, err, model.ErrPreconditionFailed)
 	})
@@ -221,7 +221,7 @@ func TestClient_ExecuteQuery_StatusError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	res, err := client.ExecuteQuery(context.Background(), "default", model.Query{Collection: "c"})
 	assert.Error(t, err)
 	assert.Nil(t, res)
@@ -233,20 +233,20 @@ func TestClient_WatchCollection_StatusError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	res, err := client.WatchCollection(context.Background(), "default", "c")
 	assert.Error(t, err)
 	assert.Nil(t, res)
 }
 
 func TestClient_post_EncodeError(t *testing.T) {
-	client := NewClient("http://example.com")
+	client := New("http://example.com")
 	_, err := client.post(context.Background(), "/x", make(chan int))
 	assert.Error(t, err)
 }
 
 func TestClient_Post_DoError(t *testing.T) {
-	client := NewClient("http://example.com")
+	client := New("http://example.com")
 	client.httpClient = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		return nil, assert.AnError
 	})}
@@ -268,7 +268,7 @@ func TestClient_ReplaceDocument_Success(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	doc, err := client.ReplaceDocument(context.Background(), "default", expected, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, doc)
@@ -286,7 +286,7 @@ func TestClient_PatchDocument_Success(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	doc, err := client.PatchDocument(context.Background(), "default", expected, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, expected, doc)
@@ -304,7 +304,7 @@ func TestClient_ExecuteQuery_Success(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	res, err := client.ExecuteQuery(context.Background(), "default", model.Query{Collection: "c"})
 	assert.NoError(t, err)
 	assert.Equal(t, expected, res)
@@ -322,7 +322,7 @@ func TestClient_Pull_Success(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	res, err := client.Pull(context.Background(), "default", storage.ReplicationPullRequest{Collection: "c"})
 	assert.NoError(t, err)
 	assert.Equal(t, &expected, res)
@@ -340,7 +340,7 @@ func TestClient_Push_Success(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	res, err := client.Push(context.Background(), "default", storage.ReplicationPushRequest{Collection: "c"})
 	assert.NoError(t, err)
 	assert.Equal(t, &expected, res)
@@ -361,7 +361,7 @@ func TestClient_WatchCollection_CancelCloses(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	ctx, cancel := context.WithCancel(context.Background())
 	stream, err := client.WatchCollection(ctx, "default", "c")
 	require.NoError(t, err)
@@ -394,7 +394,7 @@ func TestClient_WatchCollection_InvalidJSONSkipped(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	stream, err := client.WatchCollection(ctx, "default", "c")
@@ -426,7 +426,7 @@ func TestClient_Pull(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	req := storage.ReplicationPullRequest{
 		Checkpoint: 50,
 		Limit:      10,
@@ -451,7 +451,7 @@ func TestClient_Push(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	req := storage.ReplicationPushRequest{
 		Changes: []storage.ReplicationPushChange{
 			{
@@ -470,7 +470,7 @@ func TestClient_Pull_Error(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	req := storage.ReplicationPullRequest{}
 	_, err := client.Pull(context.Background(), "default", req)
 	assert.Error(t, err)
@@ -482,7 +482,7 @@ func TestClient_Push_Error(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := NewClient(ts.URL)
+	client := New(ts.URL)
 	req := storage.ReplicationPushRequest{}
 	_, err := client.Push(context.Background(), "default", req)
 	assert.Error(t, err)
@@ -491,7 +491,7 @@ func TestClient_Push_Error(t *testing.T) {
 func TestClient_NetworkErrors(t *testing.T) {
 	// Create a client with a URL that will cause connection failure
 	// Using a closed port or invalid host
-	client := NewClient("http://localhost:0")
+	client := New("http://localhost:0")
 
 	ctx := context.Background()
 
@@ -548,7 +548,7 @@ func TestClient_WatchCollection_Errors(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		client := NewClient(ts.URL)
+		client := New(ts.URL)
 		_, err := client.WatchCollection(context.Background(), "default", "test")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "unexpected status code: 500")
@@ -556,7 +556,7 @@ func TestClient_WatchCollection_Errors(t *testing.T) {
 
 	t.Run("Invalid URL", func(t *testing.T) {
 		// Control character in URL to force NewRequest error
-		client := NewClient("http://example.com" + string(byte(0x7f)))
+		client := New("http://example.com" + string(byte(0x7f)))
 		_, err := client.WatchCollection(context.Background(), "default", "test")
 		assert.Error(t, err)
 	})
@@ -569,7 +569,7 @@ func TestClient_Replication_Errors(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		client := NewClient(ts.URL)
+		client := New(ts.URL)
 		_, err := client.Pull(context.Background(), "default", storage.ReplicationPullRequest{})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "unexpected status code: 400")
@@ -582,7 +582,7 @@ func TestClient_Replication_Errors(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		client := NewClient(ts.URL)
+		client := New(ts.URL)
 		_, err := client.Pull(context.Background(), "default", storage.ReplicationPullRequest{})
 		assert.Error(t, err)
 	})
@@ -593,7 +593,7 @@ func TestClient_Replication_Errors(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		client := NewClient(ts.URL)
+		client := New(ts.URL)
 		_, err := client.Push(context.Background(), "default", storage.ReplicationPushRequest{})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "unexpected status code: 500")
@@ -606,7 +606,7 @@ func TestClient_Replication_Errors(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		client := NewClient(ts.URL)
+		client := New(ts.URL)
 		_, err := client.Push(context.Background(), "default", storage.ReplicationPushRequest{})
 		assert.Error(t, err)
 	})
@@ -619,7 +619,7 @@ func TestClient_ExecuteQuery_Errors(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		client := NewClient(ts.URL)
+		client := New(ts.URL)
 		_, err := client.ExecuteQuery(context.Background(), "default", model.Query{})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "unexpected status code: 400")
@@ -632,7 +632,7 @@ func TestClient_ExecuteQuery_Errors(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		client := NewClient(ts.URL)
+		client := New(ts.URL)
 		_, err := client.ExecuteQuery(context.Background(), "default", model.Query{})
 		assert.Error(t, err)
 	})

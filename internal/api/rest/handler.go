@@ -14,8 +14,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
+	"github.com/codetrek/syntrix/internal/engine"
 	"github.com/codetrek/syntrix/internal/identity"
-	"github.com/codetrek/syntrix/internal/query"
 	"github.com/codetrek/syntrix/pkg/model"
 )
 
@@ -37,12 +37,12 @@ func getParsedBody(ctx context.Context) map[string]interface{} {
 }
 
 type Handler struct {
-	engine query.Service
+	engine engine.Service
 	auth   identity.AuthN
 	authz  identity.AuthZ
 }
 
-func NewHandler(engine query.Service, auth identity.AuthN, authz identity.AuthZ) *Handler {
+func NewHandler(engine engine.Service, auth identity.AuthN, authz identity.AuthZ) *Handler {
 	if auth == nil {
 		panic("AuthN service cannot be nil")
 	}

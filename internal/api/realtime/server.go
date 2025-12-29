@@ -5,13 +5,13 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/codetrek/syntrix/internal/engine"
 	"github.com/codetrek/syntrix/internal/identity"
-	"github.com/codetrek/syntrix/internal/query"
 )
 
 type Server struct {
 	hub            *Hub
-	queryService   query.Service
+	queryService   engine.Service
 	dataCollection string
 	auth           identity.AuthN
 	cfg            Config
@@ -24,7 +24,7 @@ type Config struct {
 	EnableAuth     bool
 }
 
-func NewServer(qs query.Service, dataCollection string, auth identity.AuthN, cfg Config) *Server {
+func NewServer(qs engine.Service, dataCollection string, auth identity.AuthN, cfg Config) *Server {
 	h := NewHub()
 	s := &Server{
 		hub:            h,
