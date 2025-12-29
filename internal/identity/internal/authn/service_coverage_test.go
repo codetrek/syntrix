@@ -3,6 +3,7 @@ package authn
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -258,10 +259,15 @@ func TestRefresh_Coverage(t *testing.T) {
 }
 
 func TestNewAuthService_Coverage(t *testing.T) {
-	// Case 1: Invalid private key path - use /dev/null as parent to ensure directory creation fails
+	// Force invalid key path by using an existing file as the parent directory
+	tmpDir := t.TempDir()
+	parentFile := filepath.Join(tmpDir, "parent-file")
+	require.NoError(t, os.WriteFile(parentFile, []byte("noop"), 0600))
+
 	cfg := config.AuthNConfig{
-		PrivateKeyFile: "/dev/null/key.pem",
+		PrivateKeyFile: filepath.Join(parentFile, "key.pem"),
 	}
+
 	svc, err := NewAuthService(cfg, nil, nil)
 	assert.Error(t, err)
 	assert.Nil(t, svc)
