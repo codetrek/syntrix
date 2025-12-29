@@ -125,3 +125,15 @@ func TestUserStore_ListUsersAndUpdate(t *testing.T) {
 	assert.True(t, updated.Disabled)
 	assert.True(t, updated.UpdatedAt.After(original.UpdatedAt))
 }
+
+func TestUserStore_ListUsers_ContextCancelled(t *testing.T) {
+	s, teardown := setupTestUserStore(t)
+	defer teardown()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	users, err := s.ListUsers(ctx, "default", 10, 0)
+	assert.Error(t, err)
+	assert.Nil(t, users)
+}

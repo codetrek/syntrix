@@ -17,11 +17,11 @@ const (
 )
 
 // Argon2id params
-const (
-	argonTime    = 3
-	argonMemory  = 64 * 1024
-	argonThreads = 1
-	argonKeyLen  = 32
+var (
+	argonTime    = uint32(3)
+	argonMemory  = uint32(64 * 1024)
+	argonThreads = uint8(1)
+	argonKeyLen  = uint32(32)
 	saltLen      = 16
 )
 

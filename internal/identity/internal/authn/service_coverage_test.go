@@ -113,7 +113,7 @@ func TestSignUp_Coverage(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mockStorage := new(MockStorage)
 			cfg := config.AuthNConfig{
-				PrivateKeyFile:  filepath.Join(t.TempDir(), "key.pem"),
+				PrivateKeyFile:  getTestKeyPath(t),
 				AccessTokenTTL:  15 * time.Minute,
 				RefreshTokenTTL: 7 * 24 * time.Hour,
 				AuthCodeTTL:     2 * time.Minute,
@@ -255,4 +255,31 @@ func TestRefresh_Coverage(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNewAuthService_Coverage(t *testing.T) {
+	// Case 1: Invalid private key path
+	cfg := config.AuthNConfig{
+		PrivateKeyFile: "/invalid/path/to/key.pem",
+	}
+	svc, err := NewAuthService(cfg, nil, nil)
+	assert.Error(t, err)
+	assert.Nil(t, svc)
+}
+
+func TestAuthService_Logout_Coverage(t *testing.T) {
+	// Setup service with valid key (generate one)
+	tmpDir := t.TempDir()
+	keyFile := filepath.Join(tmpDir, "test.pem")
+
+	cfg := config.AuthNConfig{
+		PrivateKeyFile: keyFile,
+	}
+
+	svc, err := NewAuthService(cfg, nil, nil)
+	assert.NoError(t, err)
+
+	// Case 1: Invalid token
+	err = svc.Logout(context.Background(), "invalid-token")
+	assert.Equal(t, ErrInvalidToken, err)
 }

@@ -1,10 +1,13 @@
 package integration
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestEnvHelper(t *testing.T) {
@@ -55,4 +58,46 @@ func TestEnvHelper(t *testing.T) {
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 	})
+}
+
+func TestMustMarshal(t *testing.T) {
+	// Case 1: Valid input
+	input := map[string]string{"key": "value"}
+	output := mustMarshal(input)
+	var result map[string]string
+	err := json.Unmarshal(output, &result)
+	require.NoError(t, err)
+	assert.Equal(t, input, result)
+
+	// Case 2: Invalid input (channel cannot be marshaled)
+	assert.Panics(t, func() {
+		mustMarshal(make(chan int))
+	})
+}
+
+func TestParseTokenClaims(t *testing.T) {
+	// Case 1: Valid token
+	claims := map[string]interface{}{"sub": "123", "name": "test"}
+	claimsBytes, _ := json.Marshal(claims)
+	payload := base64.RawURLEncoding.EncodeToString(claimsBytes)
+	token := "header." + payload + ".signature"
+
+	parsed, err := parseTokenClaims(token)
+	require.NoError(t, err)
+	assert.Equal(t, "123", parsed["sub"])
+	assert.Equal(t, "test", parsed["name"])
+
+	// Case 2: Invalid format (not enough parts)
+	_, err = parseTokenClaims("invalid.token")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid token format")
+
+	// Case 3: Invalid base64
+	_, err = parseTokenClaims("header.invalid-base64.signature")
+	assert.Error(t, err)
+
+	// Case 4: Invalid JSON in payload
+	badPayload := base64.RawURLEncoding.EncodeToString([]byte("{invalid-json"))
+	_, err = parseTokenClaims("header." + badPayload + ".signature")
+	assert.Error(t, err)
 }

@@ -1,7 +1,6 @@
 package authn
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,7 +12,7 @@ import (
 func TestValidateToken(t *testing.T) {
 	mockStorage := new(MockStorage)
 	cfg := config.AuthNConfig{
-		PrivateKeyFile:  filepath.Join(t.TempDir(), "key.pem"),
+		PrivateKeyFile:  getTestKeyPath(t),
 		AccessTokenTTL:  15 * time.Minute,
 		RefreshTokenTTL: 7 * 24 * time.Hour,
 		AuthCodeTTL:     2 * time.Minute,

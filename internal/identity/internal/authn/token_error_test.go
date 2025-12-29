@@ -50,7 +50,7 @@ func TestTokenService_ErrorPaths(t *testing.T) {
 		token := jwt.New(jwt.SigningMethodHS256)
 		tokenString, _ := token.SignedString([]byte("secret"))
 
-		keyFile := filepath.Join(t.TempDir(), "key.pem")
+		keyFile := getTestKeyPath(t)
 		cfg := config.AuthNConfig{PrivateKeyFile: keyFile}
 		ts, _ := NewTokenService(cfg)
 
@@ -60,7 +60,7 @@ func TestTokenService_ErrorPaths(t *testing.T) {
 	})
 
 	t.Run("ValidateToken_MalformedToken", func(t *testing.T) {
-		keyFile := filepath.Join(t.TempDir(), "key.pem")
+		keyFile := getTestKeyPath(t)
 		cfg := config.AuthNConfig{PrivateKeyFile: keyFile}
 		ts, _ := NewTokenService(cfg)
 
@@ -69,7 +69,7 @@ func TestTokenService_ErrorPaths(t *testing.T) {
 	})
 
 	t.Run("ValidateToken_MissingTenantID", func(t *testing.T) {
-		keyFile := filepath.Join(t.TempDir(), "key.pem")
+		keyFile := getTestKeyPath(t)
 		cfg := config.AuthNConfig{PrivateKeyFile: keyFile}
 		ts, _ := NewTokenService(cfg)
 
@@ -139,7 +139,7 @@ func TestTokenService_GenerateTokenPair_SigningError(t *testing.T) {
 }
 
 func TestTokenService_GenerateTokenPair_DefaultTenant(t *testing.T) {
-	keyFile := filepath.Join(t.TempDir(), "key.pem")
+	keyFile := getTestKeyPath(t)
 	cfg := config.AuthNConfig{
 		PrivateKeyFile: keyFile,
 		AccessTokenTTL: 1 * time.Hour, // Ensure token doesn't expire immediately

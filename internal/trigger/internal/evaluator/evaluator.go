@@ -11,6 +11,8 @@ import (
 	"github.com/google/cel-go/cel"
 )
 
+var celNewEnv = cel.NewEnv
+
 // Evaluator is responsible for matching events against trigger conditions.
 type Evaluator interface {
 	Evaluate(ctx context.Context, t *trigger.Trigger, event *storage.Event) (bool, error)
@@ -25,7 +27,7 @@ type celeEvaluator struct {
 
 func NewEvaluator() (Evaluator, error) {
 	// Define the CEL environment with an 'event' variable
-	env, err := cel.NewEnv(
+	env, err := celNewEnv(
 		cel.Variable("event", cel.MapType(cel.StringType, cel.DynType)),
 	)
 	if err != nil {

@@ -109,3 +109,36 @@ func TestCheckAllowedOrigin(t *testing.T) {
 	// Case 10: Allowed origins list mismatch
 	assert.Error(t, checkAllowedOrigin("http://other.com", "host", Config{AllowedOrigins: []string{"http://example.com"}}, false))
 }
+
+func TestTenantFromContext(t *testing.T) {
+	// Case 1: Nil context
+	tenant, allowAll := tenantFromContext(nil)
+	assert.Equal(t, "", tenant)
+	assert.False(t, allowAll)
+
+	// Case 2: Tenant in context
+	ctx1 := context.WithValue(context.Background(), identity.ContextKeyTenant, "tenant1")
+	tenant, allowAll = tenantFromContext(ctx1)
+	assert.Equal(t, "tenant1", tenant)
+	assert.False(t, allowAll)
+
+	// Case 3: Tenant in claims
+	claims := &identity.Claims{TenantID: "tenant2"}
+	ctx2 := context.WithValue(context.Background(), identity.ContextKeyClaims, claims)
+	tenant, allowAll = tenantFromContext(ctx2)
+	assert.Equal(t, "tenant2", tenant)
+	assert.False(t, allowAll)
+
+	// Case 4: Tenant in both (ContextKeyTenant takes precedence)
+	ctx3 := context.WithValue(ctx2, identity.ContextKeyTenant, "tenant1")
+	tenant, allowAll = tenantFromContext(ctx3)
+	assert.Equal(t, "tenant1", tenant)
+	assert.False(t, allowAll)
+
+	// Case 5: System role
+	claimsSystem := &identity.Claims{TenantID: "tenant3", Roles: []string{"system"}}
+	ctx4 := context.WithValue(context.Background(), identity.ContextKeyClaims, claimsSystem)
+	tenant, allowAll = tenantFromContext(ctx4)
+	assert.Equal(t, "tenant3", tenant)
+	assert.True(t, allowAll)
+}

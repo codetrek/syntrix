@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -43,7 +42,7 @@ func TestSignUp_TableDriven(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mockStorage := new(MockStorage)
 			cfg := config.AuthNConfig{
-				PrivateKeyFile:  filepath.Join(t.TempDir(), "key.pem"),
+				PrivateKeyFile:  getTestKeyPath(t),
 				AccessTokenTTL:  15 * time.Minute,
 				RefreshTokenTTL: 7 * 24 * time.Hour,
 				AuthCodeTTL:     2 * time.Minute,
@@ -212,7 +211,7 @@ func TestSignIn_TableDriven(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mockStorage := new(MockStorage)
 			cfg := config.AuthNConfig{
-				PrivateKeyFile:  filepath.Join(t.TempDir(), "key.pem"),
+				PrivateKeyFile:  getTestKeyPath(t),
 				AccessTokenTTL:  15 * time.Minute,
 				RefreshTokenTTL: 7 * 24 * time.Hour,
 				AuthCodeTTL:     2 * time.Minute,
@@ -244,7 +243,7 @@ func TestSignIn_TableDriven(t *testing.T) {
 
 func TestRefresh_TableDriven(t *testing.T) {
 	cfg := config.AuthNConfig{
-		PrivateKeyFile:  filepath.Join(t.TempDir(), "key.pem"),
+		PrivateKeyFile:  getTestKeyPath(t),
 		AccessTokenTTL:  15 * time.Minute,
 		RefreshTokenTTL: 24 * time.Hour,
 	}
@@ -318,7 +317,7 @@ func TestRefresh_TableDriven(t *testing.T) {
 
 func TestLogout_TableDriven(t *testing.T) {
 	cfg := config.AuthNConfig{
-		PrivateKeyFile:  filepath.Join(t.TempDir(), "key.pem"),
+		PrivateKeyFile:  getTestKeyPath(t),
 		AccessTokenTTL:  15 * time.Minute,
 		RefreshTokenTTL: 24 * time.Hour,
 	}
@@ -372,7 +371,7 @@ func TestLogout_TableDriven(t *testing.T) {
 
 func TestMiddleware_TableDriven(t *testing.T) {
 	cfg := config.AuthNConfig{
-		PrivateKeyFile:  filepath.Join(t.TempDir(), "key.pem"),
+		PrivateKeyFile:  getTestKeyPath(t),
 		AccessTokenTTL:  15 * time.Minute,
 		RefreshTokenTTL: 24 * time.Hour,
 	}
@@ -450,7 +449,7 @@ func TestMiddleware_TableDriven(t *testing.T) {
 
 func TestListUsers_TableDriven(t *testing.T) {
 	cfg := config.AuthNConfig{
-		PrivateKeyFile:  filepath.Join(t.TempDir(), "key.pem"),
+		PrivateKeyFile:  getTestKeyPath(t),
 	}
 
 	tests := []struct {
@@ -494,7 +493,7 @@ func TestListUsers_TableDriven(t *testing.T) {
 
 func TestUpdateUser_TableDriven(t *testing.T) {
 	cfg := config.AuthNConfig{
-		PrivateKeyFile:  filepath.Join(t.TempDir(), "key.pem"),
+		PrivateKeyFile:  getTestKeyPath(t),
 	}
 
 	tests := []struct {
@@ -544,7 +543,7 @@ func TestUpdateUser_TableDriven(t *testing.T) {
 
 func TestMiddlewareOptional_TableDriven(t *testing.T) {
 	cfg := config.AuthNConfig{
-		PrivateKeyFile:  filepath.Join(t.TempDir(), "key.pem"),
+		PrivateKeyFile:  getTestKeyPath(t),
 		AccessTokenTTL:  15 * time.Minute,
 		RefreshTokenTTL: 24 * time.Hour,
 	}

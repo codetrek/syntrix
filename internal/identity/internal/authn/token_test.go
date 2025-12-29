@@ -14,7 +14,7 @@ import (
 )
 
 func TestTokenService_GenerateAndValidate(t *testing.T) {
-	keyFile := filepath.Join(t.TempDir(), "key.pem")
+	keyFile := getTestKeyPath(t)
 	cfg := config.AuthNConfig{
 		PrivateKeyFile:  keyFile,
 		AccessTokenTTL:  15 * time.Minute,
@@ -55,7 +55,7 @@ func TestTokenService_GenerateAndValidate(t *testing.T) {
 
 func TestTokenService_ExpiredToken(t *testing.T) {
 	// Create service with very short TTL
-	keyFile := filepath.Join(t.TempDir(), "key.pem")
+	keyFile := getTestKeyPath(t)
 	cfg := config.AuthNConfig{
 		PrivateKeyFile:  keyFile,
 		AccessTokenTTL:  1 * time.Millisecond,
@@ -78,7 +78,7 @@ func TestTokenService_ExpiredToken(t *testing.T) {
 }
 
 func TestTokenService_InvalidSignature(t *testing.T) {
-	keyFile1 := filepath.Join(t.TempDir(), "key1.pem")
+	keyFile1 := getTestKeyPath(t)
 	cfg1 := config.AuthNConfig{
 		PrivateKeyFile:  keyFile1,
 		AccessTokenTTL:  1 * time.Hour,
@@ -116,7 +116,7 @@ func TestTokenService_SaveAndLoadPrivateKey(t *testing.T) {
 }
 
 func TestTokenService_GenerateSystemToken(t *testing.T) {
-	keyFile := filepath.Join(t.TempDir(), "key.pem")
+	keyFile := getTestKeyPath(t)
 	cfg := config.AuthNConfig{
 		PrivateKeyFile:  keyFile,
 		AccessTokenTTL:  15 * time.Minute,

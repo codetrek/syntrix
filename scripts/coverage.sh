@@ -19,8 +19,8 @@ EXCLUDE_REGEX="${DEFAULT_EXCLUDE}${EXTRA_EXCLUDE:+|${EXTRA_EXCLUDE}}"
 PKGS=$(go list ./... | grep -Ev "${EXCLUDE_REGEX}")
 
 threshold_func=80.0
-threshold_print=85.0
 threshold_package=85.0
+threshold_print=90.0
 threshold_total=90.0
 
 echo "Excluding packages matching: ${EXCLUDE_REGEX}"

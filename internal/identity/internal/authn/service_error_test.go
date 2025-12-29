@@ -3,7 +3,6 @@ package authn
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -17,7 +16,7 @@ import (
 func TestValidateToken_ErrorPaths(t *testing.T) {
 	mockStorage := new(MockStorage)
 	cfg := config.AuthNConfig{
-		PrivateKeyFile: filepath.Join(t.TempDir(), "key.pem"),
+		PrivateKeyFile: getTestKeyPath(t),
 		AccessTokenTTL: time.Minute,
 	}
 	svc, err := NewAuthService(cfg, mockStorage, mockStorage)
@@ -44,7 +43,7 @@ func TestValidateToken_ErrorPaths(t *testing.T) {
 func TestSignIn_ErrorPaths(t *testing.T) {
 	mockStorage := new(MockStorage)
 	cfg := config.AuthNConfig{
-		PrivateKeyFile: filepath.Join(t.TempDir(), "key.pem"),
+		PrivateKeyFile: getTestKeyPath(t),
 	}
 	svc, err := NewAuthService(cfg, mockStorage, mockStorage)
 	require.NoError(t, err)
@@ -72,7 +71,7 @@ func TestSignIn_ErrorPaths(t *testing.T) {
 func TestRefresh_ErrorPaths_Extended(t *testing.T) {
 	mockStorage := new(MockStorage)
 	cfg := config.AuthNConfig{
-		PrivateKeyFile:  filepath.Join(t.TempDir(), "key.pem"),
+		PrivateKeyFile:  getTestKeyPath(t),
 		AccessTokenTTL:  time.Minute,
 		RefreshTokenTTL: time.Hour,
 	}

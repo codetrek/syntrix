@@ -6,17 +6,44 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/codetrek/syntrix/internal/config"
 	"github.com/codetrek/syntrix/internal/identity"
 	"github.com/codetrek/syntrix/internal/trigger/types"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
+
+type MockAuthN struct {
+	mock.Mock
+}
+
+func (m *MockAuthN) Middleware(next http.Handler) http.Handler         { return next }
+func (m *MockAuthN) MiddlewareOptional(next http.Handler) http.Handler { return next }
+func (m *MockAuthN) SignIn(ctx context.Context, req identity.LoginRequest) (*identity.TokenPair, error) {
+	return nil, nil
+}
+func (m *MockAuthN) SignUp(ctx context.Context, req identity.SignupRequest) (*identity.TokenPair, error) {
+	return nil, nil
+}
+func (m *MockAuthN) Refresh(ctx context.Context, req identity.RefreshRequest) (*identity.TokenPair, error) {
+	return nil, nil
+}
+func (m *MockAuthN) ListUsers(ctx context.Context, limit int, offset int) ([]*identity.User, error) {
+	return nil, nil
+}
+func (m *MockAuthN) UpdateUser(ctx context.Context, id string, roles []string, disabled bool) error {
+	return nil
+}
+func (m *MockAuthN) Logout(ctx context.Context, refreshToken string) error { return nil }
+func (m *MockAuthN) GenerateSystemToken(serviceName string) (string, error) {
+	args := m.Called(serviceName)
+	return args.String(0), args.Error(1)
+}
+func (m *MockAuthN) ValidateToken(tokenString string) (*identity.Claims, error) { return nil, nil }
 
 func TestDeliveryWorker_ProcessTask(t *testing.T) {
 	// 1. Setup Mock Server
@@ -102,13 +129,8 @@ func TestDeliveryWorker_ProcessTask_FatalError(t *testing.T) {
 }
 
 func TestDeliveryWorker_ProcessTask_WithToken(t *testing.T) {
-	auth, err := identity.NewAuthN(config.AuthNConfig{
-		PrivateKeyFile:  filepath.Join(t.TempDir(), "key.pem"),
-		AccessTokenTTL:  time.Hour,
-		RefreshTokenTTL: time.Hour,
-		AuthCodeTTL:     time.Minute,
-	}, nil, nil)
-	assert.NoError(t, err)
+	mockAuth := new(MockAuthN)
+	mockAuth.On("GenerateSystemToken", "trigger-worker").Return("mock-token", nil)
 
 	// 2. Setup Mock Server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -118,23 +140,39 @@ func TestDeliveryWorker_ProcessTask_WithToken(t *testing.T) {
 		assert.NoError(t, err)
 
 		// Verify Pre-Issued Token
-		assert.NotEmpty(t, task.PreIssuedToken)
+		assert.Equal(t, "mock-token", task.PreIssuedToken)
 
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
-	worker := NewDeliveryWorker(auth, nil, HTTPClientOptions{}, nil)
+	worker := NewDeliveryWorker(mockAuth, nil, HTTPClientOptions{}, nil)
 	task := &types.DeliveryTask{
 		TriggerID: "trig-1",
 		URL:       server.URL,
 	}
-	err = worker.ProcessTask(context.Background(), task)
+	err := worker.ProcessTask(context.Background(), task)
 	assert.NoError(t, err)
+	mockAuth.AssertExpectations(t)
+}
+
+func TestDeliveryWorker_ProcessTask_TokenError(t *testing.T) {
+	mockAuth := new(MockAuthN)
+	mockAuth.On("GenerateSystemToken", "trigger-worker").Return("", fmt.Errorf("token generation failed"))
+
+	worker := NewDeliveryWorker(mockAuth, nil, HTTPClientOptions{}, nil)
+	task := &types.DeliveryTask{
+		TriggerID: "trig-1",
+		URL:       "http://example.com",
+	}
+	err := worker.ProcessTask(context.Background(), task)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to generate system token")
+	mockAuth.AssertExpectations(t)
 }
 
 func TestDeliveryWorker_ProcessTask_NetworkError(t *testing.T) {
-	worker := NewDeliveryWorker(nil, nil, HTTPClientOptions{}, nil)
+	worker := NewDeliveryWorker(nil, nil, HTTPClientOptions{Timeout: 100 * time.Millisecond}, nil)
 	task := &types.DeliveryTask{
 		TriggerID: "trig-1",
 		URL:       "http://invalid-url-that-does-not-exist.local",

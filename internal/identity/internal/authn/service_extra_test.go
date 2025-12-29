@@ -3,7 +3,6 @@ package authn
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/codetrek/syntrix/internal/config"
@@ -15,7 +14,7 @@ import (
 func TestListUsers_Coverage(t *testing.T) {
 	mockStorage := new(MockStorage)
 	cfg := config.AuthNConfig{
-		PrivateKeyFile: filepath.Join(t.TempDir(), "key.pem"),
+		PrivateKeyFile: getTestKeyPath(t),
 	}
 	svc, err := NewAuthService(cfg, mockStorage, mockStorage)
 	require.NoError(t, err)
@@ -54,7 +53,7 @@ func TestListUsers_Coverage(t *testing.T) {
 func TestUpdateUser_Coverage(t *testing.T) {
 	mockStorage := new(MockStorage)
 	cfg := config.AuthNConfig{
-		PrivateKeyFile: filepath.Join(t.TempDir(), "key.pem"),
+		PrivateKeyFile: getTestKeyPath(t),
 	}
 	svc, err := NewAuthService(cfg, mockStorage, mockStorage)
 	require.NoError(t, err)
@@ -97,7 +96,7 @@ func TestTenantFromContext_Coverage(t *testing.T) {
 
 	mockStorage := new(MockStorage)
 	cfg := config.AuthNConfig{
-		PrivateKeyFile: filepath.Join(t.TempDir(), "key.pem"),
+		PrivateKeyFile: getTestKeyPath(t),
 	}
 	svc, err := NewAuthService(cfg, mockStorage, mockStorage)
 	require.NoError(t, err)

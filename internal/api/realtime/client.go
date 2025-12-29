@@ -326,6 +326,9 @@ func hasSystemRole(ctx context.Context) bool {
 			}
 		}
 	}
+	if claims, ok := ctx.Value(identity.ContextKeyClaims).(*identity.Claims); ok {
+		return hasSystemRoleFromClaims(claims)
+	}
 	return false
 }
 

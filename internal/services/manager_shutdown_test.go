@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
@@ -79,4 +80,22 @@ func TestManager_Shutdown_StorageError(t *testing.T) {
 	mgr.Shutdown(ctx)
 
 	mockFactory.AssertExpectations(t)
+}
+
+func TestManager_Shutdown_ServerShutdownError(t *testing.T) {
+	// Create a manager with a server
+	mgr := &Manager{
+		serverNames: []string{"test-server"},
+	}
+
+	// Create a server
+	srv := &http.Server{Addr: ":0"}
+	mgr.servers = []*http.Server{srv}
+
+	// Shutdown with cancelled context to trigger error (hopefully)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Should not panic
+	mgr.Shutdown(ctx)
 }

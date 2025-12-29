@@ -8,6 +8,13 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+func init() {
+	// Reduce Argon2id cost for testing
+	argonTime = 1
+	argonMemory = 1 * 1024
+	argonThreads = 1
+}
+
 func TestHashPassword(t *testing.T) {
 	password := "mysecretpassword"
 	hash, algo, err := HashPassword(password)
