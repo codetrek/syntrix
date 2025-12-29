@@ -7,13 +7,13 @@ import (
 	"testing"
 
 	"github.com/codetrek/syntrix/internal/config"
-	"github.com/codetrek/syntrix/internal/query"
+	"github.com/codetrek/syntrix/internal/engine"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 type mockQueryService struct {
-	query.Service
+	engine.Service
 }
 
 func TestNewEngine_ErrorPaths(t *testing.T) {

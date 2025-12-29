@@ -1,4 +1,4 @@
-package query
+package core
 
 import (
 	"bytes"
@@ -21,8 +21,8 @@ type Engine struct {
 	client  *http.Client
 }
 
-// NewEngine creates a new Query Engine instance.
-func NewEngine(storage storage.DocumentStore, cspURL string) *Engine {
+// New creates a new Query Engine instance.
+func New(storage storage.DocumentStore, cspURL string) *Engine {
 	return &Engine{
 		storage: storage,
 		cspURL:  cspURL,
@@ -37,7 +37,6 @@ func (e *Engine) SetHTTPClient(client *http.Client) {
 
 // GetDocument retrieves a document by path.
 func (e *Engine) GetDocument(ctx context.Context, tenant string, path string) (model.Document, error) {
-	// Future: Add authorization check here
 	stored, err := e.storage.Get(ctx, tenant, path)
 	if err != nil {
 		return nil, err
@@ -59,7 +58,6 @@ func (e *Engine) CreateDocument(ctx context.Context, tenant string, doc model.Do
 	fullpath := collection + "/" + doc.GetID()
 	doc.StripProtectedFields()
 
-	// Future: Add validation and authorization check here
 	return e.storage.Create(ctx, tenant, storage.NewDocument(tenant, fullpath, collection, doc))
 }
 
@@ -171,13 +169,11 @@ func (e *Engine) PatchDocument(ctx context.Context, tenant string, doc model.Doc
 
 // DeleteDocument deletes a document.
 func (e *Engine) DeleteDocument(ctx context.Context, tenant string, path string, pred model.Filters) error {
-	// Future: Add authorization check here
 	return e.storage.Delete(ctx, tenant, path, pred)
 }
 
 // ExecuteQuery executes a structured query.
 func (e *Engine) ExecuteQuery(ctx context.Context, tenant string, q model.Query) ([]model.Document, error) {
-	// Future: Add query validation and optimization here
 	storedDocs, err := e.storage.Query(ctx, tenant, q)
 	if err != nil {
 		return nil, err
@@ -193,7 +189,6 @@ func (e *Engine) ExecuteQuery(ctx context.Context, tenant string, q model.Query)
 
 // WatchCollection returns a channel of events for a collection.
 func (e *Engine) WatchCollection(ctx context.Context, tenant string, collection string) (<-chan storage.Event, error) {
-	// Call CSP to watch
 	reqBody, err := json.Marshal(map[string]string{
 		"collection": collection,
 		"tenant":     tenant,
@@ -281,13 +276,6 @@ func (e *Engine) Pull(ctx context.Context, tenant string, req storage.Replicatio
 		newCheckpoint = docs[len(docs)-1].UpdatedAt
 	}
 
-	// If we have more documents than the limit, we should return the checkpoint of the last document
-	// If we have fewer documents than the limit, it means we've reached the end, so we can return the latest checkpoint
-	// However, RxDB expects the checkpoint to be the value of the last document in the batch.
-	// If the batch is empty, we should return the requested checkpoint (or the latest known checkpoint if we knew it, but we don't).
-	// The current implementation is correct for non-empty batches.
-	// For empty batches, returning req.Checkpoint is also correct as it indicates no progress.
-
 	return &storage.ReplicationPullResponse{
 		Documents:  docs,
 		Checkpoint: newCheckpoint,
@@ -300,7 +288,6 @@ func (e *Engine) Push(ctx context.Context, tenant string, req storage.Replicatio
 
 	for _, change := range req.Changes {
 		doc := change.Doc
-		// Ensure collection matches
 		doc.Collection = req.Collection
 
 		if doc.Fullpath == "" {
@@ -314,21 +301,10 @@ func (e *Engine) Push(ctx context.Context, tenant string, req storage.Replicatio
 			}
 		}
 
-		// Try to replace (Upsert)
-		// If version is provided, it acts as CAS.
-		// If not, we might want to force overwrite or check existence.
-		// RxDB usually sends the document state it assumes.
-
-		// Strategy:
-		// 1. Try to Get existing doc.
-		// 2. If not found, Create.
-		// 3. If found, check version/conflict.
-
 		existing, err := e.storage.Get(ctx, tenant, doc.Fullpath)
 		if err != nil {
 			if err == model.ErrNotFound {
 				if err := e.storage.Create(ctx, tenant, doc); err != nil {
-					// If create fails (race condition), treat as conflict
 					conflicts = append(conflicts, doc)
 				}
 				continue
@@ -336,12 +312,8 @@ func (e *Engine) Push(ctx context.Context, tenant string, req storage.Replicatio
 			return nil, err
 		}
 
-		// Conflict detection
-		// If incoming doc has a version, check if it matches existing.
-		// Or simply overwrite if "last write wins" is desired.
-		// For now, let's use strict version checking if version > 0.
 		if change.BaseVersion != nil && existing.Version != *change.BaseVersion {
-			conflicts = append(conflicts, existing) // Return server state
+			conflicts = append(conflicts, existing)
 			continue
 		}
 
@@ -358,19 +330,14 @@ func (e *Engine) Push(ctx context.Context, tenant string, req storage.Replicatio
 		if doc.Deleted {
 			if err := e.storage.Delete(ctx, tenant, doc.Fullpath, filters); err != nil {
 				if err == model.ErrPreconditionFailed {
-					// Fetch latest to return as conflict
 					latest, _ := e.storage.Get(ctx, tenant, doc.Fullpath)
 					if latest != nil {
 						conflicts = append(conflicts, latest)
 					}
 				} else if err == model.ErrNotFound {
-					// Check if it exists (conflict) or really not found (success)
 					latest, getErr := e.storage.Get(ctx, tenant, doc.Fullpath)
 					if getErr == nil && latest != nil {
-						// It exists, so it was a version mismatch (conflict)
 						conflicts = append(conflicts, latest)
-					} else {
-						// Really not found, treat as success (idempotent delete)
 					}
 				} else {
 					return nil, err
@@ -382,7 +349,6 @@ func (e *Engine) Push(ctx context.Context, tenant string, req storage.Replicatio
 		// Update
 		if err := e.storage.Update(ctx, tenant, doc.Fullpath, doc.Data, filters); err != nil {
 			if err == model.ErrPreconditionFailed {
-				// Fetch latest to return as conflict
 				latest, _ := e.storage.Get(ctx, tenant, doc.Fullpath)
 				if latest != nil {
 					conflicts = append(conflicts, latest)

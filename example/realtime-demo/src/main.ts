@@ -72,6 +72,20 @@ function addToData(panelId: number, delta: any) {
     }
 }
 
+// Helper function to signup or login
+async function signupOrLogin(username: string, password: string): Promise<void> {
+    // Try signup first, ignore if user already exists
+    try {
+        await fetch(`${API_BASE}/auth/v1/signup`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password, tenant: 'default' })
+        });
+    } catch (e) {
+        // Ignore signup errors (user may already exist)
+    }
+}
+
 // Quick connect both clients
 (window as any).quickConnect = async function() {
     const collection = (document.getElementById('collection') as HTMLInputElement).value;
@@ -79,12 +93,37 @@ function addToData(panelId: number, delta: any) {
     btn.disabled = true;
     btn.textContent = '⏳ Connecting...';
     
+    // Disconnect existing connections first
+    for (const panelId of [1, 2]) {
+        if (clients[panelId].syntrix) {
+            try {
+                clients[panelId].syntrix!.realtime().disconnect();
+            } catch (e) {
+                // Ignore disconnect errors
+            }
+            clients[panelId].syntrix = null;
+            clients[panelId].connected = false;
+            updateStatus(panelId, 'disconnected');
+        }
+        
+        // Clear Client Received area
+        const dataEl = document.getElementById(`data${panelId}`)!;
+        dataEl.innerHTML = '<div class="empty-state">No messages yet</div>';
+        
+        // Clear log area
+        const logEl = document.getElementById(`log${panelId}`)!;
+        logEl.innerHTML = '';
+    }
+    
     try {
         for (const panelId of [1, 2]) {
             const username = (document.getElementById(`username${panelId}`) as HTMLInputElement).value;
             const password = 'password_' + username; // Auto-generate password (min 8 chars)
             
-            const syntrix = new SyntrixClient(API_BASE);
+            // Ensure user exists (signup if needed)
+            await signupOrLogin(username, password);
+            
+            const syntrix = new SyntrixClient(API_BASE, { tenantId: 'default' });
             await syntrix.login(username, password);
             clients[panelId].syntrix = syntrix;
             log(panelId, `✅ Logged in as ${username}`, 'event');
@@ -154,7 +193,11 @@ function addToData(panelId: number, delta: any) {
     
     try {
         log(panelId, `Logging in as ${username}...`, 'info');
-        const syntrix = new SyntrixClient(API_BASE);
+        
+        // Ensure user exists (signup if needed)
+        await signupOrLogin(username, password);
+        
+        const syntrix = new SyntrixClient(API_BASE, { tenantId: 'default' });
         await syntrix.login(username, password);
         clients[panelId].syntrix = syntrix;
         log(panelId, `✅ Logged in`, 'event');

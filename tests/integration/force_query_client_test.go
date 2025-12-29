@@ -83,7 +83,7 @@ func TestIntegration_ForceQueryClient_API(t *testing.T) {
 
 	token := env.GetToken(t, "force-user", "user")
 
-	// Perform create through API; should hit stubbed query service via query.NewClient
+	// Perform create through API; should hit stubbed query service via engine.NewClient
 	body := map[string]interface{}{"msg": "hello"}
 	b, _ := json.Marshal(body)
 	req, err := http.NewRequest(http.MethodPost, env.APIURL+"/api/v1/forced", bytes.NewBuffer(b))

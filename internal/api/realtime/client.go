@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/codetrek/syntrix/internal/engine"
 	"github.com/codetrek/syntrix/internal/identity"
-	"github.com/codetrek/syntrix/internal/query"
 	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/pkg/model"
 
@@ -77,7 +77,7 @@ func safeCheckOrigin(r *http.Request) bool {
 // Client is a middleman between the websocket connection and the hub.
 type Client struct {
 	hub          *Hub
-	queryService query.Service
+	queryService engine.Service
 	auth         identity.AuthN
 	cfg          Config
 
@@ -405,7 +405,7 @@ func checkAllowedOrigin(origin string, reqHost string, cfg Config, credentialed 
 }
 
 // ServeReplicationStream handles websocket requests from the peer.
-func ServeWs(hub *Hub, qs query.Service, auth identity.AuthN, cfg Config, w http.ResponseWriter, r *http.Request) {
+func ServeWs(hub *Hub, qs engine.Service, auth identity.AuthN, cfg Config, w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(r.Context())
 
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -441,7 +441,7 @@ func ServeWs(hub *Hub, qs query.Service, auth identity.AuthN, cfg Config, w http
 }
 
 // ServeSSE handles Server-Sent Events requests.
-func ServeSSE(hub *Hub, qs query.Service, auth identity.AuthN, cfg Config, w http.ResponseWriter, r *http.Request) {
+func ServeSSE(hub *Hub, qs engine.Service, auth identity.AuthN, cfg Config, w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	origin := r.Header.Get("Origin")

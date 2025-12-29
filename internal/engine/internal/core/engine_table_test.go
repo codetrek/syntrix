@@ -1,4 +1,4 @@
-package query
+package core
 
 import (
 	"context"
@@ -68,7 +68,7 @@ func TestEngine_GetDocument_TableDriven(t *testing.T) {
 			if tc.mockSetup != nil {
 				tc.mockSetup(mockStorage)
 			}
-			engine := NewEngine(mockStorage, "http://mock-csp")
+			engine := New(mockStorage, "http://mock-csp")
 			ctx := context.Background()
 
 			doc, err := engine.GetDocument(ctx, "default", tc.path)
@@ -148,7 +148,7 @@ func TestEngine_CreateDocument_TableDriven(t *testing.T) {
 			if tc.mockSetup != nil {
 				tc.mockSetup(mockStorage)
 			}
-			engine := NewEngine(mockStorage, "http://mock-csp")
+			engine := New(mockStorage, "http://mock-csp")
 			ctx := context.Background()
 
 			err := engine.CreateDocument(ctx, "default", tc.doc)
@@ -270,7 +270,7 @@ func TestEngine_ReplaceDocument_TableDriven(t *testing.T) {
 			if tc.mockSetup != nil {
 				tc.mockSetup(mockStorage)
 			}
-			engine := NewEngine(mockStorage, "http://mock-csp")
+			engine := New(mockStorage, "http://mock-csp")
 			ctx := context.Background()
 
 			doc, err := engine.ReplaceDocument(ctx, "default", tc.doc, tc.filters)
@@ -352,7 +352,7 @@ func TestEngine_PatchDocument_TableDriven(t *testing.T) {
 			if tc.mockSetup != nil {
 				tc.mockSetup(mockStorage)
 			}
-			engine := NewEngine(mockStorage, "http://mock-csp")
+			engine := New(mockStorage, "http://mock-csp")
 			ctx := context.Background()
 
 			doc, err := engine.PatchDocument(ctx, "default", tc.doc, tc.filters)
@@ -423,7 +423,7 @@ func TestEngine_Pull_TableDriven(t *testing.T) {
 			if tc.mockSetup != nil {
 				tc.mockSetup(mockStorage)
 			}
-			engine := NewEngine(mockStorage, "http://mock-csp")
+			engine := New(mockStorage, "http://mock-csp")
 			ctx := context.Background()
 
 			resp, err := engine.Pull(ctx, "default", tc.req)
@@ -489,7 +489,7 @@ func TestEngine_Push_TableDriven(t *testing.T) {
 			if tc.mockSetup != nil {
 				tc.mockSetup(mockStorage)
 			}
-			engine := NewEngine(mockStorage, "http://mock-csp")
+			engine := New(mockStorage, "http://mock-csp")
 			ctx := context.Background()
 
 			resp, err := engine.Push(ctx, "default", tc.req)

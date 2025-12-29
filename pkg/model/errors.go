@@ -13,4 +13,7 @@ var (
 	ErrPermissionDenied = errors.New("permission denied")
 	// ErrInvalidQuery is returned when a query is malformed
 	ErrInvalidQuery = errors.New("invalid query")
+	// ErrIndexNotReady is returned when the index layer is unavailable or rebuilding.
+	// This error is a placeholder for future index layer implementation (Task 015).
+	ErrIndexNotReady = errors.New("index not ready")
 )
