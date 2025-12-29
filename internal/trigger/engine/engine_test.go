@@ -110,77 +110,338 @@ func TestClose(t *testing.T) {
 }
 
 func TestStart_WatchError(t *testing.T) {
-mockWatcher := new(MockWatcher)
-e := &defaultTriggerEngine{
-watcher: mockWatcher,
-}
+	mockWatcher := new(MockWatcher)
+	e := &defaultTriggerEngine{
+		watcher: mockWatcher,
+	}
 
-mockWatcher.On("Watch", mock.Anything).Return(nil, assert.AnError)
+	mockWatcher.On("Watch", mock.Anything).Return(nil, assert.AnError)
 
-err := e.Start(context.Background())
-assert.Error(t, err)
-assert.Equal(t, assert.AnError, err)
-mockWatcher.AssertExpectations(t)
+	err := e.Start(context.Background())
+	assert.Error(t, err)
+	assert.Equal(t, assert.AnError, err)
+	mockWatcher.AssertExpectations(t)
 }
 
 func TestStart_EvaluateError(t *testing.T) {
-mockEvaluator := new(MockEvaluator)
-mockWatcher := new(MockWatcher)
-mockPublisher := new(MockPublisher)
+	mockEvaluator := new(MockEvaluator)
+	mockWatcher := new(MockWatcher)
+	mockPublisher := new(MockPublisher)
 
-e := &defaultTriggerEngine{
-evaluator: mockEvaluator,
-watcher:   mockWatcher,
-publisher: mockPublisher,
+	e := &defaultTriggerEngine{
+		evaluator: mockEvaluator,
+		watcher:   mockWatcher,
+		publisher: mockPublisher,
+	}
+
+	// Setup triggers
+	trig := &trigger.Trigger{
+		ID:         "t1",
+		Tenant:     "tenant1",
+		Collection: "users",
+		Events:     []string{"create"},
+		URL:        "http://example.com",
+	}
+	e.LoadTriggers([]*trigger.Trigger{trig})
+
+	// Setup watcher channel
+	eventCh := make(chan storage.Event)
+	mockWatcher.On("Watch", mock.Anything).Return((<-chan storage.Event)(eventCh), nil)
+
+	// Setup event
+	evt := storage.Event{
+		Type: storage.EventCreate,
+		Document: &storage.Document{
+			Id:         "doc1",
+			Collection: "users",
+			Data:       map[string]interface{}{"foo": "bar"},
+		},
+	}
+
+	// Expect evaluation error
+	mockEvaluator.On("Evaluate", mock.Anything, trig, &evt).Return(false, assert.AnError)
+
+	// Run Start in background
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error)
+	go func() {
+		errCh <- e.Start(ctx)
+	}()
+
+	// Send event
+	eventCh <- evt
+
+	// Give some time for processing
+	time.Sleep(100 * time.Millisecond)
+
+	// Stop
+	cancel()
+	close(eventCh)
+
+	err := <-errCh
+	assert.NoError(t, err)
+
+	mockEvaluator.AssertExpectations(t)
+	mockWatcher.AssertExpectations(t)
 }
 
-// Setup triggers
-trig := &trigger.Trigger{
-ID:         "t1",
-Tenant:     "tenant1",
-Collection: "users",
-Events:     []string{"create"},
-URL:        "http://example.com",
+func TestStart_NilDocumentAndBefore(t *testing.T) {
+	mockEvaluator := new(MockEvaluator)
+	mockWatcher := new(MockWatcher)
+
+	e := &defaultTriggerEngine{
+		evaluator: mockEvaluator,
+		watcher:   mockWatcher,
+	}
+
+	// Setup watcher channel
+	eventCh := make(chan storage.Event)
+	mockWatcher.On("Watch", mock.Anything).Return((<-chan storage.Event)(eventCh), nil)
+
+	// Setup event with nil Document and Before
+	evt := storage.Event{
+		Type:     storage.EventDelete,
+		Document: nil,
+		Before:   nil,
+	}
+
+	// Run Start in background
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error)
+	go func() {
+		errCh <- e.Start(ctx)
+	}()
+
+	// Send event
+	eventCh <- evt
+
+	// Give some time for processing
+	time.Sleep(100 * time.Millisecond)
+
+	// Stop
+	cancel()
+	close(eventCh)
+
+	err := <-errCh
+	assert.NoError(t, err)
+	// Should have logged warning and skipped
+	mockWatcher.AssertExpectations(t)
 }
-e.LoadTriggers([]*trigger.Trigger{trig})
 
-// Setup watcher channel
-eventCh := make(chan storage.Event)
-mockWatcher.On("Watch", mock.Anything).Return((<-chan storage.Event)(eventCh), nil)
+func TestStart_PublishError(t *testing.T) {
+	mockEvaluator := new(MockEvaluator)
+	mockWatcher := new(MockWatcher)
+	mockPublisher := new(MockPublisher)
 
-// Setup event
-evt := storage.Event{
-Type: storage.EventCreate,
-Document: &storage.Document{
-Id:         "doc1",
-Collection: "users",
-Data:       map[string]interface{}{"foo": "bar"},
-},
+	e := &defaultTriggerEngine{
+		evaluator: mockEvaluator,
+		watcher:   mockWatcher,
+		publisher: mockPublisher,
+	}
+
+	trig := &trigger.Trigger{
+		ID:         "t1",
+		Tenant:     "tenant1",
+		Collection: "users",
+		Events:     []string{"create"},
+		URL:        "http://example.com",
+	}
+	e.LoadTriggers([]*trigger.Trigger{trig})
+
+	eventCh := make(chan storage.Event)
+	mockWatcher.On("Watch", mock.Anything).Return((<-chan storage.Event)(eventCh), nil)
+
+	evt := storage.Event{
+		Type: storage.EventCreate,
+		Document: &storage.Document{
+			Id:         "doc1",
+			Collection: "users",
+			Data:       map[string]interface{}{"foo": "bar"},
+		},
+	}
+
+	mockEvaluator.On("Evaluate", mock.Anything, trig, &evt).Return(true, nil)
+	mockPublisher.On("Publish", mock.Anything, mock.Anything).Return(assert.AnError)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error)
+	go func() {
+		errCh <- e.Start(ctx)
+	}()
+
+	eventCh <- evt
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	close(eventCh)
+
+	err := <-errCh
+	assert.NoError(t, err) // Continues despite publish error
+	mockPublisher.AssertExpectations(t)
 }
 
-// Expect evaluation error
-mockEvaluator.On("Evaluate", mock.Anything, trig, &evt).Return(false, assert.AnError)
+func TestStart_SaveCheckpointError(t *testing.T) {
+	mockEvaluator := new(MockEvaluator)
+	mockWatcher := new(MockWatcher)
+	mockPublisher := new(MockPublisher)
 
-// Run Start in background
-ctx, cancel := context.WithCancel(context.Background())
-errCh := make(chan error)
-go func() {
-errCh <- e.Start(ctx)
-}()
+	e := &defaultTriggerEngine{
+		evaluator: mockEvaluator,
+		watcher:   mockWatcher,
+		publisher: mockPublisher,
+	}
 
-// Send event
-eventCh <- evt
+	trig := &trigger.Trigger{
+		ID:         "t1",
+		Tenant:     "tenant1",
+		Collection: "users",
+		Events:     []string{"create"},
+		URL:        "http://example.com",
+	}
+	e.LoadTriggers([]*trigger.Trigger{trig})
 
-// Give some time for processing
-time.Sleep(100 * time.Millisecond)
+	eventCh := make(chan storage.Event)
+	mockWatcher.On("Watch", mock.Anything).Return((<-chan storage.Event)(eventCh), nil)
 
-// Stop
-cancel()
-close(eventCh)
+	evt := storage.Event{
+		Type: storage.EventCreate,
+		Document: &storage.Document{
+			Id:         "doc1",
+			Collection: "users",
+			Data:       map[string]interface{}{"foo": "bar"},
+		},
+		ResumeToken: "token1",
+	}
 
-err := <-errCh
-assert.NoError(t, err)
+	mockEvaluator.On("Evaluate", mock.Anything, trig, &evt).Return(false, nil)
+	mockWatcher.On("SaveCheckpoint", mock.Anything, "token1").Return(assert.AnError)
 
-mockEvaluator.AssertExpectations(t)
-mockWatcher.AssertExpectations(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error)
+	go func() {
+		errCh <- e.Start(ctx)
+	}()
+
+	eventCh <- evt
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	close(eventCh)
+
+	err := <-errCh
+	assert.NoError(t, err)
+	mockWatcher.AssertExpectations(t)
+}
+
+func TestStart_BeforeOnlyEvent(t *testing.T) {
+	mockEvaluator := new(MockEvaluator)
+	mockWatcher := new(MockWatcher)
+	mockPublisher := new(MockPublisher)
+
+	e := &defaultTriggerEngine{
+		evaluator: mockEvaluator,
+		watcher:   mockWatcher,
+		publisher: mockPublisher,
+	}
+
+	trig := &trigger.Trigger{
+		ID:         "t1",
+		Tenant:     "tenant1",
+		Collection: "users",
+		Events:     []string{"delete"},
+		URL:        "http://example.com",
+	}
+	e.LoadTriggers([]*trigger.Trigger{trig})
+
+	eventCh := make(chan storage.Event)
+	mockWatcher.On("Watch", mock.Anything).Return((<-chan storage.Event)(eventCh), nil)
+
+	// Delete event with only Before (Document is nil)
+	evt := storage.Event{
+		Type:     storage.EventDelete,
+		Document: nil,
+		Before: &storage.Document{
+			Id:         "doc1",
+			Collection: "users",
+			Data:       map[string]interface{}{"foo": "bar"},
+		},
+	}
+
+	mockEvaluator.On("Evaluate", mock.Anything, trig, &evt).Return(true, nil)
+	mockPublisher.On("Publish", mock.Anything, mock.MatchedBy(func(task *types.DeliveryTask) bool {
+		return task.DocKey == "doc1" && task.Collection == "users"
+	})).Return(nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error)
+	go func() {
+		errCh <- e.Start(ctx)
+	}()
+
+	eventCh <- evt
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	close(eventCh)
+
+	err := <-errCh
+	assert.NoError(t, err)
+	mockPublisher.AssertExpectations(t)
+}
+
+func TestClose_WithWatcherError(t *testing.T) {
+	mockWatcher := new(MockWatcher)
+	mockWatcher.On("Close").Return(assert.AnError)
+
+	e := &defaultTriggerEngine{
+		watcher: mockWatcher,
+	}
+
+	err := e.Close()
+	assert.Error(t, err)
+	mockWatcher.AssertExpectations(t)
+}
+
+func TestClose_WithPublisherError(t *testing.T) {
+	mockPublisher := new(MockPublisher)
+	mockPublisher.On("Close").Return(assert.AnError)
+
+	e := &defaultTriggerEngine{
+		publisher: mockPublisher,
+	}
+
+	err := e.Close()
+	assert.Error(t, err)
+	mockPublisher.AssertExpectations(t)
+}
+
+func TestClose_WithBothErrors(t *testing.T) {
+	mockWatcher := new(MockWatcher)
+	mockPublisher := new(MockPublisher)
+	mockWatcher.On("Close").Return(assert.AnError)
+	mockPublisher.On("Close").Return(assert.AnError)
+
+	e := &defaultTriggerEngine{
+		watcher:   mockWatcher,
+		publisher: mockPublisher,
+	}
+
+	err := e.Close()
+	assert.Error(t, err)
+	mockWatcher.AssertExpectations(t)
+	mockPublisher.AssertExpectations(t)
+}
+
+func TestClose_Success(t *testing.T) {
+	mockWatcher := new(MockWatcher)
+	mockPublisher := new(MockPublisher)
+	mockWatcher.On("Close").Return(nil)
+	mockPublisher.On("Close").Return(nil)
+
+	e := &defaultTriggerEngine{
+		watcher:   mockWatcher,
+		publisher: mockPublisher,
+	}
+
+	err := e.Close()
+	assert.NoError(t, err)
+	mockWatcher.AssertExpectations(t)
+	mockPublisher.AssertExpectations(t)
 }

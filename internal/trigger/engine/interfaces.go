@@ -28,8 +28,9 @@ type TriggerEngine interface {
 
 // TriggerFactory creates TriggerEngine instances.
 type TriggerFactory interface {
-	// Engine returns the TriggerEngine instance created by this factory.
-	Engine() TriggerEngine
+	// Engine returns a new TriggerEngine instance.
+	// Returns an error if the engine cannot be created.
+	Engine() (TriggerEngine, error)
 
 	// Consumer returns a new TaskConsumer.
 	Consumer(numWorkers int) (TaskConsumer, error)

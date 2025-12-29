@@ -93,3 +93,9 @@ func (p *natsPublisher) Publish(ctx context.Context, task *types.DeliveryTask) e
 	p.metrics.ObservePublishLatency(task.Tenant, task.Collection, time.Since(start))
 	return nil
 }
+
+// Close releases resources held by the publisher.
+// The publisher does not own the NATS connection, so this is a no-op.
+func (p *natsPublisher) Close() error {
+	return nil
+}

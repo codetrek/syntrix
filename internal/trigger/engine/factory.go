@@ -15,7 +15,9 @@ import (
 
 var (
 	newTaskPublisher = pubsub.NewTaskPublisher
-	newTaskConsumer  = pubsub.NewTaskConsumer
+	newTaskConsumer  = func(nc *nats.Conn, w worker.DeliveryWorker, numWorkers int, metrics types.Metrics, opts ...pubsub.ConsumerOption) (pubsub.TaskConsumer, error) {
+		return pubsub.NewTaskConsumer(nc, w, numWorkers, metrics, opts...)
+	}
 )
 
 // FactoryOption configures the factory.
@@ -76,21 +78,21 @@ func NewFactory(store storage.DocumentStore, nats *nats.Conn, auth identity.Auth
 }
 
 // Engine returns a new TriggerEngine.
-func (f *defaultTriggerFactory) Engine() TriggerEngine {
-eval, err := evaluator.NewEvaluator()
-if err != nil {
-panic(err)
-}
+func (f *defaultTriggerFactory) Engine() (TriggerEngine, error) {
+	eval, err := evaluator.NewEvaluator()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create evaluator: %w", err)
+	}
 
-w := watcher.NewWatcher(f.store, f.tenant, watcher.WatcherOptions{
-StartFromNow: f.startFromNow,
-})
+	w := watcher.NewWatcher(f.store, f.tenant, watcher.WatcherOptions{
+		StartFromNow: f.startFromNow,
+	})
 
 	var pub pubsub.TaskPublisher
 	if f.nats != nil {
 		p, err := newTaskPublisher(f.nats, f.metrics)
 		if err != nil {
-			panic(err)
+			return nil, fmt.Errorf("failed to create publisher: %w", err)
 		}
 		pub = p
 	}
@@ -99,7 +101,7 @@ StartFromNow: f.startFromNow,
 		evaluator: eval,
 		watcher:   w,
 		publisher: pub,
-	}
+	}, nil
 }
 
 // Consumer returns a new TaskConsumer.
@@ -113,7 +115,12 @@ func (f *defaultTriggerFactory) Consumer(numWorkers int) (TaskConsumer, error) {
 	return newTaskConsumer(f.nats, w, numWorkers, f.metrics)
 }
 
-// Close releases resources.
+// Close releases resources held by the factory.
+// Note: The factory does NOT own the NATS connection - it is the caller's
+// responsibility to manage the NATS connection lifecycle. This design allows
+// the NATS connection to be shared across multiple components.
 func (f *defaultTriggerFactory) Close() error {
+	// Factory does not own any resources that need explicit cleanup.
+	// The NATS connection is managed by the caller (ServiceManager).
 	return nil
 }

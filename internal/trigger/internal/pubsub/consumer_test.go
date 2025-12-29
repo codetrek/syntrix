@@ -270,3 +270,26 @@ msg.AssertExpectations(t)
 // Worker should NOT be called
 mockWorker.AssertNotCalled(t, "ProcessTask")
 }
+
+func TestWithChannelBufferSize(t *testing.T) {
+	js := new(MockJetStream)
+	mockWorker := new(MockWorker)
+
+	c, err := NewTaskConsumerFromJS(js, mockWorker, 1, nil, WithChannelBufferSize(200))
+	assert.NoError(t, err)
+
+	// Verify the consumer was created with custom buffer size
+	nc := c.(*natsConsumer)
+	assert.Equal(t, 200, nc.channelBufSize)
+}
+
+func TestWithChannelBufferSize_Default(t *testing.T) {
+	js := new(MockJetStream)
+	mockWorker := new(MockWorker)
+
+	c, err := NewTaskConsumerFromJS(js, mockWorker, 1, nil)
+	assert.NoError(t, err)
+
+	nc := c.(*natsConsumer)
+	assert.Equal(t, 100, nc.channelBufSize) // Default value
+}

@@ -51,7 +51,8 @@ func TestFactory_Engine_Success(t *testing.T) {
 	// If nats is nil, Engine() should succeed (with nil publisher)
 	f, err := NewFactory(nil, nil, nil)
 	assert.NoError(t, err)
-	e := f.Engine()
+	e, err := f.Engine()
+	assert.NoError(t, err)
 	assert.NotNil(t, e)
 }
 
@@ -72,7 +73,8 @@ func TestFactory_Engine_WithNATS(t *testing.T) {
 	f, err := NewFactory(nil, &nats.Conn{}, nil)
 	assert.NoError(t, err)
 
-	e := f.Engine()
+	e, err := f.Engine()
+	assert.NoError(t, err)
 	assert.NotNil(t, e)
 }
 
@@ -91,7 +93,7 @@ func TestFactory_Consumer_Success(t *testing.T) {
 	defer func() { newTaskConsumer = originalNewTaskConsumer }()
 
 	mockConsumer := new(MockTaskConsumer)
-	newTaskConsumer = func(nc *nats.Conn, w worker.DeliveryWorker, numWorkers int, metrics types.Metrics) (pubsub.TaskConsumer, error) {
+	newTaskConsumer = func(nc *nats.Conn, w worker.DeliveryWorker, numWorkers int, metrics types.Metrics, opts ...pubsub.ConsumerOption) (pubsub.TaskConsumer, error) {
 		return mockConsumer, nil
 	}
 

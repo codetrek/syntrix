@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -32,7 +33,7 @@ type HTTPWorker struct {
 func NewDeliveryWorker(auth identity.AuthN, secrets SecretProvider, opts HTTPClientOptions, metrics types.Metrics) DeliveryWorker {
 	timeout := opts.Timeout
 	if timeout == 0 {
-		timeout = 5 * time.Second
+		timeout = types.DefaultHTTPTimeout
 	}
 	if metrics == nil {
 		metrics = &types.NoopMetrics{}
@@ -79,22 +80,25 @@ func (w *HTTPWorker) ProcessTask(ctx context.Context, task *types.DeliveryTask) 
 		req.Header.Set(k, v)
 	}
 
-	// Add Signature
-	secret := "dummy-secret"
-	if w.secrets != nil && task.SecretsRef != "" {
-		s, err := w.secrets.GetSecret(ctx, task.SecretsRef)
+	// Add Signature (only if SecretsRef is configured)
+	if task.SecretsRef != "" {
+		if w.secrets == nil {
+			log.Printf("[Warning] SecretsRef %s specified but no SecretProvider configured", task.SecretsRef)
+			w.metrics.IncDeliveryFailure(task.Tenant, task.Collection, 0, true)
+			return &types.FatalError{Err: fmt.Errorf("no secret provider configured for SecretsRef %s", task.SecretsRef)}
+		}
+		secret, err := w.secrets.GetSecret(ctx, task.SecretsRef)
 		if err != nil {
 			// If we can't get the secret, should we fail fatally or retry?
 			// Probably retry, as it might be a temporary issue with secret store.
 			w.metrics.IncDeliveryFailure(task.Tenant, task.Collection, 0, false)
 			return fmt.Errorf("failed to resolve secret %s: %w", task.SecretsRef, err)
 		}
-		secret = s
+		timestamp := time.Now().Unix()
+		signature := w.signPayload(payload, secret, timestamp)
+		req.Header.Set("X-Syntrix-Signature", signature)
 	}
-
-	timestamp := time.Now().Unix()
-	signature := w.signPayload(payload, secret, timestamp)
-	req.Header.Set("X-Syntrix-Signature", signature)
+	// If SecretsRef is empty, skip signature header entirely (webhook may not require it)
 
 	resp, err := w.client.Do(req)
 	if err != nil {

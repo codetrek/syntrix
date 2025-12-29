@@ -15,19 +15,35 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// DefaultChannelBufferSize is the default buffer size for worker channels.
+const DefaultChannelBufferSize = 100
+
 // natsConsumer consumes delivery tasks from NATS and dispatches them to the worker.
 type natsConsumer struct {
-	js          jetstream.JetStream
-	worker      worker.DeliveryWorker
-	stream      string
-	numWorkers  int
-	workerChans []chan jetstream.Msg
-	wg          sync.WaitGroup
-	metrics     types.Metrics
+	js             jetstream.JetStream
+	worker         worker.DeliveryWorker
+	stream         string
+	numWorkers     int
+	channelBufSize int
+	workerChans    []chan jetstream.Msg
+	wg             sync.WaitGroup
+	metrics        types.Metrics
+}
+
+// ConsumerOption configures the consumer.
+type ConsumerOption func(*natsConsumer)
+
+// WithChannelBufferSize sets the buffer size for worker channels.
+func WithChannelBufferSize(size int) ConsumerOption {
+	return func(c *natsConsumer) {
+		if size > 0 {
+			c.channelBufSize = size
+		}
+	}
 }
 
 // NewTaskConsumer creates a new TaskConsumer.
-func NewTaskConsumer(nc *nats.Conn, w worker.DeliveryWorker, numWorkers int, metrics types.Metrics) (TaskConsumer, error) {
+func NewTaskConsumer(nc *nats.Conn, w worker.DeliveryWorker, numWorkers int, metrics types.Metrics, opts ...ConsumerOption) (TaskConsumer, error) {
 	if nc == nil {
 		return nil, fmt.Errorf("nats connection cannot be nil")
 	}
@@ -37,11 +53,11 @@ func NewTaskConsumer(nc *nats.Conn, w worker.DeliveryWorker, numWorkers int, met
 		return nil, err
 	}
 
-	return NewTaskConsumerFromJS(js, w, numWorkers, metrics)
+	return NewTaskConsumerFromJS(js, w, numWorkers, metrics, opts...)
 }
 
 // NewTaskConsumerFromJS creates a new TaskConsumer using an existing JetStream context.
-func NewTaskConsumerFromJS(js jetstream.JetStream, w worker.DeliveryWorker, numWorkers int, metrics types.Metrics) (TaskConsumer, error) {
+func NewTaskConsumerFromJS(js jetstream.JetStream, w worker.DeliveryWorker, numWorkers int, metrics types.Metrics, opts ...ConsumerOption) (TaskConsumer, error) {
 	if numWorkers <= 0 {
 		numWorkers = 16
 	}
@@ -49,13 +65,20 @@ func NewTaskConsumerFromJS(js jetstream.JetStream, w worker.DeliveryWorker, numW
 		metrics = &types.NoopMetrics{}
 	}
 
-	return &natsConsumer{
-		js:         js,
-		worker:     w,
-		stream:     "TRIGGERS",
-		numWorkers: numWorkers,
-		metrics:    metrics,
-	}, nil
+	c := &natsConsumer{
+		js:             js,
+		worker:         w,
+		stream:         "TRIGGERS",
+		numWorkers:     numWorkers,
+		channelBufSize: DefaultChannelBufferSize,
+		metrics:        metrics,
+	}
+
+	for _, opt := range opts {
+		opt(c)
+	}
+
+	return c, nil
 }
 
 // Start begins consuming messages. It blocks until the context is cancelled.
@@ -83,7 +106,7 @@ func (c *natsConsumer) Start(ctx context.Context) error {
 	// Initialize Worker Pool
 	c.workerChans = make([]chan jetstream.Msg, c.numWorkers)
 	for i := 0; i < c.numWorkers; i++ {
-		c.workerChans[i] = make(chan jetstream.Msg, 100)
+		c.workerChans[i] = make(chan jetstream.Msg, c.channelBufSize)
 		c.wg.Add(1)
 		go c.workerLoop(ctx, i)
 	}
@@ -199,7 +222,7 @@ func (c *natsConsumer) processMsg(ctx context.Context, msg jetstream.Msg) error 
 
 	timeout := time.Duration(task.Timeout)
 	if timeout == 0 {
-		timeout = 10 * time.Second
+		timeout = types.DefaultTaskTimeout
 	}
 	taskCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

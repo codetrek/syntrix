@@ -55,12 +55,8 @@ func TestDeliveryWorker_ProcessTask(t *testing.T) {
 		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 		assert.Equal(t, "Syntrix-Trigger-Service/1.0", r.Header.Get("User-Agent"))
 		assert.Equal(t, "bar", r.Header.Get("X-Custom-Header"))
-		assert.NotEmpty(t, r.Header.Get("X-Syntrix-Signature"))
-
-		// Verify Signature Format
-		sig := r.Header.Get("X-Syntrix-Signature")
-		assert.True(t, strings.HasPrefix(sig, "t="))
-		assert.Contains(t, sig, ",v1=")
+		// No signature when SecretsRef is empty
+		assert.Empty(t, r.Header.Get("X-Syntrix-Signature"))
 
 		// Verify Body
 		var task types.DeliveryTask
@@ -75,7 +71,7 @@ func TestDeliveryWorker_ProcessTask(t *testing.T) {
 	// 2. Setup Worker
 	worker := NewDeliveryWorker(nil, nil, HTTPClientOptions{}, nil)
 
-	// 3. Create Task
+	// 3. Create Task (no SecretsRef, so no signature)
 	task := &types.DeliveryTask{
 		TriggerID: "trig-1",
 		URL:       server.URL,
@@ -126,6 +122,59 @@ func TestDeliveryWorker_ProcessTask_FatalError(t *testing.T) {
 	assert.Error(t, err)
 	assert.True(t, types.IsFatal(err))
 	assert.Contains(t, err.Error(), "webhook failed with status: 400")
+}
+
+func TestDeliveryWorker_ProcessTask_WithSignature(t *testing.T) {
+	// 1. Setup Mock Server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify Signature Header exists when SecretsRef is provided
+		sig := r.Header.Get("X-Syntrix-Signature")
+		assert.NotEmpty(t, sig)
+		assert.True(t, strings.HasPrefix(sig, "t="))
+		assert.Contains(t, sig, ",v1=")
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	// 2. Setup Worker with secret provider
+	mockSecrets := &MockSecretProvider{
+		secrets: map[string]string{"my-secret": "test-secret-value"},
+	}
+
+	worker := NewDeliveryWorker(nil, mockSecrets, HTTPClientOptions{}, nil)
+
+	// 3. Create Task with SecretsRef
+	task := &types.DeliveryTask{
+		TriggerID:  "trig-1",
+		URL:        server.URL,
+		SecretsRef: "my-secret",
+	}
+
+	// 4. Execute
+	err := worker.ProcessTask(context.Background(), task)
+	assert.NoError(t, err)
+}
+
+func TestDeliveryWorker_ProcessTask_SecretsRefWithoutProvider(t *testing.T) {
+	// When SecretsRef is provided but no SecretProvider is configured, should fail fatally
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	worker := NewDeliveryWorker(nil, nil, HTTPClientOptions{}, nil)
+
+	task := &types.DeliveryTask{
+		TriggerID:  "trig-1",
+		URL:        server.URL,
+		SecretsRef: "my-secret", // SecretsRef provided but no provider
+	}
+
+	err := worker.ProcessTask(context.Background(), task)
+	assert.Error(t, err)
+	assert.True(t, types.IsFatal(err))
+	assert.Contains(t, err.Error(), "no secret provider configured")
 }
 
 func TestDeliveryWorker_ProcessTask_WithToken(t *testing.T) {

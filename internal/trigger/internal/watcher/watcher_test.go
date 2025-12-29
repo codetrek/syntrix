@@ -137,3 +137,12 @@ func TestSaveCheckpoint_Create(t *testing.T) {
 	assert.NoError(t, err)
 	mockStore.AssertExpectations(t)
 }
+
+func TestClose(t *testing.T) {
+	mockStore := new(MockDocumentStore)
+	w := NewWatcher(mockStore, "tenant1", WatcherOptions{})
+
+	// Close should be a no-op and return nil
+	err := w.Close()
+	assert.NoError(t, err)
+}

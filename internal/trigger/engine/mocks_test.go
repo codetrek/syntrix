@@ -37,6 +37,11 @@ func (m *MockWatcher) SaveCheckpoint(ctx context.Context, token interface{}) err
 	return args.Error(0)
 }
 
+func (m *MockWatcher) Close() error {
+	args := m.Called()
+	return args.Error(0)
+}
+
 // MockPublisher
 type MockPublisher struct {
 	mock.Mock

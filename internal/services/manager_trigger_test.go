@@ -23,12 +23,12 @@ type MockFactory struct {
 	mock.Mock
 }
 
-func (m *MockFactory) Engine() engine.TriggerEngine {
+func (m *MockFactory) Engine() (engine.TriggerEngine, error) {
 	args := m.Called()
 	if args.Get(0) == nil {
-		return nil
+		return nil, args.Error(1)
 	}
-	return args.Get(0).(engine.TriggerEngine)
+	return args.Get(0).(engine.TriggerEngine), args.Error(1)
 }
 
 func (m *MockFactory) Consumer(numWorkers int) (engine.TaskConsumer, error) {
@@ -68,7 +68,7 @@ func TestManager_InitTriggerServices_Success_WithHooks(t *testing.T) {
 	mockFactory.On("Consumer", cfg.Trigger.WorkerCount).Return(cons, nil)
 
 	eval := &fakeEvaluator{}
-	mockFactory.On("Engine").Return(eval)
+	mockFactory.On("Engine").Return(eval, nil)
 
 	err := mgr.initTriggerServices()
 	assert.NoError(t, err)
@@ -131,7 +131,7 @@ func TestManager_InitTriggerServices_EvaluatorOnly_WithRules(t *testing.T) {
 	}
 
 	eval := &fakeEvaluator{}
-	mockFactory.On("Engine").Return(eval)
+	mockFactory.On("Engine").Return(eval, nil)
 
 	err := mgr.initTriggerServices()
 	assert.NoError(t, err)
