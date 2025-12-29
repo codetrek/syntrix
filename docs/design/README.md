@@ -17,6 +17,12 @@ This directory now splits designs into server-side and SDK-focused documents.
 - [server/010_console.md](server/010_console.md) - Console/Dashboard design
 - [server/011_control_plane.md](server/011_control_plane.md) - Control Plane design
 
+## Monitor
+
+- [monitor/000.requirements.md](monitor/000.requirements.md) - Monitoring and observability requirements
+- [monitor/001.architecture.md](monitor/001.architecture.md) - Monitoring architecture and pipeline
+- [monitor/002.pipeline_and_controls.md](monitor/002.pipeline_and_controls.md) - Collector pipeline, controls, schemas, and rollout
+
 ## Automata
 
 - [automata/000_design.md](automata/000_design.md) - The design of automata

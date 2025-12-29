@@ -21,3 +21,4 @@ Index of task planning documents for Syntrix.
 - [011.2025-12-29-consumer-graceful-shutdown.md](011.2025-12-29-consumer-graceful-shutdown.md) — Consumer Graceful Shutdown. Status: Complete.
 - [012.2025-12-29-rest-api-hardening.md](012.2025-12-29-rest-api-hardening.md) — REST API Security Hardening & Code Quality. Status: Completed.
 - [013.2025-12-29-test-coverage-improvements.md](013.2025-12-29-test-coverage-improvements.md) — Test Coverage Improvements. Status: Completed.
+- [014.2025-12-26-query-surface-encapsulation.md](014.2025-12-26-query-surface-encapsulation.md) — Query Surface Encapsulation & HTTP Adapter Refactor. Status: In Progress.
