@@ -192,13 +192,13 @@ match:
 
 	// Wait for startup only for enabled services
 	if opts.RunAPI {
-		waitForPort(t, apiPort)
+		waitForHealth(t, fmt.Sprintf("http://localhost:%d/health", apiPort))
 	}
 	if opts.RunQuery {
-		waitForPort(t, queryPort)
+		waitForHealth(t, fmt.Sprintf("http://localhost:%d/health", queryPort))
 	}
 	if opts.RunCSP {
-		waitForPort(t, cspPort)
+		waitForHealth(t, fmt.Sprintf("http://localhost:%d/health", cspPort))
 	}
 
 	return &ServiceEnv{
@@ -418,18 +418,23 @@ func (e *ServiceEnv) PutDocument(t *testing.T, collection, id string, data map[s
 	return doc
 }
 
-func waitForPort(t *testing.T, port int) {
-	timeout := 5 * time.Second
+func waitForHealth(t *testing.T, url string) {
+	timeout := 10 * time.Second
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", port), 100*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	client := &http.Client{
+		Timeout: 1 * time.Second,
 	}
-	t.Fatalf("Timeout waiting for port %d to be ready", port)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("Timeout waiting for service at %s to be healthy", url)
 }
 
 func getFreePort(t *testing.T) int {
