@@ -46,7 +46,7 @@ jobs:
 
       - name: Test and Coverage
         run: |
-          threshold_func=75.0
+          threshold_func=80.0
           threshold_print=85.0
           threshold_package=85.0
           threshold_total=90.0
