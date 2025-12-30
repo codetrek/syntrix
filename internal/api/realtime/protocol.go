@@ -18,6 +18,7 @@ const (
 	TypeEvent          = "event"
 	TypeSnapshot       = "snapshot"
 	TypeError          = "error"
+	TypeHeartbeat      = "heartbeat"
 )
 
 // BaseMessage is the envelope for all messages

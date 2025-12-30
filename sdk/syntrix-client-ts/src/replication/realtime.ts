@@ -11,6 +11,7 @@ export const MessageType = {
   Event: 'event',
   Snapshot: 'snapshot',
   Error: 'error',
+  Heartbeat: 'heartbeat',
 } as const;
 
 export interface BaseMessage {
@@ -245,12 +246,14 @@ export class RealtimeClient {
 
     switch (msg.type) {
       case MessageType.AuthAck:
-        this.setState('connected');
-        this.callbacks.onConnect?.();
-        // Resubscribe after successful auth
+        // Resubscribe existing subscriptions BEFORE firing onConnect callback
+        // This ensures we only resend subscriptions from before the reconnect,
+        // not new ones that might be added in the onConnect handler
         for (const [subId, options] of this.subscriptions) {
           this.sendSubscribe(subId, options);
         }
+        this.setState('connected');
+        this.callbacks.onConnect?.();
         break;
       case MessageType.Event:
         if (msg.payload) {

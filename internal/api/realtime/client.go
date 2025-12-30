@@ -35,6 +35,11 @@ const (
 // Send pings to peer with this period. Must be less than pongWait.
 var pingPeriod = (pongWait * 9) / 10
 
+// Application-level heartbeat interval.
+// This sends a JSON heartbeat message that browsers can see (unlike WebSocket ping frames).
+// Set to 30s to be well under the SDK's default 90s activity timeout.
+var heartbeatInterval = 30 * time.Second
+
 // Heartbeat interval for SSE clients.
 var sseHeartbeatInterval = 15 * time.Second
 
@@ -264,9 +269,11 @@ func (c *Client) handleAuth(msg BaseMessage) {
 // application ensures that there is at most one writer to a connection by
 // executing all writes from this goroutine.
 func (c *Client) writePump() {
-	ticker := time.NewTicker(pingPeriod)
+	pingTicker := time.NewTicker(pingPeriod)
+	heartbeatTicker := time.NewTicker(heartbeatInterval)
 	defer func() {
-		ticker.Stop()
+		pingTicker.Stop()
+		heartbeatTicker.Stop()
 		c.conn.Close()
 	}()
 	for {
@@ -284,9 +291,18 @@ func (c *Client) writePump() {
 				return
 			}
 
-		case <-ticker.C:
+		case <-pingTicker.C:
+			// WebSocket protocol-level ping (browser auto-responds with pong)
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+
+		case <-heartbeatTicker.C:
+			// Application-level heartbeat (visible to browser's onmessage handler)
+			// This keeps SDK's activity timer updated since browsers don't expose ping/pong frames
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.conn.WriteJSON(BaseMessage{Type: TypeHeartbeat}); err != nil {
 				return
 			}
 		}
