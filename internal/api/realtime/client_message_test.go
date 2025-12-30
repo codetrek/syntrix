@@ -340,6 +340,56 @@ func TestWritePump_SendsPing(t *testing.T) {
 	close(c.send)
 }
 
+func TestWritePump_SendsHeartbeat(t *testing.T) {
+	// Set heartbeat interval to a short duration for testing
+	originalHeartbeat := heartbeatInterval
+	heartbeatInterval = 10 * time.Millisecond
+	defer func() { heartbeatInterval = originalHeartbeat }()
+
+	_ = NewHub()
+	clientCh := make(chan *Client, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		c := &Client{conn: conn, send: make(chan BaseMessage, 1)}
+		clientCh <- c
+		go c.writePump()
+	}))
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	assert.NoError(t, err)
+	defer conn.Close()
+
+	// Read messages until we get a heartbeat
+	heartbeatReceived := false
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	for i := 0; i < 10; i++ {
+		var msg BaseMessage
+		if err := conn.ReadJSON(&msg); err != nil {
+			break
+		}
+		if msg.Type == TypeHeartbeat {
+			heartbeatReceived = true
+			break
+		}
+	}
+
+	assert.True(t, heartbeatReceived, "expected heartbeat message from writePump")
+
+	// Cleanup writePump goroutine
+	var c *Client
+	select {
+	case c = <-clientCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timeout waiting for client connection")
+	}
+	close(c.send)
+}
+
 func TestServeWs_ReadWriteCycle(t *testing.T) {
 	hubCtx, hubCancel := context.WithCancel(context.Background())
 	defer hubCancel()

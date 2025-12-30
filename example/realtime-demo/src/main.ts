@@ -164,6 +164,7 @@ function updateQuickConnectButton() {
                 updateStatus(panelId, 'connected');
                 clients[panelId].connected = true;
                 log(panelId, '✅ Connected', 'event');
+                console.log(`[Client ${panelId}] WebSocket connected at ${new Date().toISOString()}`);
                 updateClientButtons(panelId, true);
                 
                 // Auto subscribe
@@ -178,13 +179,24 @@ function updateQuickConnectButton() {
             rt.on('onDisconnect', () => {
                 updateStatus(panelId, 'disconnected');
                 clients[panelId].connected = false;
-                log(panelId, '🔌 Disconnected', 'info');
+                const lastMsgTime = rt.getLastMessageTime();
+                const timeSinceLastMsg = lastMsgTime ? Date.now() - lastMsgTime : 'N/A';
+                log(panelId, `🔌 Disconnected (last msg: ${timeSinceLastMsg}ms ago)`, 'info');
+                console.log(`[Client ${panelId}] WebSocket disconnected at ${new Date().toISOString()}, last message was ${timeSinceLastMsg}ms ago`);
                 updateClientButtons(panelId, false);
                 updateBothConnectedState();
             });
 
+            rt.on('onStateChange', (state) => {
+                console.log(`[Client ${panelId}] State changed to: ${state} at ${new Date().toISOString()}`);
+                if (state === 'connecting') {
+                    log(panelId, '🔄 Reconnecting...', 'info');
+                }
+            });
+
             rt.on('onError', (error) => {
                 log(panelId, `❌ Error: ${error.message}`, 'error');
+                console.error(`[Client ${panelId}] WebSocket error at ${new Date().toISOString()}:`, error);
             });
 
             rt.on('onEvent', (event) => {
@@ -269,6 +281,7 @@ function updateQuickConnectButton() {
             updateStatus(panelId, 'connected');
             clients[panelId].connected = true;
             log(panelId, '✅ Connected', 'event');
+            console.log(`[Client ${panelId}] WebSocket connected at ${new Date().toISOString()}`);
             disconnectBtn.disabled = false;
             updateBothConnectedState();
             
@@ -284,14 +297,25 @@ function updateQuickConnectButton() {
         rt.on('onDisconnect', () => {
             updateStatus(panelId, 'disconnected');
             clients[panelId].connected = false;
-            log(panelId, '🔌 Disconnected', 'info');
+            const lastMsgTime = rt.getLastMessageTime();
+            const timeSinceLastMsg = lastMsgTime ? Date.now() - lastMsgTime : 'N/A';
+            log(panelId, `🔌 Disconnected (last msg: ${timeSinceLastMsg}ms ago)`, 'info');
+            console.log(`[Client ${panelId}] WebSocket disconnected at ${new Date().toISOString()}, last message was ${timeSinceLastMsg}ms ago`);
             connectBtn.disabled = false;
             disconnectBtn.disabled = true;
             updateBothConnectedState();
         });
 
+        rt.on('onStateChange', (state) => {
+            console.log(`[Client ${panelId}] State changed to: ${state} at ${new Date().toISOString()}`);
+            if (state === 'connecting') {
+                log(panelId, '🔄 Reconnecting...', 'info');
+            }
+        });
+
         rt.on('onError', (error) => {
             log(panelId, `❌ ${error.message}`, 'error');
+            console.error(`[Client ${panelId}] WebSocket error at ${new Date().toISOString()}:`, error);
         });
 
         rt.on('onEvent', (event) => {

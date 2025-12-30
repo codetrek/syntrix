@@ -167,7 +167,7 @@ echo "=== Step 5: Starting Demo Server ==="
 if check_port 3000; then
     echo "Stopping existing demo server on port 3000..."
     # Kill process using port 3000
-    local pids=$(lsof -ti:3000 2>/dev/null || true)
+    pids=$(lsof -ti:3000 2>/dev/null || true)
     if [ -n "$pids" ]; then
         echo "$pids" | xargs kill 2>/dev/null || true
         sleep 1
