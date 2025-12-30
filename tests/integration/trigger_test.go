@@ -26,7 +26,7 @@ type DeliveryTask struct {
 	Tenant     string                 `json:"tenant"`
 	Event      string                 `json:"event"`
 	Collection string                 `json:"collection"`
-	DocKey     string                 `json:"docKey"`
+	DocumentID string                 `json:"documentId"`
 	LSN        string                 `json:"lsn"`
 	Seq        int64                  `json:"seq"`
 	Before     map[string]interface{} `json:"before,omitempty"`
@@ -133,7 +133,7 @@ func TestTriggerIntegration(t *testing.T) {
 		// Success
 		require.NotNil(t, receivedTask)
 		assert.Equal(t, "integration-test-trigger", receivedTask.TriggerID)
-		assert.NotEmpty(t, receivedTask.DocKey)
+		assert.NotEmpty(t, receivedTask.DocumentID)
 		assert.Equal(t, "create", receivedTask.Event)
 		assert.Equal(t, "users", receivedTask.Collection)
 	case <-time.After(10 * time.Second):

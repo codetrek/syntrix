@@ -29,7 +29,7 @@ match:
           read, write: "true"
       /private/{doc=**}:
         allow:
-          read, write: "request.auth.uid != null"
+          read, write: "request.auth.userId != null"
       /admin/{doc=**}:
         allow:
           read, write: "'admin' in request.auth.roles"
@@ -160,3 +160,4 @@ match:
 		assert.Equal(t, http.StatusOK, code)
 	})
 }
+

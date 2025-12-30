@@ -22,25 +22,25 @@ match:
     match:
       /users/{userId}:
         allow:
-          read: "request.auth.uid == userId"
-          write: "request.auth.uid == userId"
+          read: "request.auth.userId == userId"
+          write: "request.auth.userId == userId"
 
         match:
           /private_info/{docId}:
             allow:
-              read: "request.auth.uid == userId"
-              write: "request.auth.uid == userId"
+              read: "request.auth.userId == userId"
+              write: "request.auth.userId == userId"
 
       /posts/{postId}:
         allow:
           read: "true"
-          create: "request.resource.data.title.size() > 0 && request.resource.data.title.size() < 100 && request.auth.uid != null"
-          update: "request.auth.uid == resource.data.authorId || (request.auth.roles != null && 'admin' in request.auth.roles)"
+          create: "request.resource.data.title.size() > 0 && request.resource.data.title.size() < 100 && request.auth.userId != null"
+          update: "request.auth.userId == resource.data.authorId || (request.auth.roles != null && 'admin' in request.auth.roles)"
           delete: "request.auth.roles != null && 'admin' in request.auth.roles"
 
       /secrets/{secretId}:
         allow:
-          read: "get('/databases/' + database + '/documents/users/' + request.auth.uid).data.role == 'admin'"
+          read: "get('/databases/' + database + '/documents/users/' + request.auth.userId).data.role == 'admin'"
 
       /time_limited/{docId}:
         allow:
@@ -48,7 +48,7 @@ match:
 
       /complex_logic/{docId}:
         allow:
-          write: "(request.auth.uid == resource.data.owner || (request.auth.roles != null && 'editor' in request.auth.roles)) && request.resource.data.status == 'draft'"
+          write: "(request.auth.userId == resource.data.owner || (request.auth.roles != null && 'editor' in request.auth.roles)) && request.resource.data.status == 'draft'"
 `
 
 	tmpFile := t.TempDir() + "/complex_security.yaml"
@@ -296,3 +296,4 @@ match:
 		})
 	}
 }
+

@@ -78,7 +78,7 @@ type AuthzRequest struct {
 
 // Authenticated stores authentication context for authorization evaluation.
 type Authenticated struct {
-	UID      interface{}            `json:"uid"`
+	UID      interface{}            `json:"userId"`
 	Username string                 `json:"username,omitempty"`
 	Roles    []string               `json:"roles"`
 	Claims   map[string]interface{} `json:"claims,omitempty"`

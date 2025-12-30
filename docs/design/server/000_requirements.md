@@ -55,7 +55,7 @@
 - **Authentication**: Standard Token-based auth (JWT).
 - **Authorization**: **Data-Driven Rules** (similar to Firestore Security Rules).
   - Must support document-level access control based on data contents.
-  - Example: "User X can read document if `resource.data.members` contains `request.auth.uid`".
+  - Example: "User X can read document if `resource.data.members` contains `request.auth.userId`".
 
 ## 4. Technology Stack Constraints
 

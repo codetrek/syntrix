@@ -118,7 +118,7 @@ func (s *userStore) UpdateUser(ctx context.Context, tenant string, user *types.U
 		"$set": bson.M{
 			"roles":     user.Roles,
 			"disabled":  user.Disabled,
-			"updatedAt": time.Now(),
+			"updated_at": time.Now(),
 		},
 	}
 	_, err := s.coll.UpdateOne(ctx, filter, update)

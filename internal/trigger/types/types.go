@@ -59,7 +59,7 @@ type DeliveryTask struct {
 	Tenant         string                 `json:"tenant"`
 	Event          string                 `json:"event"`
 	Collection     string                 `json:"collection"`
-	DocKey         string                 `json:"docKey"`
+	DocumentID     string                 `json:"documentId"`
 	LSN            string                 `json:"lsn"`
 	Seq            int64                  `json:"seq"`
 	Before         map[string]interface{} `json:"before,omitempty"`
