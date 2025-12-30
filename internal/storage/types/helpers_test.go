@@ -55,3 +55,11 @@ func TestNewDocument(t *testing.T) {
 	assert.NotZero(t, doc.CreatedAt)
 	assert.NotZero(t, doc.UpdatedAt)
 }
+
+func TestNewDocument_NoSlashCollection(t *testing.T) {
+	data := map[string]interface{}{"key": "value"}
+	doc := NewDocument("tenant1", "/root", "root", data)
+
+	assert.Equal(t, "root", doc.Collection)
+	assert.Empty(t, doc.Parent)
+}

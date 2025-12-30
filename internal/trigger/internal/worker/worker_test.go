@@ -284,3 +284,37 @@ func TestDeliveryWorker_ProcessTask_WithSecret(t *testing.T) {
 	err := worker.ProcessTask(context.Background(), task)
 	assert.NoError(t, err)
 }
+
+func TestDeliveryWorker_ProcessTask_MarshalError(t *testing.T) {
+	worker := NewDeliveryWorker(nil, nil, HTTPClientOptions{}, nil)
+
+	// Create Task with unserializable payload
+	task := &types.DeliveryTask{
+		TriggerID: "trig-1",
+		URL:       "http://example.com",
+		Payload: map[string]interface{}{
+			"bad": make(chan int),
+		},
+	}
+
+	err := worker.ProcessTask(context.Background(), task)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to marshal task")
+}
+
+func TestDeliveryWorker_ProcessTask_SecretError(t *testing.T) {
+	secrets := &MockSecretProvider{
+		secrets: map[string]string{},
+	}
+	worker := NewDeliveryWorker(nil, secrets, HTTPClientOptions{}, nil)
+
+	task := &types.DeliveryTask{
+		TriggerID:  "trig-1",
+		URL:        "http://example.com",
+		SecretsRef: "missing-secret",
+	}
+
+	err := worker.ProcessTask(context.Background(), task)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to resolve secret")
+}

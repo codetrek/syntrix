@@ -4,13 +4,12 @@ applyTo: "**"
 
 # AI AGENT INSTRUCTIONS
 
-- always disucss in "中文" with user and write in English.
+- always disucss in "中文" with user and write document and code in English.
 - always run testing to ensure code quality.
-- always run `make coverage` to ensure test coverage.
+- always run `make coverage` to ensure test coverage, run `./scripts/uncovered_blocks.sh` to get detailed uncovered code blocks.
 - always write unit tests for newly added code and use "github.com/stretchr/testify" for unit testing.
 - always ask "should I add more testing" and make robust but not over-engineering testing.
 - always document the "Why" (reasoning/analysis) alongside the "How" (decision/implementation) in design discussion documents.
-- all documentation and code must be written in English.
 - frontend engineering uses `bun` for package scripts and tests unless explicitly overridden.
 - when a task starts or completes, update its Status in the task doc and the task index.
 

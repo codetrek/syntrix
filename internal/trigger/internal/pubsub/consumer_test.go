@@ -524,3 +524,15 @@ func TestConsumer_WaitForDrain_Timeout(t *testing.T) {
 	assert.GreaterOrEqual(t, elapsed, 95*time.Millisecond, "waitForDrain should timeout")
 	assert.Less(t, elapsed, 300*time.Millisecond, "waitForDrain should not exceed timeout by much")
 }
+
+func TestNewTaskConsumerFromJS_EmptyStream(t *testing.T) {
+	mockJS := new(MockJetStream)
+	mockWorker := new(MockWorker)
+
+	// Mock CreateOrUpdateConsumer
+	mockJS.On("CreateOrUpdateConsumer", mock.Anything, "TRIGGERS", mock.Anything).Return(new(MockConsumer), nil)
+
+	consumer, err := NewTaskConsumerFromJS(mockJS, mockWorker, "", 1, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, consumer)
+}

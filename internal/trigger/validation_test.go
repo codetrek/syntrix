@@ -162,6 +162,17 @@ func TestValidateTrigger(t *testing.T) {
 			},
 			wantErr: "",
 		},
+		{
+			name: "invalid url format",
+			trigger: &Trigger{
+				ID:         "valid-id",
+				Tenant:     "valid-tenant",
+				Collection: "users",
+				Events:     []string{"create"},
+				URL:        "://invalid-url",
+			},
+			wantErr: "invalid url",
+		},
 	}
 
 	for _, tt := range tests {

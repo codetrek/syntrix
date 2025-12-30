@@ -69,6 +69,59 @@ func TestLoadTriggersFromFile(t *testing.T) {
 	assert.Equal(t, "orders", triggers[0].Collection)
 	assert.Equal(t, 500*time.Millisecond, time.Duration(triggers[0].RetryPolicy.InitialBackoff))
 	assert.Equal(t, 5*time.Second, time.Duration(triggers[0].RetryPolicy.MaxBackoff))
+
+	// 5. Test Invalid YAML
+	invalidYamlContent := `
+- triggerId: t3
+  collection: [invalid
+`
+	invalidYamlFile, err := os.CreateTemp("", "triggers-invalid-*.yaml")
+	require.NoError(t, err)
+	defer os.Remove(invalidYamlFile.Name())
+	_, err = invalidYamlFile.WriteString(invalidYamlContent)
+	require.NoError(t, err)
+	invalidYamlFile.Close()
+
+	_, err = LoadTriggersFromFile(invalidYamlFile.Name())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse YAML trigger rules")
+
+	// 6. Test Invalid JSON
+	invalidJsonContent := `[{"triggerId": "t4", "collection": "users", "events": ["create"]` // Missing closing bracket
+	invalidJsonFile, err := os.CreateTemp("", "triggers-invalid-*.json")
+	require.NoError(t, err)
+	defer os.Remove(invalidJsonFile.Name())
+	_, err = invalidJsonFile.WriteString(invalidJsonContent)
+	require.NoError(t, err)
+	invalidJsonFile.Close()
+
+	_, err = LoadTriggersFromFile(invalidJsonFile.Name())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse JSON trigger rules")
+
+	// 7. Test Unknown Format (fallback)
+	unknownFile, err := os.CreateTemp("", "triggers-unknown-*") // No extension
+	require.NoError(t, err)
+	defer os.Remove(unknownFile.Name())
+	_, err = unknownFile.WriteString(jsonContent)
+	require.NoError(t, err)
+	unknownFile.Close()
+
+	triggers, err = LoadTriggersFromFile(unknownFile.Name())
+	require.NoError(t, err)
+	require.Len(t, triggers, 1)
+
+	// 8. Test Unknown Format Invalid
+	unknownInvalidFile, err := os.CreateTemp("", "triggers-unknown-invalid-*")
+	require.NoError(t, err)
+	defer os.Remove(unknownInvalidFile.Name())
+	_, err = unknownInvalidFile.WriteString("invalid content")
+	require.NoError(t, err)
+	unknownInvalidFile.Close()
+
+	_, err = LoadTriggersFromFile(unknownInvalidFile.Name())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse trigger rules (unknown format)")
 }
 
 func TestLoadTriggersFromFile_NotFound(t *testing.T) {

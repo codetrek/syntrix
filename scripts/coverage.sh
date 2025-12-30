@@ -13,8 +13,8 @@ MODE=${1:-html}
 # Optional output path override: COVERPROFILE=/path/to/coverage.out ./scripts/coverage.sh
 COVERPROFILE=${COVERPROFILE:-"/tmp/coverage.out"}
 
-# Default exclusion: skip command entrypoints under cmd/
-DEFAULT_EXCLUDE='/cmd/'
+# Default exclusion: skip command entrypoints under cmd/ and generated protobuf code
+DEFAULT_EXCLUDE='syntrix/cmd/|syntrix/api/'
 EXTRA_EXCLUDE=${EXCLUDE_PATTERN:-}
 EXCLUDE_REGEX="${DEFAULT_EXCLUDE}${EXTRA_EXCLUDE:+|${EXTRA_EXCLUDE}}"
 
@@ -115,3 +115,6 @@ echo "Functions with 100% coverage: $COUNT_100"
 echo "Functions with 95%-100% coverage: $COUNT_95_100"
 echo "Functions with 85%-95% coverage: $COUNT_85_95"
 echo "Functions with <85% coverage: $COUNT_LE_85"
+
+TOTAL_TESTS=$(go test ${PKGS} -list '^Test' | grep -c '^Test')
+echo "Total tests: $TOTAL_TESTS"

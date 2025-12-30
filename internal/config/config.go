@@ -20,6 +20,7 @@ type Config struct {
 	Query   QueryConfig   `yaml:"query"`
 	CSP     CSPConfig     `yaml:"csp"`
 	Trigger TriggerConfig `yaml:"trigger"`
+	Puller  PullerConfig  `yaml:"puller"`
 }
 
 type GatewayConfig struct {
@@ -196,6 +197,7 @@ func LoadConfig() *Config {
 			RulesFile:   "triggers.json",
 			WorkerCount: 16,
 		},
+		Puller: DefaultPullerConfig(),
 	}
 
 	// 2. Load config.yml

@@ -64,3 +64,21 @@ func TestRevocationStore_Revocation(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, revoked)
 }
+
+func TestRevocationStore_RevokeTokenImmediate_Duplicate(t *testing.T) {
+	s, teardown := setupTestRevocationStore(t)
+	defer teardown()
+
+	ctx := context.Background()
+	tenant := "default"
+	jti := "token-dup"
+	expiresAt := time.Now().Add(1 * time.Hour)
+
+	// First revocation
+	err := s.RevokeTokenImmediate(ctx, tenant, jti, expiresAt)
+	require.NoError(t, err)
+
+	// Second revocation (should be idempotent)
+	err = s.RevokeTokenImmediate(ctx, tenant, jti, expiresAt)
+	require.NoError(t, err)
+}

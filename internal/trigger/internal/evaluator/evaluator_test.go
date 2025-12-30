@@ -195,6 +195,38 @@ func TestCELEvaluator(t *testing.T) {
 			wantMatch: true,
 			wantErr:   false,
 		},
+		{
+			name: "Empty condition",
+			trigger: &trigger.Trigger{
+				Events:     []string{"create"},
+				Collection: "users",
+				Condition:  "",
+			},
+			event: &storage.Event{
+				Type: storage.EventCreate,
+				Document: &storage.Document{
+					Collection: "users",
+				},
+			},
+			wantMatch: true,
+			wantErr:   false,
+		},
+		{
+			name: "Invalid condition syntax",
+			trigger: &trigger.Trigger{
+				Events:     []string{"create"},
+				Collection: "users",
+				Condition:  "invalid syntax !!!",
+			},
+			event: &storage.Event{
+				Type: storage.EventCreate,
+				Document: &storage.Document{
+					Collection: "users",
+				},
+			},
+			wantMatch: false,
+			wantErr:   true,
+		},
 	}
 
 	for _, tt := range tests {

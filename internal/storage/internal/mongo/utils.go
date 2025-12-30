@@ -56,6 +56,6 @@ func mapOp(op string) string {
 	case "in":
 		return "$in"
 	default:
-		return "$eq" // Default to equality
+		return ""
 	}
 }

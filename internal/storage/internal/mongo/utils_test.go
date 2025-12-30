@@ -56,3 +56,15 @@ func TestMakeFilterBSON_Defaults(t *testing.T) {
 		assert.Equal(t, 1, m["$eq"])
 	}
 }
+
+func TestMakeFilterBSON_EmptyOp(t *testing.T) {
+	filters := model.Filters{
+		{Field: "field", Op: "unknown", Value: "value"},
+	}
+	bsonFilter := makeFilterBSON(filters)
+	assert.Empty(t, bsonFilter)
+}
+
+func TestMapField_ID(t *testing.T) {
+	assert.Equal(t, "_id", mapField("_id"))
+}

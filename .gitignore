@@ -5,6 +5,7 @@
 *.so
 *.dylib
 /syntrix
+/puller
 /syntrix-cli
 /bin/
 

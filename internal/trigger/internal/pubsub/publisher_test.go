@@ -131,3 +131,26 @@ func (m *MockJetStream) CreateOrUpdateConsumer(ctx context.Context, stream strin
 	}
 	return args.Get(0).(jetstream.Consumer), args.Error(1)
 }
+
+func TestNewTaskPublisherFromJS_EmptyStream(t *testing.T) {
+	mockJS := new(MockJetStream)
+	publisher := NewTaskPublisherFromJS(mockJS, "", nil)
+	assert.NotNil(t, publisher)
+	// We can't easily check the internal prefix without reflection or exposing it,
+	// but we can verify it works by calling Publish and checking the subject.
+
+	task := &trigger.DeliveryTask{
+		Tenant:     "acme",
+		Collection: "users",
+		DocumentID: "user-1",
+		TriggerID:  "t1",
+	}
+
+	expectedSubject := "TRIGGERS.acme.users.dXNlci0x"
+	expectedData, _ := json.Marshal(task)
+
+	mockJS.On("Publish", mock.Anything, expectedSubject, expectedData, mock.Anything).Return(&jetstream.PubAck{}, nil)
+
+	err := publisher.Publish(context.Background(), task)
+	assert.NoError(t, err)
+}

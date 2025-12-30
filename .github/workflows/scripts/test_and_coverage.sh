@@ -9,7 +9,7 @@ set -o pipefail
 failed=0
 # Run tests with coverage, excluding cmd/ directory
 go test -covermode=atomic -coverprofile=coverage.out $(go list ./... | \
-  grep -v "/cmd/") | \
+  grep -v "syntrix/cmd/|syntrix/api/") | \
   tee test_output.txt
 
 sed -i 's/of statements//g; s/github.com\/codetrek\/syntrix\///g' test_output.txt
