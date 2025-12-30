@@ -14,15 +14,28 @@ applyTo: "**"
 - frontend engineering uses `bun` for package scripts and tests unless explicitly overridden.
 - when a task starts or completes, update its Status in the task doc and the task index.
 
-## � DOCUMENTATION STRUCTURE
+## DOCUMENTATION
 
+### directory `docs/design`
+
+Contains the architecture and design details of the service, maybe implemented, maybe not, it's the single souce of truth to the system.
 When creating design or implementation documentation, follow this structure:
 
 - `000.requirements.md`: Describe specific requirements and constraints.
 - `001.architecture.md`: Record the overall architecture, including module diagrams (ASCII art) and UI layout diagrams (ASCII art).
 - `002.xxx.md`: Specific module details, numbered sequentially.
 
-## �🚨 STOP CONDITIONS
+### directory `tasks`
+
+It's the guidence of implement, contains task breakdowns to implement specific features in docs/design, A refer link to target design doc should be exists. Any details should be noted here:
+
+- Execution steps.
+- How to implement new design.
+- How to migrate current implementation to new design if already implemented in different ways.
+- Detail implement decisions compares to current code.
+- Guidence of comprehensive unittests.
+
+## 🚨 STOP CONDITIONS
 
 IMMEDIATELY STOP and ask user when:
 
