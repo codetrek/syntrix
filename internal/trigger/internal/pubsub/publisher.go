@@ -67,11 +67,11 @@ func NewTaskPublisherFromJS(js jetstream.JetStream, streamName string, metrics t
 
 func (p *natsPublisher) Publish(ctx context.Context, task *types.DeliveryTask) error {
 	start := time.Now()
-	// Subject format: <streamName>.<tenant>.<collection>.<docKey>
-	// DocKey is base64url encoded to ensure safety.
-	encodedDocKey := base64.URLEncoding.EncodeToString([]byte(task.DocKey))
+	// Subject format: <streamName>.<tenant>.<collection>.<documentId>
+	// DocumentID is base64url encoded to ensure safety.
+	encodedDocumentID := base64.URLEncoding.EncodeToString([]byte(task.DocumentID))
 
-	subject := fmt.Sprintf("%s.%s.%s.%s", p.prefix, task.Tenant, task.Collection, encodedDocKey)
+	subject := fmt.Sprintf("%s.%s.%s.%s", p.prefix, task.Tenant, task.Collection, encodedDocumentID)
 
 	// NATS subject length limit is usually 64KB, but for performance and practical reasons,
 	// we might want to limit it. The requirement says "if length > 1024".

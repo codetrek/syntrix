@@ -247,11 +247,11 @@ When a document is deleted via the API or Storage interface, it is **soft delete
 
 ### 5.1 REST API
 
-- `GET /api/v1/{collectionPath}/{docID}`: Get a document.
+- `GET /api/v1/{collectionPath}/{id}`: Get a document.
 - `POST /api/v1/{collectionPath}`: Create a document (auto-generated ID).
-- `PUT /api/v1/{collectionPath}/{docID}`: Create or Replace a document.
-- `PATCH /api/v1/{collectionPath}/{docID}`: Update specific fields.
-- `DELETE /api/v1/{collectionPath}/{docID}`: Delete a document.
+- `PUT /api/v1/{collectionPath}/{id}`: Create or Replace a document.
+- `PATCH /api/v1/{collectionPath}/{id}`: Update specific fields.
+- `DELETE /api/v1/{collectionPath}/{id}`: Delete a document.
 - `POST /api/v1/query`: Execute a structured query (JSON body).
 
 ### 5.2 Realtime API (WebSocket)

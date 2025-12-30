@@ -70,16 +70,16 @@ func (e *defaultTriggerEngine) Start(ctx context.Context) error {
 				}
 				if matched {
 					var collection string
-					var docKey string
+					var documentID string
 					var payload map[string]interface{}
 
 					if evt.Document != nil {
 						collection = evt.Document.Collection
-						docKey = evt.Document.Id
+						documentID = evt.Document.Id
 						payload = evt.Document.Data
 					} else if evt.Before != nil {
 						collection = evt.Before.Collection
-						docKey = evt.Before.Id
+						documentID = evt.Before.Id
 						payload = evt.Before.Data
 					}
 
@@ -88,7 +88,7 @@ func (e *defaultTriggerEngine) Start(ctx context.Context) error {
 						Tenant:      t.Tenant,
 						Event:       string(evt.Type),
 						Collection:  collection,
-						DocKey:      docKey,
+						DocumentID:  documentID,
 						Payload:     payload,
 						URL:         t.URL,
 						Headers:     t.Headers,

@@ -3,7 +3,7 @@ import { TriggerClient } from './trigger-client';
 export interface WebhookPayload {
   triggerId: string;
   collection: string;
-  docKey?: string;
+  documentId?: string;
   preIssuedToken?: string;
   before?: unknown;
   after?: unknown;

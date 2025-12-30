@@ -463,7 +463,7 @@ func TestConsumer_InFlightCount(t *testing.T) {
 	// Start dispatch in a goroutine
 	done := make(chan struct{})
 	msg := new(MockMsg)
-	task := trigger.DeliveryTask{TriggerID: "t1", Collection: "col1", DocKey: "doc1"}
+	task := trigger.DeliveryTask{TriggerID: "t1", Collection: "col1", DocumentID: "doc1"}
 	taskBytes, _ := json.Marshal(task)
 	msg.On("Data").Return(taskBytes)
 

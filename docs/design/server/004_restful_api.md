@@ -26,7 +26,7 @@ This is the business layer Document type, visible to the API.
 
 #### Get Document
 
-`GET /api/v1/{collectionPath}/{docID}`
+`GET /api/v1/{collectionPath}/{id}`
 
 **Response (200 OK):**
 
@@ -71,7 +71,7 @@ This is the business layer Document type, visible to the API.
 
 #### Create/Replace Document (Upsert)
 
-`PUT /api/v1/{collectionPath}/{docID}`
+`PUT /api/v1/{collectionPath}/{id}`
 
 **Request:**
 
@@ -84,7 +84,7 @@ This is the business layer Document type, visible to the API.
 
 #### Update Document (Patch)
 
-`PATCH /api/v1/{collectionPath}/{docID}`
+`PATCH /api/v1/{collectionPath}/{id}`
 
 **Request:**
 
@@ -96,7 +96,7 @@ This is the business layer Document type, visible to the API.
 
 #### Delete Document
 
-`DELETE /api/v1/{collectionPath}/{docID}`
+`DELETE /api/v1/{collectionPath}/{id}`
 
 Response (204 No Content)
 

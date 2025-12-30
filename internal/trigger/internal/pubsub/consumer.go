@@ -235,7 +235,7 @@ func (c *natsConsumer) dispatch(msg jetstream.Msg) {
 
 	h := fnv.New32a()
 	h.Write([]byte(task.Collection))
-	h.Write([]byte(task.DocKey))
+	h.Write([]byte(task.DocumentID))
 	hash := h.Sum32()
 	workerIdx := int(hash % uint32(c.numWorkers))
 

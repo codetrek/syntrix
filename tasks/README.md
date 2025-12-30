@@ -22,7 +22,7 @@ Index of task planning documents for Syntrix.
 - [012.2025-12-29-rest-api-hardening.md](012.2025-12-29-rest-api-hardening.md) — REST API Security Hardening & Code Quality. Status: Completed.
 - [013.2025-12-29-test-coverage-improvements.md](013.2025-12-29-test-coverage-improvements.md) — Test Coverage Improvements. Status: Completed.
 - [014.2025-12-26-query-surface-encapsulation.md](014.2025-12-26-query-surface-encapsulation.md) — Query Surface Encapsulation & HTTP Adapter Refactor. Status: Completed.
-- [015.2025-12-30-field-naming-audit.md](015.2025-12-30-field-naming-audit.md) — Field Naming Consistency Audit. Status: Planned.
+- [015.2025-12-30-field-naming-audit.md](015.2025-12-30-field-naming-audit.md) — Field Naming Consistency Audit. Status: Completed.
 - [016.2025-12-29-change-stream-puller.md](016.2025-12-29-change-stream-puller.md) — Change Stream Puller (fan-out, checkpoints, JetStream). Status: Planned. Depends on: 014 and 015.
 - [017.2025-12-29-index-layer-implementation.md](017.2025-12-29-index-layer-implementation.md) — Index Layer Implementation (Data/Index/Query). Status: Planned. Depends on: 016.
 - [018.2025-12-29-streamer-implementation-plan.md](018.2025-12-29-streamer-implementation-plan.md) — Streamer Service Implementation (JetStream-based event matching & routing). Status: Planning Phase - 23 critical issues identified. **BLOCKED by Task 016 (Puller Service)**. Est. 9-12 weeks after Puller completion.

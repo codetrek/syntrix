@@ -57,9 +57,9 @@ test:
 	@go test ./... -count=1
 
 ifeq ($(OS),Windows_NT)
-    COVERAGE_CMD = scripts\coverage.cmd func
+    COVERAGE_CMD = scripts\coverage.cmd detail
 else
-    COVERAGE_CMD = ./scripts/coverage.sh func
+    COVERAGE_CMD = ./scripts/coverage.sh detail
 endif
 
 coverage:

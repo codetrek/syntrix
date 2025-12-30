@@ -77,7 +77,7 @@ func TestEvaluate_RuntimeError(t *testing.T) {
 match:
   /test:
     allow:
-      read: "request.auth.uid == '123'"
+      read: "request.auth.userId == '123'"
 `
 	// If request.auth is missing, it might be null.
 
@@ -95,7 +95,7 @@ match:
 		// Request with empty Auth
 		req := Request{Auth: Auth{}}
 		// In structToMap, nil Auth becomes nil in map.
-		// accessing request.auth.uid on nil might cause error?
+		// accessing request.auth.userId on nil might cause error?
 		// CEL handles null safe navigation usually, but let's see.
 
 		// Actually, let's try to force a compile error again to be sure we covered evalCondition error return.

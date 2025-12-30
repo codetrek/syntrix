@@ -75,7 +75,7 @@ func TestStart(t *testing.T) {
 
 	// Expect publish
 	mockPublisher.On("Publish", mock.Anything, mock.MatchedBy(func(task *types.DeliveryTask) bool {
-		return task.TriggerID == "t1" && task.DocKey == "doc1"
+		return task.TriggerID == "t1" && task.DocumentID == "doc1"
 	})).Return(nil)
 
 	// Expect checkpoint save
@@ -376,7 +376,7 @@ func TestStart_BeforeOnlyEvent(t *testing.T) {
 
 	mockEvaluator.On("Evaluate", mock.Anything, trig, &evt).Return(true, nil)
 	mockPublisher.On("Publish", mock.Anything, mock.MatchedBy(func(task *types.DeliveryTask) bool {
-		return task.DocKey == "doc1" && task.Collection == "users"
+		return task.DocumentID == "doc1" && task.Collection == "users"
 	})).Return(nil)
 
 	ctx, cancel := context.WithCancel(context.Background())

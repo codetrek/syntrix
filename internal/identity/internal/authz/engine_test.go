@@ -77,18 +77,18 @@ match:
     match:
       /users/{userId}:
         allow:
-          read: "request.auth.uid == userId"
-          write: "request.auth.uid == userId"
+          read: "request.auth.userId == userId"
+          write: "request.auth.userId == userId"
       /public/{doc=**}:
         allow:
           read: "true"
       /rooms/{roomId}:
         allow:
-          read: "resource.data.public == true || request.auth.uid in resource.data.members"
-          write: "request.auth.uid in resource.data.members"
+          read: "resource.data.public == true || request.auth.userId in resource.data.members"
+          write: "request.auth.userId in resource.data.members"
       /admin/{doc=**}:
         allow:
-          read, write: "exists('/databases/' + database + '/documents/admins/' + request.auth.uid)"
+          read, write: "exists('/databases/' + database + '/documents/admins/' + request.auth.userId)"
 `
 	tmpFile := t.TempDir() + "/security.yaml"
 	err := os.WriteFile(tmpFile, []byte(rules), 0644)

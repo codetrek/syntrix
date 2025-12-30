@@ -36,7 +36,7 @@ func TestNatsPublisher_Publish(t *testing.T) {
 	task := &trigger.DeliveryTask{
 		Tenant:     "acme",
 		Collection: "users",
-		DocKey:     "user-1",
+		DocumentID: "user-1",
 		TriggerID:  "t1",
 	}
 
@@ -54,19 +54,19 @@ func TestNatsPublisher_Publish_HashedSubject(t *testing.T) {
 	mockJS := new(MockJetStream)
 	publisher := NewTaskPublisherFromJS(mockJS, "TRIGGERS", nil)
 
-	// Create a long DocKey to force hashing
-	longDocKey := strings.Repeat("a", 1000)
-	encodedDocKey := base64.URLEncoding.EncodeToString([]byte(longDocKey))
+	// Create a long DocumentID to force hashing
+	longDocumentID := strings.Repeat("a", 1000)
+	encodedDocumentID := base64.URLEncoding.EncodeToString([]byte(longDocumentID))
 
 	task := &trigger.DeliveryTask{
 		Tenant:     "acme",
 		Collection: "users",
-		DocKey:     longDocKey,
+		DocumentID: longDocumentID,
 		TriggerID:  "t1",
 	}
 
 	// Calculate expected subject
-	originalSubject := fmt.Sprintf("TRIGGERS.%s.%s.%s", task.Tenant, task.Collection, encodedDocKey)
+	originalSubject := fmt.Sprintf("TRIGGERS.%s.%s.%s", task.Tenant, task.Collection, encodedDocumentID)
 	// Verify it is indeed long enough
 	assert.True(t, len(originalSubject) > 1024)
 
@@ -95,7 +95,7 @@ func TestNatsPublisher_Publish_Error(t *testing.T) {
 	task := &trigger.DeliveryTask{
 		Tenant:     "acme",
 		Collection: "users",
-		DocKey:     "user-1",
+		DocumentID: "user-1",
 		TriggerID:  "t1",
 	}
 

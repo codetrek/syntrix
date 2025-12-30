@@ -16,12 +16,12 @@ var (
 // User represents a user in the system
 type User struct {
 	ID            string                 `json:"id" bson:"_id"`
-	TenantID      string                 `json:"tenant_id" bson:"tenant_id"`
+	TenantID      string                 `json:"tenantId" bson:"tenant_id"`
 	Username      string                 `json:"username" bson:"username"`
 	PasswordHash  string                 `json:"password_hash" bson:"password_hash"`
 	PasswordAlgo  string                 `json:"password_algo" bson:"password_algo"` // "argon2id" or "bcrypt"
-	CreatedAt     time.Time              `json:"createdAt" bson:"createdAt"`
-	UpdatedAt     time.Time              `json:"updatedAt" bson:"updatedAt"`
+	CreatedAt     time.Time              `json:"createdAt" bson:"created_at"`
+	UpdatedAt     time.Time              `json:"updatedAt" bson:"updated_at"`
 	Disabled      bool                   `json:"disabled" bson:"disabled"`
 	Roles         []string               `json:"roles" bson:"roles"`
 	Profile       map[string]interface{} `json:"profile" bson:"profile"`
@@ -211,7 +211,7 @@ type ReplicationPullResponse struct {
 // ReplicationPushChange represents a single change in a push request
 type ReplicationPushChange struct {
 	Doc         *Document `json:"doc"`
-	BaseVersion *int64    `json:"base_version"` // Version known to the client
+	BaseVersion *int64    `json:"baseVersion"` // Version known to the client
 }
 
 // ReplicationPushRequest represents a request to push changes
