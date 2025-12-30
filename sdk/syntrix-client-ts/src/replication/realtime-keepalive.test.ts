@@ -232,4 +232,95 @@ describe('RealtimeClient Keepalive', () => {
     // @ts-ignore - access private timer for testing
     expect(client['activityCheckTimer']).toBeNull();
   });
+
+  it('should update lastMessageTime when receiving heartbeat message', async () => {
+    const tokenProvider = { getToken: async () => 'test-token' };
+    const client = new RealtimeClient('ws://localhost:8080/realtime/ws', tokenProvider as any);
+
+    await client.connect();
+    const initialTime = client.getLastMessageTime();
+
+    // Wait a bit to ensure time difference
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // @ts-ignore - access private ws for testing
+    const ws = client['ws'] as MockWebSocket;
+    
+    // Simulate receiving a heartbeat message from server
+    ws.simulateMessage({ type: 'heartbeat' });
+
+    expect(client.getLastMessageTime()).toBeGreaterThan(initialTime);
+
+    client.disconnect();
+  });
+
+  it('should keep connection alive when receiving periodic heartbeat messages', async () => {
+    const tokenProvider = { getToken: async () => 'test-token' };
+    const client = new RealtimeClient('ws://localhost:8080/realtime/ws', tokenProvider as any, {
+      activityTimeoutMs: 100,
+    });
+
+    let disconnectCount = 0;
+    client.on('onDisconnect', () => {
+      disconnectCount++;
+    });
+
+    await client.connect();
+
+    // @ts-ignore - access private ws for testing
+    const ws = client['ws'] as MockWebSocket;
+
+    // Simulate server sending heartbeat messages periodically (like server's 30s interval)
+    const interval = setInterval(() => {
+      if (ws.readyState === MockWebSocket.OPEN) {
+        ws.simulateMessage({ type: 'heartbeat' });
+      }
+    }, 30);
+
+    // Wait longer than timeout
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    clearInterval(interval);
+
+    // Should NOT have disconnected because heartbeats kept the connection alive
+    expect(disconnectCount).toBe(0);
+
+    client.disconnect();
+  });
+
+  it('should not trigger any callback for heartbeat message', async () => {
+    const tokenProvider = { getToken: async () => 'test-token' };
+    const client = new RealtimeClient('ws://localhost:8080/realtime/ws', tokenProvider as any);
+
+    let connectCount = 0;
+    let eventCount = 0;
+    let snapshotCount = 0;
+    let errorCount = 0;
+
+    client.on('onConnect', () => { connectCount++; });
+    client.on('onEvent', () => { eventCount++; });
+    client.on('onSnapshot', () => { snapshotCount++; });
+    client.on('onError', () => { errorCount++; });
+
+    await client.connect();
+
+    // @ts-ignore - access private ws for testing
+    const ws = client['ws'] as MockWebSocket;
+    
+    // Reset connect count after initial connection
+    connectCount = 0;
+
+    // Simulate multiple heartbeat messages
+    ws.simulateMessage({ type: 'heartbeat' });
+    ws.simulateMessage({ type: 'heartbeat' });
+    ws.simulateMessage({ type: 'heartbeat' });
+
+    // Heartbeat should not trigger any user-facing callbacks
+    expect(connectCount).toBe(0);
+    expect(eventCount).toBe(0);
+    expect(snapshotCount).toBe(0);
+    expect(errorCount).toBe(0);
+
+    client.disconnect();
+  });
 });
