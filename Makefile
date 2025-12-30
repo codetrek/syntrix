@@ -26,7 +26,7 @@ build:
 
 run: build
 	@echo "Running $(APP_NAME)..."
-	@$(APP_BIN) --all --host 0.0.0.0
+	@$(APP_BIN) --all
 
 run-query: build
 	@echo "Running $(APP_NAME)..."

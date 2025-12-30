@@ -17,7 +17,26 @@ A simple demo showcasing Syntrix TypeScript SDK's realtime WebSocket synchroniza
 
 ## Quick Start
 
-### Step 1: Start Infrastructure (MongoDB & NATS)
+### One-Click Start (Recommended)
+
+```bash
+cd example/realtime-demo
+./start-demo.sh
+
+# Or with restart flag (stops existing Syntrix server and restarts)
+./start-demo.sh --restart
+```
+
+This script will automatically:
+1. Start Docker services (MongoDB & NATS)
+2. Build the Syntrix server
+3. Start Syntrix server with LAN access enabled (`--host 0.0.0.0`)
+4. Install demo dependencies
+5. Start the demo server
+
+### Manual Start
+
+#### Step 1: Start Infrastructure (MongoDB & NATS)
 
 ```bash
 cd /path/to/syntrix
