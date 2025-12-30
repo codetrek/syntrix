@@ -11,24 +11,51 @@ A simple demo showcasing Syntrix TypeScript SDK's realtime WebSocket synchroniza
 
 ## Prerequisites
 
-- Syntrix server running on port 8080
-- Bun installed
+- Docker & Docker Compose (for MongoDB and NATS)
+- Go 1.21+ (for building Syntrix server)
+- Bun (for running the demo)
 
 ## Quick Start
 
+### Step 1: Start Infrastructure (MongoDB & NATS)
+
 ```bash
-# Terminal 1: Start Syntrix server
 cd /path/to/syntrix
+docker compose up -d
+```
+
+### Step 2: Build and Start Syntrix Server
+
+```bash
+# Build the server
+make build
+
+# Start with default settings (localhost only)
 make run
 
-# Terminal 2: Start demo (builds SDK bundle automatically)
+# OR start with LAN access enabled (required for accessing from other devices)
+./bin/syntrix --all --host 0.0.0.0
+```
+
+### Step 3: Install Demo Dependencies
+
+```bash
 cd example/realtime-demo
+bun install
+```
+
+### Step 4: Start the Demo
+
+```bash
 bun run dev
 ```
 
-Then open http://localhost:3000/
+### Step 5: Access the Demo
 
-For LAN access: http://<your-ip>:3000/
+- **Local access**: http://localhost:3000/
+- **LAN access**: http://\<your-ip\>:3000/ (requires `--host 0.0.0.0` on server)
+
+Click **"Quick Connect Both"** to connect two clients simultaneously.
 
 ## How It Works
 

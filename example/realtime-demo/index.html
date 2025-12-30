@@ -11,9 +11,9 @@
         h1 { text-align: center; color: #333; margin: 10px 0 20px; font-size: 1.5rem; }
         .sdk-badge { display: inline-block; background: #6f42c1; color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-left: 10px; }
         
-        /* Control Bar */
+        /* Control Bar - Status Row */
         .control-bar { background: white; border-radius: 8px; padding: 15px; margin-bottom: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-        .control-row { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+        .control-row { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; justify-content: center; }
         .control-group { display: flex; align-items: center; gap: 8px; }
         .control-group label { font-weight: 500; color: #666; font-size: 13px; white-space: nowrap; }
         .control-group input { padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; width: 120px; }
@@ -36,30 +36,35 @@
         .status-dot.connecting { background: #ffc107; }
         .status-text { font-size: 12px; color: #666; }
         
-        /* Client Section - Collapsible */
-        .client-section { margin-bottom: 15px; }
-        .client-header { background: white; border-radius: 8px 8px 0 0; padding: 12px 15px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-        .client-header:hover { background: #f8f9fa; }
-        .client-header h3 { margin: 0; font-size: 14px; color: #007bff; }
-        .client-header .toggle { font-size: 12px; color: #999; }
-        .client-body { background: white; border-radius: 0 0 8px 8px; padding: 15px; display: none; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-top: 1px; }
-        .client-body.open { display: block; }
-        .client-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+        /* Server Status */
+        .server-status { display: flex; align-items: center; gap: 6px; padding: 6px 12px; background: #f8f9fa; border-radius: 4px; border: 1px solid #e9ecef; }
+        .server-status .status-dot { margin-right: 0; }
+        .server-status-text { font-size: 11px; color: #666; white-space: nowrap; }
+        
+        /* Two Column Layout */
+        .columns-container { display: flex; gap: 15px; }
+        .client-column { flex: 1; display: flex; flex-direction: column; gap: 15px; }
+        .client-column.client1 { border-right: 2px dashed #e0e0e0; padding-right: 15px; }
+        .client-column.client2 { padding-left: 0; }
+        
+        /* Client Panel */
+        .client-panel { background: white; border-radius: 8px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .client-panel h3 { margin: 0 0 12px; font-size: 14px; border-bottom: 2px solid #007bff; padding-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+        .client-panel h3.client2 { border-bottom-color: #28a745; }
+        .client-panel h3 .status-indicator { margin-left: auto; }
+        
+        /* Settings Section */
+        .settings-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .settings-row .control-group { margin-bottom: 0; }
         
         /* Message Input */
-        .message-section { background: white; border-radius: 8px; padding: 15px; margin-bottom: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-        .message-row { display: flex; gap: 10px; align-items: flex-end; }
-        .message-row .input-group { flex: 1; }
-        .message-row label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }
-        .message-row input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
-        .message-row select { padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; background: white; }
+        .message-input { display: flex; gap: 10px; align-items: flex-end; }
+        .message-input .input-wrapper { flex: 1; }
+        .message-input label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }
+        .message-input input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
         
-        /* Received Documents - Two Columns */
-        .docs-section { display: flex; gap: 15px; margin-bottom: 15px; }
-        .docs-panel { flex: 1; background: white; border-radius: 8px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); min-height: 300px; }
-        .docs-panel h3 { margin: 0 0 10px; font-size: 14px; color: #333; border-bottom: 2px solid #007bff; padding-bottom: 8px; }
-        .docs-panel h3.client2 { border-bottom-color: #28a745; }
-        .data-list { max-height: 350px; overflow-y: auto; }
+        /* Received Documents */
+        .data-list { max-height: 300px; overflow-y: auto; min-height: 150px; }
         .data-item { background: #f8f9fa; padding: 8px 12px; margin-bottom: 8px; border-radius: 4px; border-left: 3px solid #007bff; font-size: 13px; }
         .data-item.client2 { border-left-color: #28a745; }
         .data-item .sender { font-weight: 600; color: #333; }
@@ -67,16 +72,8 @@
         .data-item .time { font-size: 11px; color: #999; float: right; }
         .data-item .type-icon { margin-right: 5px; }
         
-        /* Event Logs - Collapsible at bottom */
-        .logs-section { background: white; border-radius: 8px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-        .logs-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
-        .logs-header h3 { margin: 0; font-size: 14px; color: #666; }
-        .logs-body { display: none; margin-top: 10px; }
-        .logs-body.open { display: flex; gap: 15px; }
-        .log-panel { flex: 1; }
-        .log-panel h4 { margin: 0 0 8px; font-size: 12px; color: #007bff; }
-        .log-panel h4.client2 { color: #28a745; }
-        .log { background: #f8f9fa; border: 1px solid #eee; border-radius: 4px; padding: 8px; max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 11px; }
+        /* Event Logs */
+        .log { background: #f8f9fa; border: 1px solid #eee; border-radius: 4px; padding: 8px; max-height: 120px; overflow-y: auto; font-family: monospace; font-size: 11px; min-height: 80px; }
         .log-entry { margin-bottom: 3px; padding: 3px 5px; border-radius: 2px; }
         .log-entry.info { background: #e7f3ff; }
         .log-entry.event { background: #d4edda; }
@@ -84,14 +81,17 @@
         .log-entry.send { background: #fff3cd; }
         
         /* Empty State */
-        .empty-state { text-align: center; color: #999; padding: 40px; font-size: 13px; }
+        .empty-state { text-align: center; color: #999; padding: 30px 10px; font-size: 13px; }
+        
+        /* Section Title */
+        .section-title { font-size: 12px; color: #666; font-weight: 600; margin: 0 0 8px; text-transform: uppercase; letter-spacing: 0.5px; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🔄 Syntrix Realtime Chat <span class="sdk-badge">SDK Demo</span></h1>
         
-        <!-- Global Control Bar -->
+        <!-- Global Status Bar -->
         <div class="control-bar">
             <div class="control-row">
                 <div class="control-group">
@@ -106,98 +106,102 @@
                     <span class="status-dot disconnected" id="status2Dot"></span>
                     <span class="status-text" id="status2Text">Client 2: Offline</span>
                 </div>
-                <button onclick="quickConnect()" id="quickConnectBtn">⚡ Quick Connect Both</button>
-                <button onclick="disconnectAll()" class="danger small">Disconnect All</button>
+                <button onclick="quickConnect()" id="quickConnectBtn" class="success">⚡ Quick Connect Both</button>
+                <div class="server-status" id="serverStatus" title="Syntrix Server Status">
+                    <span class="status-dot disconnected" id="serverStatusDot"></span>
+                    <span class="server-status-text" id="serverStatusText">Server: Checking...</span>
+                </div>
             </div>
         </div>
 
-        <!-- Client 1 Settings (Collapsible) -->
-        <div class="client-section">
-            <div class="client-header" onclick="toggleClient(1)">
-                <h3>👤 Client 1 Settings</h3>
-                <span class="toggle" id="toggle1">▼ Expand</span>
-            </div>
-            <div class="client-body" id="clientBody1">
-                <div class="client-controls">
-                    <div class="control-group">
-                        <label>Username:</label>
-                        <input type="text" id="username1" value="client1">
+        <!-- Two Column Layout -->
+        <div class="columns-container">
+            <!-- Client 1 Column -->
+            <div class="client-column client1">
+                <!-- Client 1 Settings -->
+                <div class="client-panel">
+                    <h3>👤 Client 1
+                        <span class="status-indicator">
+                            <span class="status-dot disconnected" id="panel1StatusDot"></span>
+                        </span>
+                    </h3>
+                    <div class="settings-row">
+                        <div class="control-group">
+                            <label>Username:</label>
+                            <input type="text" id="username1" value="client1">
+                        </div>
+                        <button onclick="connectRealtime(1)" id="connectBtn1">Connect</button>
+                        <button onclick="disconnectRealtime(1)" id="disconnectBtn1" disabled class="danger small">Disconnect</button>
                     </div>
-                    <button onclick="login(1)" id="loginBtn1">Login</button>
-                    <button onclick="connectRealtime(1)" id="connectBtn1" disabled>Connect</button>
-                    <button onclick="subscribe(1)" id="subBtn1" disabled>Subscribe</button>
-                    <button onclick="disconnectRealtime(1)" id="disconnectBtn1" disabled class="danger small">Disconnect</button>
                 </div>
-            </div>
-        </div>
-
-        <!-- Client 2 Settings (Collapsible) -->
-        <div class="client-section">
-            <div class="client-header" onclick="toggleClient(2)">
-                <h3>👤 Client 2 Settings</h3>
-                <span class="toggle" id="toggle2">▼ Expand</span>
-            </div>
-            <div class="client-body" id="clientBody2">
-                <div class="client-controls">
-                    <div class="control-group">
-                        <label>Username:</label>
-                        <input type="text" id="username2" value="client2">
+                
+                <!-- Client 1 Send Message -->
+                <div class="client-panel">
+                    <p class="section-title">📤 Send Message</p>
+                    <div class="message-input">
+                        <div class="input-wrapper">
+                            <input type="text" id="messageText1" value="Hello from Client 1!" placeholder="Type message...">
+                        </div>
+                        <button onclick="sendMessage(1)" class="success">Send</button>
                     </div>
-                    <button onclick="login(2)" id="loginBtn2">Login</button>
-                    <button onclick="connectRealtime(2)" id="connectBtn2" disabled>Connect</button>
-                    <button onclick="subscribe(2)" id="subBtn2" disabled>Subscribe</button>
-                    <button onclick="disconnectRealtime(2)" id="disconnectBtn2" disabled class="danger small">Disconnect</button>
                 </div>
-            </div>
-        </div>
-
-        <!-- Message Input -->
-        <div class="message-section">
-            <div class="message-row">
-                <div class="input-group">
-                    <label>Message Text</label>
-                    <input type="text" id="messageText" value="Hello World!" placeholder="Type your message...">
+                
+                <!-- Client 1 Received -->
+                <div class="client-panel">
+                    <h3>📥 Received Messages</h3>
+                    <div class="data-list" id="data1">
+                        <div class="empty-state">No messages yet. Connect to see realtime updates.</div>
+                    </div>
                 </div>
-                <div class="control-group">
-                    <label>Send as</label>
-                    <select id="sendAs">
-                        <option value="1">Client 1</option>
-                        <option value="2">Client 2</option>
-                    </select>
-                </div>
-                <button onclick="sendMessage()" class="success">📤 Send Message</button>
-            </div>
-        </div>
-
-        <!-- Received Documents - Two Columns -->
-        <div class="docs-section">
-            <div class="docs-panel">
-                <h3>📥 Client 1 Received</h3>
-                <div class="data-list" id="data1">
-                    <div class="empty-state">No messages yet. Connect and subscribe to see realtime updates.</div>
-                </div>
-            </div>
-            <div class="docs-panel">
-                <h3 class="client2">📥 Client 2 Received</h3>
-                <div class="data-list" id="data2">
-                    <div class="empty-state">No messages yet. Connect and subscribe to see realtime updates.</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Event Logs (Collapsible) -->
-        <div class="logs-section">
-            <div class="logs-header" onclick="toggleLogs()">
-                <h3>📋 Event Logs</h3>
-                <span class="toggle" id="logsToggle">▼ Expand</span>
-            </div>
-            <div class="logs-body" id="logsBody">
-                <div class="log-panel">
-                    <h4>Client 1</h4>
+                
+                <!-- Client 1 Logs -->
+                <div class="client-panel">
+                    <p class="section-title">📋 Event Logs</p>
                     <div class="log" id="log1"></div>
                 </div>
-                <div class="log-panel">
-                    <h4 class="client2">Client 2</h4>
+            </div>
+            
+            <!-- Client 2 Column -->
+            <div class="client-column client2">
+                <!-- Client 2 Settings -->
+                <div class="client-panel">
+                    <h3 class="client2">👤 Client 2
+                        <span class="status-indicator">
+                            <span class="status-dot disconnected" id="panel2StatusDot"></span>
+                        </span>
+                    </h3>
+                    <div class="settings-row">
+                        <div class="control-group">
+                            <label>Username:</label>
+                            <input type="text" id="username2" value="client2">
+                        </div>
+                        <button onclick="connectRealtime(2)" id="connectBtn2">Connect</button>
+                        <button onclick="disconnectRealtime(2)" id="disconnectBtn2" disabled class="danger small">Disconnect</button>
+                    </div>
+                </div>
+                
+                <!-- Client 2 Send Message -->
+                <div class="client-panel">
+                    <p class="section-title">📤 Send Message</p>
+                    <div class="message-input">
+                        <div class="input-wrapper">
+                            <input type="text" id="messageText2" value="Hello from Client 2!" placeholder="Type message...">
+                        </div>
+                        <button onclick="sendMessage(2)" class="success">Send</button>
+                    </div>
+                </div>
+                
+                <!-- Client 2 Received -->
+                <div class="client-panel">
+                    <h3 class="client2">📥 Received Messages</h3>
+                    <div class="data-list" id="data2">
+                        <div class="empty-state">No messages yet. Connect to see realtime updates.</div>
+                    </div>
+                </div>
+                
+                <!-- Client 2 Logs -->
+                <div class="client-panel">
+                    <p class="section-title">📋 Event Logs</p>
                     <div class="log" id="log2"></div>
                 </div>
             </div>

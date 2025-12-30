@@ -14,27 +14,19 @@ const clients: Record<number, ClientState> = {
     2: { syntrix: null, connected: false }
 };
 
-// Toggle functions
-(window as any).toggleClient = function(panelId: number) {
-    const body = document.getElementById(`clientBody${panelId}`)!;
-    const toggle = document.getElementById(`toggle${panelId}`)!;
-    body.classList.toggle('open');
-    toggle.textContent = body.classList.contains('open') ? '▲ Collapse' : '▼ Expand';
-};
-
-(window as any).toggleLogs = function() {
-    const body = document.getElementById('logsBody')!;
-    const toggle = document.getElementById('logsToggle')!;
-    body.classList.toggle('open');
-    toggle.textContent = body.classList.contains('open') ? '▲ Collapse' : '▼ Expand';
-};
-
 function updateStatus(panelId: number, status: string) {
+    // Update top status bar
     const dot = document.getElementById(`status${panelId}Dot`)!;
     const text = document.getElementById(`status${panelId}Text`)!;
     dot.className = `status-dot ${status}`;
     const statusText = status === 'connected' ? 'Online' : status === 'connecting' ? 'Connecting...' : 'Offline';
     text.textContent = `Client ${panelId}: ${statusText}`;
+    
+    // Update panel status indicator
+    const panelDot = document.getElementById(`panel${panelId}StatusDot`);
+    if (panelDot) {
+        panelDot.className = `status-dot ${status}`;
+    }
 }
 
 function log(panelId: number, message: string, type = 'info') {
@@ -86,10 +78,48 @@ async function signupOrLogin(username: string, password: string): Promise<void> 
     }
 }
 
+// Track if both clients are connected
+let bothConnected = false;
+
+// Helper to update client settings button states
+function updateClientButtons(panelId: number, connected: boolean) {
+    const connectBtn = document.getElementById(`connectBtn${panelId}`) as HTMLButtonElement;
+    const disconnectBtn = document.getElementById(`disconnectBtn${panelId}`) as HTMLButtonElement;
+    connectBtn.disabled = connected;
+    disconnectBtn.disabled = !connected;
+}
+
+// Helper to check and update bothConnected state
+function updateBothConnectedState() {
+    bothConnected = clients[1].connected && clients[2].connected;
+    updateQuickConnectButton();
+}
+
+// Helper to update button state
+function updateQuickConnectButton() {
+    const btn = document.getElementById('quickConnectBtn') as HTMLButtonElement;
+    if (bothConnected) {
+        btn.textContent = '🔌 Disconnect Both';
+        btn.classList.add('danger');
+        btn.classList.remove('success');
+    } else {
+        btn.textContent = '⚡ Quick Connect Both';
+        btn.classList.remove('danger');
+        btn.classList.add('success');
+    }
+}
+
 // Quick connect both clients
 (window as any).quickConnect = async function() {
-    const collection = (document.getElementById('collection') as HTMLInputElement).value;
     const btn = document.getElementById('quickConnectBtn') as HTMLButtonElement;
+    
+    // If already connected, disconnect instead
+    if (bothConnected) {
+        (window as any).disconnectAll();
+        return;
+    }
+    
+    const collection = (document.getElementById('collection') as HTMLInputElement).value;
     btn.disabled = true;
     btn.textContent = '⏳ Connecting...';
     
@@ -134,6 +164,7 @@ async function signupOrLogin(username: string, password: string): Promise<void> 
                 updateStatus(panelId, 'connected');
                 clients[panelId].connected = true;
                 log(panelId, '✅ Connected', 'event');
+                updateClientButtons(panelId, true);
                 
                 // Auto subscribe
                 rt.subscribe({
@@ -148,6 +179,8 @@ async function signupOrLogin(username: string, password: string): Promise<void> 
                 updateStatus(panelId, 'disconnected');
                 clients[panelId].connected = false;
                 log(panelId, '🔌 Disconnected', 'info');
+                updateClientButtons(panelId, false);
+                updateBothConnectedState();
             });
 
             rt.on('onError', (error) => {
@@ -168,68 +201,93 @@ async function signupOrLogin(username: string, password: string): Promise<void> 
 
             await rt.connect();
         }
+        // Mark both as connected
+        bothConnected = true;
     } catch (e: any) {
         log(1, `❌ Quick connect failed: ${e.message}`, 'error');
+        bothConnected = false;
     }
     
     btn.disabled = false;
-    btn.textContent = '⚡ Quick Connect Both';
+    updateQuickConnectButton();
 };
 
 (window as any).disconnectAll = function() {
+    const btn = document.getElementById('quickConnectBtn') as HTMLButtonElement;
+    btn.disabled = true;
+    btn.textContent = '⏳ Disconnecting...';
+    
     for (const panelId of [1, 2]) {
         if (clients[panelId].syntrix) {
-            clients[panelId].syntrix!.realtime().disconnect();
+            try {
+                clients[panelId].syntrix!.realtime().disconnect();
+            } catch (e) {
+                // Ignore disconnect errors
+            }
             clients[panelId].syntrix = null;
             clients[panelId].connected = false;
             updateStatus(panelId, 'disconnected');
+            updateClientButtons(panelId, false);
         }
+        
+        // Clear Client Received area
+        const dataEl = document.getElementById(`data${panelId}`)!;
+        dataEl.innerHTML = '<div class="empty-state">No messages yet</div>';
+        
+        // Clear log area
+        const logEl = document.getElementById(`log${panelId}`)!;
+        logEl.innerHTML = '';
     }
+    
+    bothConnected = false;
+    btn.disabled = false;
+    updateQuickConnectButton();
 };
 
-(window as any).login = async function(panelId: number) {
+(window as any).connectRealtime = async function(panelId: number) {
     const username = (document.getElementById(`username${panelId}`) as HTMLInputElement).value;
     const password = 'password_' + username;
+    const collection = (document.getElementById('collection') as HTMLInputElement).value;
+    const connectBtn = document.getElementById(`connectBtn${panelId}`) as HTMLButtonElement;
+    const disconnectBtn = document.getElementById(`disconnectBtn${panelId}`) as HTMLButtonElement;
+    
+    connectBtn.disabled = true;
+    updateStatus(panelId, 'connecting');
     
     try {
-        log(panelId, `Logging in as ${username}...`, 'info');
-        
-        // Ensure user exists (signup if needed)
+        // Ensure user exists (signup if needed) and login
         await signupOrLogin(username, password);
         
         const syntrix = new SyntrixClient(API_BASE, { tenantId: 'default' });
         await syntrix.login(username, password);
         clients[panelId].syntrix = syntrix;
-        log(panelId, `✅ Logged in`, 'event');
-        
-        (document.getElementById(`connectBtn${panelId}`) as HTMLButtonElement).disabled = false;
-    } catch (e: any) {
-        log(panelId, `❌ Login failed: ${e.message}`, 'error');
-    }
-};
+        log(panelId, `✅ Logged in as ${username}`, 'event');
 
-(window as any).connectRealtime = async function(panelId: number) {
-    const syntrix = clients[panelId].syntrix;
-    if (!syntrix) return;
-
-    updateStatus(panelId, 'connecting');
-    const collection = (document.getElementById('collection') as HTMLInputElement).value;
-
-    try {
         const rt = syntrix.realtime();
         
         rt.on('onConnect', () => {
             updateStatus(panelId, 'connected');
             clients[panelId].connected = true;
             log(panelId, '✅ Connected', 'event');
-            (document.getElementById(`subBtn${panelId}`) as HTMLButtonElement).disabled = false;
-            (document.getElementById(`disconnectBtn${panelId}`) as HTMLButtonElement).disabled = false;
+            disconnectBtn.disabled = false;
+            updateBothConnectedState();
+            
+            // Auto subscribe after connect
+            rt.subscribe({
+                query: { collection, filters: [] },
+                includeData: true,
+                sendSnapshot: true
+            });
+            log(panelId, `📡 Subscribed to "${collection}"`, 'event');
         });
 
         rt.on('onDisconnect', () => {
             updateStatus(panelId, 'disconnected');
             clients[panelId].connected = false;
             log(panelId, '🔌 Disconnected', 'info');
+            connectBtn.disabled = false;
+            disconnectBtn.disabled = true;
+            updateBothConnectedState();
         });
 
         rt.on('onError', (error) => {
@@ -252,30 +310,38 @@ async function signupOrLogin(username: string, password: string): Promise<void> 
     } catch (e: any) {
         log(panelId, `❌ Connect failed: ${e.message}`, 'error');
         updateStatus(panelId, 'disconnected');
+        connectBtn.disabled = false;
     }
 };
 
 (window as any).disconnectRealtime = function(panelId: number) {
     if (clients[panelId].syntrix) {
-        clients[panelId].syntrix!.realtime().disconnect();
+        try {
+            clients[panelId].syntrix!.realtime().disconnect();
+        } catch (e) {
+            // Ignore disconnect errors
+        }
+        clients[panelId].syntrix = null;
+        clients[panelId].connected = false;
+        updateStatus(panelId, 'disconnected');
+        
+        // Reset button states
+        updateClientButtons(panelId, false);
+        updateBothConnectedState();
+        
+        // Clear Client Received area
+        const dataEl = document.getElementById(`data${panelId}`)!;
+        dataEl.innerHTML = '<div class="empty-state">No messages yet</div>';
+        
+        // Clear log area
+        const logEl = document.getElementById(`log${panelId}`)!;
+        logEl.innerHTML = '';
     }
 };
 
-(window as any).subscribe = function(panelId: number) {
-    const syntrix = clients[panelId].syntrix;
-    if (!syntrix) return;
+// subscribe function is no longer needed as auto-subscribe happens on connect
 
-    const collection = (document.getElementById('collection') as HTMLInputElement).value;
-    syntrix.realtime().subscribe({
-        query: { collection, filters: [] },
-        includeData: true,
-        sendSnapshot: true
-    });
-    log(panelId, `📡 Subscribed to "${collection}"`, 'event');
-};
-
-(window as any).sendMessage = async function() {
-    const panelId = parseInt((document.getElementById('sendAs') as HTMLSelectElement).value);
+(window as any).sendMessage = async function(panelId: number) {
     const syntrix = clients[panelId].syntrix;
     
     if (!syntrix) {
@@ -283,7 +349,7 @@ async function signupOrLogin(username: string, password: string): Promise<void> 
         return;
     }
 
-    const text = (document.getElementById('messageText') as HTMLInputElement).value;
+    const text = (document.getElementById(`messageText${panelId}`) as HTMLInputElement).value;
     const sender = (document.getElementById(`username${panelId}`) as HTMLInputElement).value;
     const collection = (document.getElementById('collection') as HTMLInputElement).value;
 
@@ -291,13 +357,59 @@ async function signupOrLogin(username: string, password: string): Promise<void> 
         log(panelId, `📤 Sending: "${text}"`, 'send');
         await syntrix.collection(collection).add({ text, sender });
         log(panelId, `✅ Sent`, 'event');
-        (document.getElementById('messageText') as HTMLInputElement).value = '';
+        (document.getElementById(`messageText${panelId}`) as HTMLInputElement).value = '';
     } catch (e: any) {
         log(panelId, `❌ Send failed: ${e.message}`, 'error');
     }
 };
 
-// Enter key to send
-document.getElementById('messageText')?.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') (window as any).sendMessage();
+// Enter key to send for both clients
+document.getElementById('messageText1')?.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') (window as any).sendMessage(1);
 });
+document.getElementById('messageText2')?.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') (window as any).sendMessage(2);
+});
+
+// Server health check
+let serverOnline = false;
+
+function updateServerStatus(online: boolean) {
+    serverOnline = online;
+    const dot = document.getElementById('serverStatusDot')!;
+    const text = document.getElementById('serverStatusText')!;
+    
+    if (online) {
+        dot.className = 'status-dot connected';
+        text.textContent = 'Server: Online';
+    } else {
+        dot.className = 'status-dot disconnected';
+        text.textContent = 'Server: Offline';
+    }
+}
+
+async function checkServerHealth() {
+    try {
+        // Use a simple fetch with timeout promise race
+        const fetchPromise = fetch(`${API_BASE}/health`, {
+            method: 'GET',
+            mode: 'cors'
+        });
+        
+        const timeoutPromise = new Promise<Response>((_, reject) => {
+            setTimeout(() => reject(new Error('timeout')), 5000);
+        });
+        
+        const response = await Promise.race([fetchPromise, timeoutPromise]);
+        updateServerStatus(response.ok);
+    } catch (e) {
+        // Log error for debugging
+        console.log('[Health Check] Failed:', e);
+        updateServerStatus(false);
+    }
+}
+
+// Check server health on load and periodically
+checkServerHealth();
+setInterval(checkServerHealth, 10000); // Check every 10 seconds
+
