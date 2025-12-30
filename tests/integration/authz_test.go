@@ -160,4 +160,3 @@ match:
 		assert.Equal(t, http.StatusOK, code)
 	})
 }
-

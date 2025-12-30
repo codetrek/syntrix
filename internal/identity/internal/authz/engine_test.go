@@ -234,4 +234,3 @@ match:
 	assert.NotNil(t, loadedRules)
 	assert.Equal(t, "2", loadedRules.Version)
 }
-

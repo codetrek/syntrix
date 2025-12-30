@@ -116,8 +116,8 @@ func (s *userStore) UpdateUser(ctx context.Context, tenant string, user *types.U
 	filter := bson.M{"_id": user.ID, "tenant_id": tenant}
 	update := bson.M{
 		"$set": bson.M{
-			"roles":     user.Roles,
-			"disabled":  user.Disabled,
+			"roles":      user.Roles,
+			"disabled":   user.Disabled,
 			"updated_at": time.Now(),
 		},
 	}
