@@ -8,21 +8,6 @@ Index of task planning documents for Syntrix.
 
 ## Tasks
 
-- [001.2025-12-22-gateway-merge-plan.md](001.2025-12-22-gateway-merge-plan.md) — Gateway Unification Plan (REST + Replication + Realtime WS/SSE). Status: Done.
-- [002.2025-12-22-sdk-implementation-steps.md](002.2025-12-22-sdk-implementation-steps.md) — SDK Implementation Execution Plan (TypeScript Client). Status: Done.
-- [003.2025-12-25-storage-decoupling.md](003.2025-12-25-storage-decoupling.md) — Storage Abstraction & Provider Plan. Status: Completed.
-- [004.2025-12-25-storage-architecture-implementation.md](004.2025-12-25-storage-architecture-implementation.md) — Storage Architecture Implementation. Status: Completed.
-- [005.2025-12-25-identity-alignment.md](005.2025-12-25-identity-alignment.md) — Identity Alignment (AuthN/AuthZ). Status: Completed.
-- [006.2025-12-26-multi-tenant-storage-plan.md](006.2025-12-26-multi-tenant-storage-plan.md) — Multi-Tenant Storage Implementation Plan. Status: Completed.
-- [007.2025-12-26-realtime-auth-plan.md](007.2025-12-26-realtime-auth-plan.md) — Realtime Auth (WS/SSE). Status: Completed.
-- [008.2025-12-27-sdk-auth-realtime-review.md](008.2025-12-27-sdk-auth-realtime-review.md) — SDK WS/SSE Auth + Multi-Tenant Review. Status: Completed.
-- [009.2025-12-27-unit-test-optimization.md](009.2025-12-27-unit-test-optimization.md) — Unit Test Suite Optimization. Status: Completed.
-- [010.2025-12-28-trigger-engine-refactor.md](010.2025-12-28-trigger-engine-refactor.md) — Trigger Engine Refactor & Factory Wiring. Status: Completed.
-- [011.2025-12-29-consumer-graceful-shutdown.md](011.2025-12-29-consumer-graceful-shutdown.md) — Consumer Graceful Shutdown. Status: Complete.
-- [012.2025-12-29-rest-api-hardening.md](012.2025-12-29-rest-api-hardening.md) — REST API Security Hardening & Code Quality. Status: Completed.
-- [013.2025-12-29-test-coverage-improvements.md](013.2025-12-29-test-coverage-improvements.md) — Test Coverage Improvements. Status: Completed.
-- [014.2025-12-26-query-surface-encapsulation.md](014.2025-12-26-query-surface-encapsulation.md) — Query Surface Encapsulation & HTTP Adapter Refactor. Status: Completed.
-- [015.2025-12-30-field-naming-audit.md](015.2025-12-30-field-naming-audit.md) — Field Naming Consistency Audit. Status: Completed.
 - [016.2025-12-29-change-stream-puller.md](016.2025-12-29-change-stream-puller.md) — Change Stream Puller (fan-out, checkpoints, JetStream). Status: In Progress. Depends on: 014 and 015.
 - [017.2025-12-29-index-layer-implementation.md](017.2025-12-29-index-layer-implementation.md) — Index Layer Implementation (Data/Index/Query). Status: Planned. Depends on: 016.
 - [018.2025-12-29-streamer-implementation-plan.md](018.2025-12-29-streamer-implementation-plan.md) — Streamer Service Implementation (JetStream-based event matching & routing). Status: Planning Phase - 23 critical issues identified. **BLOCKED by Task 016 (Puller Service)**. Est. 9-12 weeks after Puller completion.

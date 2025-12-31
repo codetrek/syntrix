@@ -44,7 +44,8 @@ IMMEDIATELY STOP and ask user when:
 
 ## 🚫 FORBIDDEN PATTERNS
 
-- Using unverified parameters from external interfaces (Strict validation required)
+- Using unverified parameters from external interfaces (Strict validation required).
+- Skip any unit test or integration testing.
 - Using `cat` or `echo` to write or append to files in the terminal.
 - **Integration Tests**: Direct calls to internal service components (e.g., `query.Engine`, `storage.Backend`) are FORBIDDEN in `tests/integration`. Tests must treat the service as a black box and interact ONLY via public interfaces (HTTP API, etc.).
 
