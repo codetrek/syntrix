@@ -58,6 +58,15 @@ func TestRemoteNATSProvider_Connect(t *testing.T) {
 	})
 }
 
+// mockNATSConnection is a mock for natsConnection interface
+type mockNATSConnection struct {
+	closeCalled bool
+}
+
+func (m *mockNATSConnection) Close() {
+	m.closeCalled = true
+}
+
 func TestRemoteNATSProvider_Close(t *testing.T) {
 	t.Run("close with nil connection", func(t *testing.T) {
 		p := &RemoteNATSProvider{}
@@ -65,12 +74,13 @@ func TestRemoteNATSProvider_Close(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	t.Run("close with connection", func(t *testing.T) {
-		// We can't easily test Close() on a real connection without a server
-		// Just verify it doesn't panic with a nil-safe check
-		p := &RemoteNATSProvider{conn: nil}
+	t.Run("close with non-nil connection", func(t *testing.T) {
+		mockConn := &mockNATSConnection{}
+		p := &RemoteNATSProvider{conn: mockConn}
+
 		err := p.Close()
 		assert.NoError(t, err)
+		assert.True(t, mockConn.closeCalled, "Close should be called on connection")
 	})
 }
 

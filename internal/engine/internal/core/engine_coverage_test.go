@@ -402,6 +402,48 @@ func TestPush_DeleteNotFound(t *testing.T) {
 	assert.Empty(t, resp.Conflicts)
 }
 
+// TestPush_DeleteNotFoundThenGetSuccess tests Push delete when Delete returns NotFound
+// but subsequent Get finds a document (race condition - someone recreated it)
+func TestPush_DeleteNotFoundThenGetSuccess(t *testing.T) {
+	mockStorage := new(MockStorageBackend)
+	engine := newTestEngine(mockStorage)
+
+	req := storage.ReplicationPushRequest{
+		Collection: "col",
+		Changes: []storage.ReplicationPushChange{
+			{
+				Doc: &storage.Document{
+					Fullpath: "col/doc1",
+					Deleted:  true,
+				},
+			},
+		},
+	}
+
+	// First Get returns existing doc
+	mockStorage.On("Get", mock.Anything, "default", "col/doc1").Return(&storage.Document{
+		Fullpath: "col/doc1",
+		Version:  1,
+	}, nil).Once()
+
+	// Delete fails with NotFound (doc was deleted between Get and Delete)
+	mockStorage.On("Delete", mock.Anything, "default", "col/doc1", mock.Anything).Return(model.ErrNotFound)
+
+	// Get after NotFound finds a doc (someone recreated it - race condition)
+	mockStorage.On("Get", mock.Anything, "default", "col/doc1").Return(&storage.Document{
+		Fullpath: "col/doc1",
+		Version:  2,
+		Data:     map[string]interface{}{"recreated": true},
+	}, nil).Once()
+
+	resp, err := engine.Push(context.Background(), "default", req)
+	assert.NoError(t, err)
+	// The recreated doc should be in conflicts
+	assert.Len(t, resp.Conflicts, 1)
+	assert.Equal(t, int64(2), resp.Conflicts[0].Version)
+	mockStorage.AssertExpectations(t)
+}
+
 func TestPush_UpdateConflict(t *testing.T) {
 	mockStorage := new(MockStorageBackend)
 	engine := newTestEngine(mockStorage)
@@ -885,6 +927,24 @@ func TestPatchDocument_CustomTenant(t *testing.T) {
 	doc := model.Document{"collection": "col", "id": "doc1", "baz": "qux"}
 	_, err := engine.PatchDocument(context.Background(), "custom-tenant", doc, nil)
 	assert.NoError(t, err)
+	mockStorage.AssertExpectations(t)
+}
+
+// TestPatchDocument_GetAfterPatchError tests PatchDocument when Get fails after Patch
+func TestPatchDocument_GetAfterPatchError(t *testing.T) {
+	mockStorage := new(MockStorageBackend)
+	engine := newTestEngine(mockStorage)
+
+	doc := model.Document{"collection": "col", "id": "doc1", "foo": "bar"}
+
+	// Patch succeeds
+	mockStorage.On("Patch", mock.Anything, "default", "col/doc1", mock.Anything, model.Filters(nil)).Return(nil)
+	// Get after patch returns error
+	mockStorage.On("Get", mock.Anything, "default", "col/doc1").Return(nil, errors.New("get error"))
+
+	_, err := engine.PatchDocument(context.Background(), "default", doc, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "get error")
 	mockStorage.AssertExpectations(t)
 }
 

@@ -20,10 +20,16 @@ func GetNatsConnectFunc() func(string, ...nats.Option) (*nats.Conn, error) {
 	return natsConnectFunc
 }
 
+// natsConnection defines the interface for NATS connection operations.
+// This interface allows mocking the connection in tests.
+type natsConnection interface {
+	Close()
+}
+
 // RemoteNATSProvider connects to an external NATS server.
 type RemoteNATSProvider struct {
 	url  string
-	conn *nats.Conn
+	conn natsConnection
 }
 
 // NewRemoteNATSProvider creates a provider that connects to an external NATS server.
