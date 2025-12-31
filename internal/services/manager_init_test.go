@@ -427,3 +427,161 @@ func (s *stubAuthN) UpdateUser(ctx context.Context, id string, roles []string, d
 func (s *stubAuthN) Logout(ctx context.Context, refreshToken string) error      { return nil }
 func (s *stubAuthN) GenerateSystemToken(serviceName string) (string, error)     { return "", nil }
 func (s *stubAuthN) ValidateToken(tokenString string) (*identity.Claims, error) { return nil, nil }
+
+func TestManager_Init_StandaloneMode(t *testing.T) {
+	origFactory := storageFactoryFactory
+	defer func() { storageFactoryFactory = origFactory }()
+
+	fakeDocStore := &fakeDocumentStore{}
+	fakeAuth := &fakeAuthStore{}
+	storageFactoryFactory = func(ctx context.Context, cfg *config.Config) (storage.StorageFactory, error) {
+		return &fakeStorageFactory{
+			docStore: fakeDocStore,
+			usrStore: fakeAuth,
+			revStore: fakeAuth,
+		}, nil
+	}
+
+	cfg := config.LoadConfig()
+	cfg.Gateway.Port = 0
+	cfg.Identity.AuthZ.RulesFile = ""
+	mgr := NewManager(cfg, Options{
+		Mode:   ModeStandalone,
+		RunAPI: true,
+	})
+
+	err := mgr.Init(context.Background())
+	assert.NoError(t, err)
+	// In standalone mode, only the Gateway server should be created
+	assert.Len(t, mgr.servers, 1)
+	assert.Equal(t, "Unified Gateway", mgr.serverNames[0])
+	assert.NotNil(t, mgr.docStore)
+}
+
+func TestManager_Init_StandaloneMode_NoHTTPForCSP(t *testing.T) {
+	origFactory := storageFactoryFactory
+	defer func() { storageFactoryFactory = origFactory }()
+
+	fakeDocStore := &fakeDocumentStore{}
+	fakeAuth := &fakeAuthStore{}
+	storageFactoryFactory = func(ctx context.Context, cfg *config.Config) (storage.StorageFactory, error) {
+		return &fakeStorageFactory{
+			docStore: fakeDocStore,
+			usrStore: fakeAuth,
+			revStore: fakeAuth,
+		}, nil
+	}
+
+	cfg := config.LoadConfig()
+	cfg.Gateway.Port = 0
+	cfg.CSP.Port = 0
+	cfg.Query.Port = 0
+	cfg.Identity.AuthZ.RulesFile = ""
+	mgr := NewManager(cfg, Options{
+		Mode:   ModeStandalone,
+		RunAPI: true,
+		RunCSP: true, // This should be ignored in standalone mode
+	})
+
+	err := mgr.Init(context.Background())
+	assert.NoError(t, err)
+	// In standalone mode, CSP and Query servers are not created,
+	// only the Gateway server should exist
+	assert.Len(t, mgr.servers, 1)
+	assert.Equal(t, "Unified Gateway", mgr.serverNames[0])
+}
+
+func TestManager_createQueryService(t *testing.T) {
+	cfg := config.LoadConfig()
+	mgr := NewManager(cfg, Options{})
+	mgr.docStore = &fakeDocumentStore{}
+
+	// Create a mock CSP service
+	mockCSP := &mockCSPService{}
+	service := mgr.createQueryService(mockCSP)
+	assert.NotNil(t, service)
+}
+
+func TestManager_createCSPService(t *testing.T) {
+	cfg := config.LoadConfig()
+	mgr := NewManager(cfg, Options{})
+	mgr.docStore = &fakeDocumentStore{}
+
+	service := mgr.createCSPService()
+	assert.NotNil(t, service)
+}
+
+func TestManager_initQueryHTTPServer(t *testing.T) {
+	cfg := config.LoadConfig()
+	cfg.Query.Port = 0
+	mgr := NewManager(cfg, Options{})
+
+	mockService := &stubQueryService{}
+	mgr.initQueryHTTPServer(mockService)
+
+	assert.Len(t, mgr.servers, 1)
+	assert.Equal(t, "Query Service", mgr.serverNames[0])
+}
+
+// mockCSPService implements csp.Service for testing
+type mockCSPService struct{}
+
+func (m *mockCSPService) Watch(ctx context.Context, tenant, collection string, resumeToken interface{}, opts storage.WatchOptions) (<-chan storage.Event, error) {
+	ch := make(chan storage.Event)
+	close(ch)
+	return ch, nil
+}
+
+func TestManager_initStandalone_APIServerError(t *testing.T) {
+	origFactory := storageFactoryFactory
+	defer func() { storageFactoryFactory = origFactory }()
+
+	fakeDocStore := &fakeDocumentStore{}
+	fakeAuth := &fakeAuthStore{}
+	storageFactoryFactory = func(ctx context.Context, cfg *config.Config) (storage.StorageFactory, error) {
+		return &fakeStorageFactory{
+			docStore: fakeDocStore,
+			usrStore: fakeAuth,
+			revStore: fakeAuth,
+		}, nil
+	}
+
+	cfg := config.LoadConfig()
+	cfg.Gateway.Port = 0
+	cfg.Identity.AuthZ.RulesFile = "/nonexistent/rules/file.yaml"
+	mgr := NewManager(cfg, Options{
+		Mode:   ModeStandalone,
+		RunAPI: true,
+	})
+
+	err := mgr.Init(context.Background())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create authz engine")
+}
+
+func TestManager_initDistributed_APIServerError(t *testing.T) {
+	origFactory := storageFactoryFactory
+	defer func() { storageFactoryFactory = origFactory }()
+
+	fakeDocStore := &fakeDocumentStore{}
+	fakeAuth := &fakeAuthStore{}
+	storageFactoryFactory = func(ctx context.Context, cfg *config.Config) (storage.StorageFactory, error) {
+		return &fakeStorageFactory{
+			docStore: fakeDocStore,
+			usrStore: fakeAuth,
+			revStore: fakeAuth,
+		}, nil
+	}
+
+	cfg := config.LoadConfig()
+	cfg.Gateway.Port = 0
+	cfg.Identity.AuthZ.RulesFile = "/nonexistent/rules/file.yaml"
+	mgr := NewManager(cfg, Options{
+		Mode:   ModeDistributed,
+		RunAPI: true,
+	})
+
+	err := mgr.Init(context.Background())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create authz engine")
+}

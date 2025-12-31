@@ -149,4 +149,115 @@ func TestValidate(t *testing.T) {
 	}
 	err = cfg.Validate()
 	assert.NoError(t, err)
+
+	// Case 4: Invalid deployment mode
+	cfg = &Config{
+		Storage: StorageConfig{
+			Tenants: map[string]TenantConfig{
+				"default": {Backend: "existing_backend"},
+			},
+			Backends: map[string]BackendConfig{
+				"existing_backend": {},
+			},
+		},
+		Deployment: DeploymentConfig{
+			Mode: "invalid_mode",
+		},
+	}
+	err = cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "deployment.mode must be")
+
+	// Case 5: Valid standalone mode
+	cfg = &Config{
+		Storage: StorageConfig{
+			Tenants: map[string]TenantConfig{
+				"default": {Backend: "existing_backend"},
+			},
+			Backends: map[string]BackendConfig{
+				"existing_backend": {},
+			},
+		},
+		Deployment: DeploymentConfig{
+			Mode: "standalone",
+		},
+	}
+	err = cfg.Validate()
+	assert.NoError(t, err)
+
+	// Case 6: Valid distributed mode
+	cfg = &Config{
+		Storage: StorageConfig{
+			Tenants: map[string]TenantConfig{
+				"default": {Backend: "existing_backend"},
+			},
+			Backends: map[string]BackendConfig{
+				"existing_backend": {},
+			},
+		},
+		Deployment: DeploymentConfig{
+			Mode: "distributed",
+		},
+	}
+	err = cfg.Validate()
+	assert.NoError(t, err)
+}
+
+func TestLoadConfig_DeploymentDefaults(t *testing.T) {
+	// Ensure no env vars interfere
+	os.Unsetenv("SYNTRIX_DEPLOYMENT_MODE")
+	os.Unsetenv("SYNTRIX_EMBEDDED_NATS")
+	os.Unsetenv("SYNTRIX_NATS_DATA_DIR")
+
+	cfg := LoadConfig()
+
+	assert.Equal(t, "distributed", cfg.Deployment.Mode)
+	assert.True(t, cfg.Deployment.Standalone.EmbeddedNATS)
+	assert.Equal(t, "data/nats", cfg.Deployment.Standalone.NATSDataDir)
+	assert.False(t, cfg.IsStandaloneMode())
+}
+
+func TestLoadConfig_DeploymentEnvVars(t *testing.T) {
+	os.Setenv("SYNTRIX_DEPLOYMENT_MODE", "standalone")
+	os.Setenv("SYNTRIX_EMBEDDED_NATS", "false")
+	os.Setenv("SYNTRIX_NATS_DATA_DIR", "/custom/nats/data")
+	defer func() {
+		os.Unsetenv("SYNTRIX_DEPLOYMENT_MODE")
+		os.Unsetenv("SYNTRIX_EMBEDDED_NATS")
+		os.Unsetenv("SYNTRIX_NATS_DATA_DIR")
+	}()
+
+	cfg := LoadConfig()
+
+	assert.Equal(t, "standalone", cfg.Deployment.Mode)
+	assert.False(t, cfg.Deployment.Standalone.EmbeddedNATS)
+	assert.Equal(t, "/custom/nats/data", cfg.Deployment.Standalone.NATSDataDir)
+	assert.True(t, cfg.IsStandaloneMode())
+}
+
+func TestLoadConfig_DeploymentEnvVars_EmbeddedNATSTrue(t *testing.T) {
+	os.Setenv("SYNTRIX_EMBEDDED_NATS", "true")
+	defer os.Unsetenv("SYNTRIX_EMBEDDED_NATS")
+
+	cfg := LoadConfig()
+	assert.True(t, cfg.Deployment.Standalone.EmbeddedNATS)
+}
+
+func TestLoadConfig_DeploymentEnvVars_EmbeddedNATS1(t *testing.T) {
+	os.Setenv("SYNTRIX_EMBEDDED_NATS", "1")
+	defer os.Unsetenv("SYNTRIX_EMBEDDED_NATS")
+
+	cfg := LoadConfig()
+	assert.True(t, cfg.Deployment.Standalone.EmbeddedNATS)
+}
+
+func TestIsStandaloneMode(t *testing.T) {
+	cfg := &Config{Deployment: DeploymentConfig{Mode: "standalone"}}
+	assert.True(t, cfg.IsStandaloneMode())
+
+	cfg = &Config{Deployment: DeploymentConfig{Mode: "distributed"}}
+	assert.False(t, cfg.IsStandaloneMode())
+
+	cfg = &Config{Deployment: DeploymentConfig{Mode: ""}}
+	assert.False(t, cfg.IsStandaloneMode())
 }

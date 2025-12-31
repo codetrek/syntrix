@@ -58,7 +58,7 @@ Standalone mode packages all Syntrix services into a single process, replacing n
 │         │  interface                                                     │
 │         ▼                                                                │
 │  ┌─────────────┐                                                         │
-│  │ CSP Service │  (LocalService impl, no HTTP)                           │
+│  │ CSP Service │  (EmbeddedService impl, no HTTP)                        │
 │  └─────────────┘                                                         │
 │         │                                                                │
 │         │                                                                │
@@ -92,13 +92,13 @@ type Service interface {
     Watch(ctx context.Context, tenant, collection string) (<-chan storage.Event, error)
 }
 
-// LocalService - direct storage access (standalone mode)
-type LocalService struct {
+// EmbeddedService - direct storage access (standalone mode)
+type EmbeddedService struct {
     storage storage.DocumentStore
 }
 
-// RemoteClient - HTTP client (distributed mode)
-type RemoteClient struct {
+// RemoteService - HTTP client (distributed mode)
+type RemoteService struct {
     baseURL string
     client  *http.Client
 }
@@ -154,9 +154,9 @@ func (m *Manager) Init(ctx context.Context) error {
     // CSP service: local or remote based on mode
     var cspService csp.Service
     if m.opts.Mode == ModeStandalone {
-        cspService = csp.NewLocalService(m.docStore)
+        cspService = csp.NewEmbeddedService(m.docStore)
     } else {
-        cspService = csp.NewRemoteClient(m.cfg.Query.CSPServiceURL)
+        cspService = csp.NewRemoteService(m.cfg.Query.CSPServiceURL)
     }
     
     // Query service: always local engine in standalone, injected CSP
@@ -252,14 +252,14 @@ deployment:
 ### Phase 1: CSP Interface Abstraction
 
 1. Create `internal/csp/interface.go` with `Service` interface
-2. Implement `LocalService` (direct storage call)
-3. Extract existing HTTP logic to `RemoteClient`
+2. Implement `EmbeddedService` (direct storage call)
+3. Extract existing HTTP logic to `RemoteService`
 4. Modify `engine.Engine` to depend on `csp.Service` interface
 
 **Files to modify:**
 - `internal/csp/interface.go` (new)
-- `internal/csp/local_service.go` (new)
-- `internal/csp/remote_client.go` (new, extract from engine)
+- `internal/csp/embedded_service.go` (new)
+- `internal/csp/remote_service.go` (new, extract from engine)
 - `internal/engine/internal/core/engine.go`
 
 ### Phase 2: Service Manager Refactor

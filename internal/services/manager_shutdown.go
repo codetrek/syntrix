@@ -37,9 +37,9 @@ func (m *Manager) Shutdown(ctx context.Context) {
 		log.Println("Timeout waiting for background tasks.")
 	}
 
-	// Close NATS connection
-	if m.natsConn != nil {
-		log.Println("Closing NATS connection...")
-		m.natsConn.Close()
+	// Close NATS provider (handles both connection and any embedded server)
+	if m.natsProvider != nil {
+		log.Println("Closing NATS provider...")
+		m.natsProvider.Close()
 	}
 }

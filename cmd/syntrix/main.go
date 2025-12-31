@@ -21,8 +21,26 @@ func main() {
 	runTriggerEvaluator := flag.Bool("trigger-evaluator", false, "Run Trigger Evaluator Service")
 	runTriggerWorker := flag.Bool("trigger-worker", false, "Run Trigger Worker Service")
 	runAll := flag.Bool("all", false, "Run All Services")
+	standalone := flag.Bool("standalone", false, "Run in standalone mode (single process, no inter-service HTTP)")
 	listenHost := flag.String("host", "", "Host to listen on for all services")
 	flag.Parse()
+
+	// 1. Load Configuration early to check deployment mode from config
+	cfg := config.LoadConfig()
+
+	// Standalone mode: from CLI flag or config file
+	// CLI flag takes precedence over config file
+	if *standalone || cfg.IsStandaloneMode() {
+		log.Println("Starting Syntrix in Standalone Mode...")
+		log.Println("- All services running in-process")
+		opts := services.Options{
+			Mode:       services.ModeStandalone,
+			RunAPI:     true,
+			ListenHost: *listenHost,
+		}
+		runServer(cfg, opts)
+		return
+	}
 
 	// Default to running all if no specific flags are provided or if --all is set
 	if *runAll || (!*runAPI && !*runCSP && !*runQuery && !*runTriggerEvaluator && !*runTriggerWorker) {
@@ -33,8 +51,6 @@ func main() {
 		*runTriggerWorker = true
 	}
 
-	// 1. Load Configuration
-	cfg := config.LoadConfig()
 	log.Println("Starting Syntrix Services...")
 	if *runAPI {
 		log.Println("- API Gateway (REST + Realtime): Enabled")
@@ -61,6 +77,11 @@ func main() {
 		RunTriggerWorker:    *runTriggerWorker,
 		ListenHost:          *listenHost,
 	}
+	runServer(cfg, opts)
+}
+
+// runServer starts the service manager with the given configuration and options.
+func runServer(cfg *config.Config, opts services.Options) {
 	mgr := services.NewManager(cfg, opts)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

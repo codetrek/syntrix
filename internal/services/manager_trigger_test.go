@@ -49,15 +49,15 @@ func TestManager_InitTriggerServices_Success_WithHooks(t *testing.T) {
 	cfg.Trigger.RulesFile = ""
 	mgr := NewManager(cfg, Options{RunTriggerEvaluator: true, RunTriggerWorker: true})
 
-	origConnector := natsConnector
+	origConnector := trigger.GetNatsConnectFunc()
 	origFactory := triggerFactoryFactory
 	defer func() {
-		natsConnector = origConnector
+		trigger.SetNatsConnectFunc(origConnector)
 		triggerFactoryFactory = origFactory
 	}()
 
 	fakeConn := &nats.Conn{}
-	natsConnector = func(string, ...nats.Option) (*nats.Conn, error) { return fakeConn, nil }
+	trigger.SetNatsConnectFunc(func(string, ...nats.Option) (*nats.Conn, error) { return fakeConn, nil })
 
 	mockFactory := new(MockFactory)
 	triggerFactoryFactory = func(storage.DocumentStore, *nats.Conn, identity.AuthN, ...engine.FactoryOption) (engine.TriggerFactory, error) {
@@ -81,15 +81,15 @@ func TestManager_InitTriggerServices_WorkerOnly(t *testing.T) {
 	cfg := config.LoadConfig()
 	mgr := NewManager(cfg, Options{RunTriggerWorker: true})
 
-	origConnector := natsConnector
+	origConnector := trigger.GetNatsConnectFunc()
 	origFactory := triggerFactoryFactory
 	defer func() {
-		natsConnector = origConnector
+		trigger.SetNatsConnectFunc(origConnector)
 		triggerFactoryFactory = origFactory
 	}()
 
 	fakeConn := &nats.Conn{}
-	natsConnector = func(string, ...nats.Option) (*nats.Conn, error) { return fakeConn, nil }
+	trigger.SetNatsConnectFunc(func(string, ...nats.Option) (*nats.Conn, error) { return fakeConn, nil })
 
 	mockFactory := new(MockFactory)
 	triggerFactoryFactory = func(storage.DocumentStore, *nats.Conn, identity.AuthN, ...engine.FactoryOption) (engine.TriggerFactory, error) {
@@ -115,15 +115,15 @@ func TestManager_InitTriggerServices_EvaluatorOnly_WithRules(t *testing.T) {
 
 	mgr := NewManager(cfg, Options{RunTriggerEvaluator: true})
 
-	origConnector := natsConnector
+	origConnector := trigger.GetNatsConnectFunc()
 	origFactory := triggerFactoryFactory
 	defer func() {
-		natsConnector = origConnector
+		trigger.SetNatsConnectFunc(origConnector)
 		triggerFactoryFactory = origFactory
 	}()
 
 	fakeConn := &nats.Conn{}
-	natsConnector = func(string, ...nats.Option) (*nats.Conn, error) { return fakeConn, nil }
+	trigger.SetNatsConnectFunc(func(string, ...nats.Option) (*nats.Conn, error) { return fakeConn, nil })
 
 	mockFactory := new(MockFactory)
 	triggerFactoryFactory = func(storage.DocumentStore, *nats.Conn, identity.AuthN, ...engine.FactoryOption) (engine.TriggerFactory, error) {
@@ -143,15 +143,15 @@ func TestManager_InitTriggerServices_ConsumerError(t *testing.T) {
 	cfg := config.LoadConfig()
 	mgr := NewManager(cfg, Options{RunTriggerWorker: true})
 
-	origConnector := natsConnector
+	origConnector := trigger.GetNatsConnectFunc()
 	origFactory := triggerFactoryFactory
 	defer func() {
-		natsConnector = origConnector
+		trigger.SetNatsConnectFunc(origConnector)
 		triggerFactoryFactory = origFactory
 	}()
 
 	fakeConn := &nats.Conn{}
-	natsConnector = func(string, ...nats.Option) (*nats.Conn, error) { return fakeConn, nil }
+	trigger.SetNatsConnectFunc(func(string, ...nats.Option) (*nats.Conn, error) { return fakeConn, nil })
 
 	mockFactory := new(MockFactory)
 	triggerFactoryFactory = func(storage.DocumentStore, *nats.Conn, identity.AuthN, ...engine.FactoryOption) (engine.TriggerFactory, error) {
@@ -169,15 +169,58 @@ func TestManager_InitTriggerServices_NatsError(t *testing.T) {
 	cfg := config.LoadConfig()
 	mgr := NewManager(cfg, Options{RunTriggerEvaluator: true})
 
-	origConnector := natsConnector
-	defer func() { natsConnector = origConnector }()
+	origConnector := trigger.GetNatsConnectFunc()
+	defer func() { trigger.SetNatsConnectFunc(origConnector) }()
 
-	natsConnector = func(string, ...nats.Option) (*nats.Conn, error) {
+	trigger.SetNatsConnectFunc(func(string, ...nats.Option) (*nats.Conn, error) {
 		return nil, fmt.Errorf("nats error")
-	}
+	})
 
 	err := mgr.initTriggerServices()
 	assert.ErrorContains(t, err, "nats error")
+}
+
+func TestManager_InitTriggerServices_StandaloneEmbeddedNATS(t *testing.T) {
+	cfg := config.LoadConfig()
+	cfg.Deployment.Mode = "standalone"
+	cfg.Deployment.Standalone.EmbeddedNATS = true
+	cfg.Deployment.Standalone.NATSDataDir = "/tmp/nats"
+	mgr := NewManager(cfg, Options{Mode: ModeStandalone, RunTriggerEvaluator: true})
+
+	// EmbeddedNATSProvider should return error since it's not implemented
+	err := mgr.initTriggerServices()
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, trigger.ErrEmbeddedNATSNotImplemented)
+}
+
+func TestManager_InitTriggerServices_StandaloneRemoteNATS(t *testing.T) {
+	cfg := config.LoadConfig()
+	cfg.Deployment.Mode = "standalone"
+	cfg.Deployment.Standalone.EmbeddedNATS = false // Use remote NATS
+	mgr := NewManager(cfg, Options{Mode: ModeStandalone, RunTriggerEvaluator: true})
+
+	origConnector := trigger.GetNatsConnectFunc()
+	origFactory := triggerFactoryFactory
+	defer func() {
+		trigger.SetNatsConnectFunc(origConnector)
+		triggerFactoryFactory = origFactory
+	}()
+
+	fakeConn := &nats.Conn{}
+	trigger.SetNatsConnectFunc(func(string, ...nats.Option) (*nats.Conn, error) { return fakeConn, nil })
+
+	mockFactory := new(MockFactory)
+	triggerFactoryFactory = func(storage.DocumentStore, *nats.Conn, identity.AuthN, ...engine.FactoryOption) (engine.TriggerFactory, error) {
+		return mockFactory, nil
+	}
+
+	eval := &fakeEvaluator{}
+	mockFactory.On("Engine").Return(eval, nil)
+
+	err := mgr.initTriggerServices()
+	assert.NoError(t, err)
+	assert.NotNil(t, mgr.natsProvider)
+	mockFactory.AssertExpectations(t)
 }
 
 // Fakes

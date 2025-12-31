@@ -62,3 +62,16 @@ func (m *MockStorageBackend) Close(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)
 }
+
+// MockCSPService is a mock implementation of csp.Service
+type MockCSPService struct {
+	mock.Mock
+}
+
+func (m *MockCSPService) Watch(ctx context.Context, tenant, collection string, resumeToken interface{}, opts storage.WatchOptions) (<-chan storage.Event, error) {
+	args := m.Called(ctx, tenant, collection, resumeToken, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(<-chan storage.Event), args.Error(1)
+}

@@ -11,7 +11,7 @@ A simple demo showcasing Syntrix TypeScript SDK's realtime WebSocket synchroniza
 
 ## Prerequisites
 
-- Docker & Docker Compose (for MongoDB and NATS)
+- Docker & Docker Compose (for MongoDB)
 - Go 1.21+ (for building Syntrix server)
 - Bun (for running the demo)
 
@@ -28,15 +28,17 @@ cd example/realtime-demo
 ```
 
 This script will automatically:
-1. Start Docker services (MongoDB & NATS)
+1. Start Docker services (MongoDB)
 2. Build the Syntrix server
-3. Start Syntrix server with LAN access enabled (`--host 0.0.0.0`)
+3. Start Syntrix server in **standalone mode** with LAN access enabled (`--standalone --host 0.0.0.0`)
 4. Install demo dependencies
 5. Start the demo server
 
+> **Note:** Standalone mode runs all services (API Gateway, Query Engine, CSP) in a single process without requiring NATS. This is ideal for development and simple deployments.
+
 ### Manual Start
 
-#### Step 1: Start Infrastructure (MongoDB & NATS)
+#### Step 1: Start Infrastructure (MongoDB)
 
 ```bash
 cd /path/to/syntrix
@@ -49,11 +51,11 @@ docker compose up -d
 # Build the server
 make build
 
-# Start with default settings (localhost only)
-make run
+# Start in standalone mode (localhost only)
+./bin/syntrix --standalone
 
-# OR start with LAN access enabled (required for accessing from other devices)
-./bin/syntrix --all --host 0.0.0.0
+# OR start in standalone mode with LAN access enabled (required for accessing from other devices)
+./bin/syntrix --standalone --host 0.0.0.0
 ```
 
 ### Step 3: Install Demo Dependencies

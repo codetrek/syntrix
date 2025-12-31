@@ -1,38 +1,27 @@
 package core
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"log"
-	"net/http"
 	"strings"
 
+	"github.com/codetrek/syntrix/internal/csp"
 	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/pkg/model"
 )
 
 // Engine handles all business logic and coordinates with the storage backend.
 type Engine struct {
-	storage storage.DocumentStore
-	cspURL  string
-	client  *http.Client
+	storage    storage.DocumentStore
+	cspService csp.Service
 }
 
-// New creates a new Query Engine instance.
-func New(storage storage.DocumentStore, cspURL string) *Engine {
+// New creates a new Query Engine instance with a CSP service.
+func New(storage storage.DocumentStore, cspService csp.Service) *Engine {
 	return &Engine{
-		storage: storage,
-		cspURL:  cspURL,
-		client:  &http.Client{},
+		storage:    storage,
+		cspService: cspService,
 	}
-}
-
-// SetHTTPClient sets the HTTP client for the engine.
-func (e *Engine) SetHTTPClient(client *http.Client) {
-	e.client = client
 }
 
 // GetDocument retrieves a document by path.
@@ -188,53 +177,9 @@ func (e *Engine) ExecuteQuery(ctx context.Context, tenant string, q model.Query)
 }
 
 // WatchCollection returns a channel of events for a collection.
+// Delegates to the CSP service for watching change streams.
 func (e *Engine) WatchCollection(ctx context.Context, tenant string, collection string) (<-chan storage.Event, error) {
-	reqBody, err := json.Marshal(map[string]string{
-		"collection": collection,
-		"tenant":     tenant,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/internal/v1/watch", e.cspURL), bytes.NewBuffer(reqBody))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := e.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("csp watch failed with status: %d", resp.StatusCode)
-	}
-
-	out := make(chan storage.Event)
-
-	go func() {
-		defer close(out)
-		defer resp.Body.Close()
-
-		decoder := json.NewDecoder(resp.Body)
-		for {
-			var evt storage.Event
-			if err := decoder.Decode(&evt); err != nil {
-				log.Printf("[Error][Engine] Watch decode event failed: %v\n", err)
-				return
-			}
-			select {
-			case out <- evt:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	return out, nil
+	return e.cspService.Watch(ctx, tenant, collection, nil, storage.WatchOptions{})
 }
 
 // Pull handles replication pull requests.

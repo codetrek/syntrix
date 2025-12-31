@@ -14,6 +14,16 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// DeploymentMode represents the deployment mode of the service.
+type DeploymentMode int
+
+const (
+	// ModeDistributed is the default mode where services communicate via HTTP/NATS.
+	ModeDistributed DeploymentMode = iota
+	// ModeStandalone runs all services in a single process with direct function calls.
+	ModeStandalone
+)
+
 type Options struct {
 	RunAPI              bool
 	RunCSP              bool
@@ -23,6 +33,9 @@ type Options struct {
 	ListenHost          string
 
 	ForceQueryClient bool
+
+	// Mode specifies the deployment mode (distributed or standalone).
+	Mode DeploymentMode
 }
 
 type triggerService interface {
@@ -47,6 +60,7 @@ type Manager struct {
 	rtServer        *realtime.Server
 	triggerConsumer triggerConsumer
 	triggerService  triggerService
+	natsProvider    trigger.NATSProvider
 	natsConn        *nats.Conn
 	wg              sync.WaitGroup
 }

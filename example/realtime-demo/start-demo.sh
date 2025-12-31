@@ -128,13 +128,13 @@ cd "$PROJECT_ROOT"
 make build
 echo ""
 
-echo "=== Step 3: Starting Syntrix Server ==="
+echo "=== Step 3: Starting Syntrix Server (Standalone Mode) ==="
 if check_port 8080; then
     if [ "$RESTART_MODE" = true ]; then
         stop_syntrix
         sleep 1
-        echo "Starting Syntrix server (binding to 0.0.0.0 for LAN access)..."
-        "$PROJECT_ROOT/bin/syntrix" --all --host 0.0.0.0 &
+        echo "Starting Syntrix server in standalone mode (binding to 0.0.0.0 for LAN access)..."
+        "$PROJECT_ROOT/bin/syntrix" --standalone --host 0.0.0.0 &
         SYNTRIX_PID=$!
         echo "Syntrix server started with PID: $SYNTRIX_PID"
         wait_for_service localhost 8080 "Syntrix API"
@@ -143,8 +143,8 @@ if check_port 8080; then
         echo "Use --restart flag to stop and restart the server."
     fi
 else
-    echo "Starting Syntrix server (binding to 0.0.0.0 for LAN access)..."
-    "$PROJECT_ROOT/bin/syntrix" --all --host 0.0.0.0 &
+    echo "Starting Syntrix server in standalone mode (binding to 0.0.0.0 for LAN access)..."
+    "$PROJECT_ROOT/bin/syntrix" --standalone --host 0.0.0.0 &
     SYNTRIX_PID=$!
     echo "Syntrix server started with PID: $SYNTRIX_PID"
     wait_for_service localhost 8080 "Syntrix API"

@@ -21,8 +21,6 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// natsConnector allows test injection to avoid real network.
-var natsConnector = nats.Connect
 var triggerFactoryFactory = func(store storage.DocumentStore, nats *nats.Conn, auth identity.AuthN, opts ...triggerengine.FactoryOption) (triggerengine.TriggerFactory, error) {
 	// Default options
 	defaultOpts := []triggerengine.FactoryOption{triggerengine.WithStartFromNow(true)}
@@ -41,12 +39,44 @@ func (m *Manager) Init(ctx context.Context) error {
 		return err
 	}
 
+	// Standalone mode: all services run in-process without HTTP inter-service communication
+	if m.opts.Mode == ModeStandalone {
+		return m.initStandalone(ctx)
+	}
+
+	// Distributed mode: services communicate via HTTP
+	return m.initDistributed(ctx)
+}
+
+// initStandalone initializes services for standalone deployment mode.
+// All services run in a single process without HTTP inter-service communication.
+func (m *Manager) initStandalone(ctx context.Context) error {
+	// Create CSP service for local access (no HTTP server)
+	cspService := m.createCSPService()
+	log.Println("Initialized CSP Service (local)")
+
+	// Create query service using local CSP service (no HTTP server)
+	queryService := m.createQueryService(cspService)
+
+	// API server is the only HTTP server in standalone mode
+	if err := m.initAPIServer(queryService); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// initDistributed initializes services for distributed deployment mode.
+// Services communicate via HTTP and can run on separate machines.
+func (m *Manager) initDistributed(ctx context.Context) error {
 	var queryService engine.Service
 
 	if m.opts.RunQuery {
-		qs := m.initQueryServices()
+		// In distributed mode, create remote CSP client
+		cspService := csp.NewRemoteService(m.cfg.Query.CSPServiceURL)
+		queryService = m.createQueryService(cspService)
 		if !m.opts.ForceQueryClient {
-			queryService = qs
+			m.initQueryHTTPServer(queryService)
 		}
 	}
 
@@ -106,21 +136,22 @@ func (m *Manager) initAuthService(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) initQueryServices() engine.Service {
-	if !m.opts.RunQuery {
-		return nil
-	}
+// createQueryService creates a query engine service using the given CSP service.
+// This separates service creation from HTTP server setup for standalone mode support.
+func (m *Manager) createQueryService(cspService csp.Service) engine.Service {
+	service := engine.NewServiceWithCSP(m.docStore, cspService)
+	log.Println("Initialized Local Query Engine")
+	return service
+}
 
-	// Use routed store which handles OpRead/OpWrite internally
-	service := engine.NewService(m.docStore, m.cfg.Query.CSPServiceURL)
+// initQueryHTTPServer creates an HTTP server for the query service.
+// In standalone mode, this is not called since query service runs in-process.
+func (m *Manager) initQueryHTTPServer(service engine.Service) {
 	m.servers = append(m.servers, &http.Server{
 		Addr:    listenAddr(m.opts.ListenHost, m.cfg.Query.Port),
 		Handler: engine.NewHTTPHandler(service),
 	})
 	m.serverNames = append(m.serverNames, "Query Service")
-
-	log.Println("Initialized Local Query Engine")
-	return service
 }
 
 func (m *Manager) initAPIServer(queryService engine.Service) error {
@@ -154,6 +185,12 @@ func (m *Manager) initAPIServer(queryService engine.Service) error {
 	return nil
 }
 
+// createCSPService creates a CSP service for local access (standalone mode).
+func (m *Manager) createCSPService() csp.Service {
+	return csp.NewEmbeddedService(m.docStore)
+}
+
+// initCSPServer creates an HTTP server for the CSP service (distributed mode).
 func (m *Manager) initCSPServer() {
 	cspServer := csp.NewServer(m.docStore)
 	m.servers = append(m.servers, &http.Server{
@@ -172,11 +209,14 @@ func listenAddr(host string, port int) string {
 }
 
 func (m *Manager) initTriggerServices() error {
-	natsURL := m.cfg.Trigger.NatsURL
-	if natsURL == "" {
-		natsURL = nats.DefaultURL
+	// Create NATS provider based on deployment mode
+	if m.opts.Mode == ModeStandalone && m.cfg.Deployment.Standalone.EmbeddedNATS {
+		m.natsProvider = trigger.NewEmbeddedNATSProvider(m.cfg.Deployment.Standalone.NATSDataDir)
+	} else {
+		m.natsProvider = trigger.NewRemoteNATSProvider(m.cfg.Trigger.NatsURL)
 	}
-	nc, err := natsConnector(natsURL)
+
+	nc, err := m.natsProvider.Connect(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to connect to NATS: %w", err)
 	}

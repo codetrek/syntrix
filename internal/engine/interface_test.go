@@ -75,6 +75,29 @@ func TestNewService(t *testing.T) {
 	var _ Service = service
 }
 
+// MockCSPService is a mock implementation of csp.Service
+type MockCSPService struct {
+	mock.Mock
+}
+
+func (m *MockCSPService) Watch(ctx context.Context, tenant, collection string, resumeToken interface{}, opts storage.WatchOptions) (<-chan storage.Event, error) {
+	args := m.Called(ctx, tenant, collection, resumeToken, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(<-chan storage.Event), args.Error(1)
+}
+
+func TestNewServiceWithCSP(t *testing.T) {
+	mockStore := new(MockDocumentStore)
+	mockCSP := new(MockCSPService)
+	service := NewServiceWithCSP(mockStore, mockCSP)
+
+	assert.NotNil(t, service)
+	// Verify that it implements the Service interface
+	var _ Service = service
+}
+
 func TestNewClient(t *testing.T) {
 	client := NewClient("http://localhost:8080")
 

@@ -13,14 +13,27 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	Storage  StorageConfig  `yaml:"storage"`
-	Identity IdentityConfig `yaml:"identity"`
+	Storage    StorageConfig    `yaml:"storage"`
+	Identity   IdentityConfig   `yaml:"identity"`
+	Deployment DeploymentConfig `yaml:"deployment"`
 
 	Gateway GatewayConfig `yaml:"gateway"`
 	Query   QueryConfig   `yaml:"query"`
 	CSP     CSPConfig     `yaml:"csp"`
 	Trigger TriggerConfig `yaml:"trigger"`
 	Puller  PullerConfig  `yaml:"puller"`
+}
+
+// DeploymentConfig holds deployment mode settings
+type DeploymentConfig struct {
+	Mode       string           `yaml:"mode"` // "standalone" or "distributed" (default)
+	Standalone StandaloneConfig `yaml:"standalone"`
+}
+
+// StandaloneConfig holds standalone-specific settings
+type StandaloneConfig struct {
+	EmbeddedNATS bool   `yaml:"embedded_nats"` // Use embedded NATS server
+	NATSDataDir  string `yaml:"nats_data_dir"` // Data directory for embedded NATS
 }
 
 type GatewayConfig struct {
@@ -197,6 +210,13 @@ func LoadConfig() *Config {
 			RulesFile:   "triggers.json",
 			WorkerCount: 16,
 		},
+		Deployment: DeploymentConfig{
+			Mode: "distributed", // Default to distributed mode
+			Standalone: StandaloneConfig{
+				EmbeddedNATS: true,        // Default to embedded NATS in standalone
+				NATSDataDir:  "data/nats", // Default data directory
+			},
+		},
 		Puller: DefaultPullerConfig(),
 	}
 
@@ -251,6 +271,17 @@ func LoadConfig() *Config {
 		cfg.Trigger.RulesFile = val
 	}
 
+	// Deployment configuration
+	if val := os.Getenv("SYNTRIX_DEPLOYMENT_MODE"); val != "" {
+		cfg.Deployment.Mode = val
+	}
+	if val := os.Getenv("SYNTRIX_EMBEDDED_NATS"); val != "" {
+		cfg.Deployment.Standalone.EmbeddedNATS = val == "true" || val == "1"
+	}
+	if val := os.Getenv("SYNTRIX_NATS_DATA_DIR"); val != "" {
+		cfg.Deployment.Standalone.NATSDataDir = val
+	}
+
 	// 5. Resolve paths relative to config directory
 	cfg.resolvePaths()
 
@@ -272,7 +303,19 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("tenant '%s' references unknown backend '%s'", tID, tCfg.Backend)
 		}
 	}
+
+	// Validate Deployment Mode
+	mode := c.Deployment.Mode
+	if mode != "" && mode != "standalone" && mode != "distributed" {
+		return fmt.Errorf("deployment.mode must be 'standalone' or 'distributed', got '%s'", mode)
+	}
+
 	return nil
+}
+
+// IsStandaloneMode returns true if the deployment is configured for standalone mode
+func (c *Config) IsStandaloneMode() bool {
+	return c.Deployment.Mode == "standalone"
 }
 
 func (c *Config) resolvePaths() {
