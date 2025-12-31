@@ -10,8 +10,6 @@ import (
 	"github.com/codetrek/syntrix/internal/identity"
 	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/internal/trigger"
-
-	"github.com/nats-io/nats.go"
 )
 
 // DeploymentMode represents the deployment mode of the service.
@@ -61,7 +59,6 @@ type Manager struct {
 	triggerConsumer triggerConsumer
 	triggerService  triggerService
 	natsProvider    trigger.NATSProvider
-	natsConn        *nats.Conn
 	wg              sync.WaitGroup
 }
 

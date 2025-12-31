@@ -73,7 +73,6 @@ func TestManager_InitTriggerServices_Success_WithHooks(t *testing.T) {
 	err := mgr.initTriggerServices()
 	assert.NoError(t, err)
 	assert.NotNil(t, mgr.triggerService)
-	assert.Same(t, fakeConn, mgr.natsConn)
 	mockFactory.AssertExpectations(t)
 }
 
@@ -101,7 +100,6 @@ func TestManager_InitTriggerServices_WorkerOnly(t *testing.T) {
 
 	err := mgr.initTriggerServices()
 	assert.NoError(t, err)
-	assert.Same(t, fakeConn, mgr.natsConn)
 	mockFactory.AssertExpectations(t)
 }
 

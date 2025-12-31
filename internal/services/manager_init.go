@@ -220,7 +220,6 @@ func (m *Manager) initTriggerServices() error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to NATS: %w", err)
 	}
-	m.natsConn = nc
 
 	factory, err := triggerFactoryFactory(m.docStore, nc, m.authService, triggerengine.WithStreamName(m.cfg.Trigger.StreamName))
 	if err != nil {
