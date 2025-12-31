@@ -2,6 +2,7 @@
 
 CLI_APP_NAME=syntrix-cli
 APP_NAME=syntrix
+PULLER_APP_NAME=puller
 BUILD_DIR=bin
 
 ifeq ($(OS),Windows_NT)
@@ -23,6 +24,8 @@ build:
 	@go build -o $(CLI_BIN) ./cmd/syntrix-cli
 	@echo "Building $(APP_NAME)..."
 	@go build -o $(APP_BIN) ./cmd/syntrix
+	@echo "Building $(PULLER_APP_NAME)..."
+	@go build -o $(BUILD_DIR)/$(PULLER_APP_NAME)$(EXE_EXT) ./cmd/puller
 
 run: build
 	@echo "Running $(APP_NAME)..."
