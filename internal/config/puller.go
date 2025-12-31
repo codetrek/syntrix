@@ -70,6 +70,15 @@ type BufferConfig struct {
 
 	// Maximum size of the buffer (e.g., "10GiB", "1TiB")
 	MaxSize string `yaml:"max_size"`
+
+	// BatchSize is the max number of events per batch.
+	BatchSize int `yaml:"batch_size"`
+
+	// BatchInterval is the max time to wait before flushing a batch.
+	BatchInterval time.Duration `yaml:"batch_interval"`
+
+	// QueueSize is the buffer for pending writes.
+	QueueSize int `yaml:"queue_size"`
 }
 
 // ConsumerConfig holds consumer management configuration.
@@ -128,8 +137,11 @@ func DefaultPullerConfig() PullerConfig {
 			EventCount: 1000,
 		},
 		Buffer: BufferConfig{
-			Path:    "/var/lib/puller/events",
-			MaxSize: "10GiB",
+			Path:          "/var/lib/puller/events",
+			MaxSize:       "10GiB",
+			BatchSize:     100,
+			BatchInterval: 5 * time.Millisecond,
+			QueueSize:     1000,
 		},
 		Consumer: ConsumerConfig{
 			CatchUpThreshold:  100000,
@@ -190,6 +202,18 @@ func (c *PullerConfig) Validate() error {
 
 	if c.Buffer.Path == "" {
 		return errors.New("puller.buffer.path is required")
+	}
+
+	if c.Buffer.BatchSize <= 0 {
+		return errors.New("puller.buffer.batch_size must be positive")
+	}
+
+	if c.Buffer.BatchInterval <= 0 {
+		return errors.New("puller.buffer.batch_interval must be positive")
+	}
+
+	if c.Buffer.QueueSize <= 0 {
+		return errors.New("puller.buffer.queue_size must be positive")
 	}
 
 	if c.Consumer.CatchUpThreshold <= 0 {

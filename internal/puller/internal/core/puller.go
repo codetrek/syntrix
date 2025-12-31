@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -78,7 +79,13 @@ func (p *Puller) AddBackend(name string, client *mongo.Client, dbName string, cf
 
 	logger := p.logger.With("backend", name)
 	db := client.Database(dbName)
-	buf, err := buffer.NewForBackend(p.cfg.Buffer.Path, name, logger)
+	buf, err := buffer.New(buffer.Options{
+		Path:          filepath.Join(p.cfg.Buffer.Path, name),
+		Logger:        logger,
+		BatchSize:     p.cfg.Buffer.BatchSize,
+		BatchInterval: p.cfg.Buffer.BatchInterval,
+		QueueSize:     p.cfg.Buffer.QueueSize,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create buffer: %w", err)
 	}

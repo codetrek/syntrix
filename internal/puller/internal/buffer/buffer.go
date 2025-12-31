@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/codetrek/syntrix/internal/events"
@@ -21,12 +22,20 @@ type Buffer struct {
 	path     string
 	logger   *slog.Logger
 	newBatch func() pebbleBatch
+	writeCh  chan *writeRequest
 
 	// mu protects writes
 	mu sync.RWMutex
 
 	// closed indicates if the buffer is closed
 	closed bool
+
+	// batcher manages batched writes
+	batchSize     int
+	batchInterval time.Duration
+	queueSize     int
+	closeCh       chan struct{}
+	batcherWG     sync.WaitGroup
 }
 
 const checkpointKey = "!checkpoint/resume_token"
@@ -47,6 +56,15 @@ type Options struct {
 
 	// MaxSize is the maximum size in bytes (0 = unlimited).
 	MaxSize int64
+
+	// BatchSize is the max number of events per batch.
+	BatchSize int
+
+	// BatchInterval is the max time to wait before flushing a batch.
+	BatchInterval time.Duration
+
+	// QueueSize is the buffer for pending writes.
+	QueueSize int
 
 	// Logger for buffer operations.
 	Logger *slog.Logger
@@ -79,14 +97,35 @@ func New(opts Options) (*Buffer, error) {
 		return nil, fmt.Errorf("failed to open pebble database: %w", err)
 	}
 
-	return &Buffer{
+	batchSize := opts.BatchSize
+	if batchSize <= 0 {
+		batchSize = 100
+	}
+	batchInterval := opts.BatchInterval
+	if batchInterval <= 0 {
+		batchInterval = 5 * time.Millisecond
+	}
+	queueSize := opts.QueueSize
+	if queueSize <= 0 {
+		queueSize = 1000
+	}
+
+	buf := &Buffer{
 		db:     db,
 		path:   opts.Path,
 		logger: logger,
 		newBatch: func() pebbleBatch {
 			return db.NewBatch()
 		},
-	}, nil
+		batchSize:     batchSize,
+		batchInterval: batchInterval,
+		queueSize:     queueSize,
+		closeCh:       make(chan struct{}),
+	}
+	buf.writeCh = make(chan *writeRequest, buf.queueSize)
+	buf.startBatcher()
+
+	return buf, nil
 }
 
 // NewForBackend creates a buffer for a specific backend.
@@ -112,6 +151,10 @@ func (b *Buffer) WriteWithCheckpoint(evt *events.NormalizedEvent, token bson.Raw
 	}
 	b.mu.RUnlock()
 
+	if saveCheckpoint && token == nil {
+		return fmt.Errorf("checkpoint token is nil")
+	}
+
 	// Key is the buffer key for ordering
 	key := []byte(evt.BufferKey())
 
@@ -121,24 +164,21 @@ func (b *Buffer) WriteWithCheckpoint(evt *events.NormalizedEvent, token bson.Raw
 		return fmt.Errorf("failed to marshal event: %w", err)
 	}
 
-	if err := b.applyBatch(func(batch pebbleBatch) error {
-		if err := batch.Set(key, value, pebble.Sync); err != nil {
-			return fmt.Errorf("failed to batch write event: %w", err)
-		}
-		if saveCheckpoint {
-			if token == nil {
-				return fmt.Errorf("checkpoint token is nil")
-			}
-			if err := batch.Set(checkpointKeyBytes, token, pebble.Sync); err != nil {
-				return fmt.Errorf("failed to batch write checkpoint: %w", err)
-			}
-		}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("failed to write event: %w", err)
+	req := &writeRequest{
+		key:            key,
+		value:          value,
+		token:          append([]byte(nil), token...),
+		saveCheckpoint: saveCheckpoint,
+		done:           make(chan error, 1),
 	}
 
-	return nil
+	select {
+	case b.writeCh <- req:
+	case <-b.closeCh:
+		return fmt.Errorf("buffer is closed")
+	}
+
+	return <-req.done
 }
 
 // Read retrieves an event by its buffer key.
@@ -426,6 +466,10 @@ func (b *Buffer) Close() error {
 	}
 	b.closed = true
 
+	close(b.closeCh)
+	close(b.writeCh)
+	b.batcherWG.Wait()
+
 	if err := b.db.Close(); err != nil {
 		return fmt.Errorf("failed to close pebble database: %w", err)
 	}
@@ -503,4 +547,100 @@ func (b *Buffer) applyBatch(apply func(batch pebbleBatch) error) error {
 
 func isCheckpointKey(key []byte) bool {
 	return bytes.Equal(key, checkpointKeyBytes)
+}
+
+type writeRequest struct {
+	key            []byte
+	value          []byte
+	token          bson.Raw
+	saveCheckpoint bool
+	done           chan error
+}
+
+func (b *Buffer) startBatcher() {
+	b.batcherWG.Add(1)
+	go b.runBatcher()
+}
+
+func (b *Buffer) runBatcher() {
+	defer b.batcherWG.Done()
+
+	ticker := time.NewTicker(b.batchInterval)
+	defer ticker.Stop()
+
+	var pending []*writeRequest
+
+	flush := func() {
+		if len(pending) == 0 {
+			return
+		}
+
+		batch := b.newBatch()
+		var commitErr error
+		var checkpointToken []byte
+
+		for _, req := range pending {
+			if err := batch.Set(req.key, req.value, pebble.Sync); err != nil {
+				commitErr = fmt.Errorf("failed to batch write event: %w", err)
+				break
+			}
+			if req.saveCheckpoint {
+				checkpointToken = append([]byte(nil), req.token...)
+			}
+		}
+
+		if commitErr == nil && checkpointToken != nil {
+			if err := batch.Set(checkpointKeyBytes, checkpointToken, pebble.Sync); err != nil {
+				commitErr = fmt.Errorf("failed to batch write checkpoint: %w", err)
+			}
+		}
+
+		if commitErr == nil {
+			if err := batch.Commit(pebble.Sync); err != nil {
+				commitErr = fmt.Errorf("failed to commit batch: %w", err)
+			}
+		}
+
+		_ = batch.Close()
+
+		for _, req := range pending {
+			if commitErr != nil {
+				req.done <- commitErr
+			} else {
+				req.done <- nil
+			}
+		}
+
+		pending = pending[:0]
+	}
+
+	for {
+		select {
+		case req, ok := <-b.writeCh:
+			if !ok {
+				flush()
+				return
+			}
+			pending = append(pending, req)
+			if len(pending) >= b.batchSize {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
+		case <-b.closeCh:
+			for {
+				select {
+				case req, ok := <-b.writeCh:
+					if !ok {
+						flush()
+						return
+					}
+					pending = append(pending, req)
+				default:
+					flush()
+					return
+				}
+			}
+		}
+	}
 }

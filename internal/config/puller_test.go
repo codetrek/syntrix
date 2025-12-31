@@ -36,6 +36,18 @@ func TestDefaultPullerConfig(t *testing.T) {
 		t.Errorf("Cleaner.Retention = %v, want %v", cfg.Cleaner.Retention, time.Hour)
 	}
 
+	if cfg.Buffer.BatchSize != 100 {
+		t.Errorf("Buffer.BatchSize = %d, want %d", cfg.Buffer.BatchSize, 100)
+	}
+
+	if cfg.Buffer.BatchInterval != 5*time.Millisecond {
+		t.Errorf("Buffer.BatchInterval = %v, want %v", cfg.Buffer.BatchInterval, 5*time.Millisecond)
+	}
+
+	if cfg.Buffer.QueueSize != 1000 {
+		t.Errorf("Buffer.QueueSize = %d, want %d", cfg.Buffer.QueueSize, 1000)
+	}
+
 	if cfg.Bootstrap.Mode != "from_now" {
 		t.Errorf("Bootstrap.Mode = %q, want %q", cfg.Bootstrap.Mode, "from_now")
 	}
@@ -134,6 +146,24 @@ func TestPullerConfig_Validate(t *testing.T) {
 			modify:  func(c *PullerConfig) { c.Buffer.Path = "" },
 			wantErr: true,
 			errMsg:  "path",
+		},
+		{
+			name:    "zero buffer batch size",
+			modify:  func(c *PullerConfig) { c.Buffer.BatchSize = 0 },
+			wantErr: true,
+			errMsg:  "batch_size",
+		},
+		{
+			name:    "zero buffer batch interval",
+			modify:  func(c *PullerConfig) { c.Buffer.BatchInterval = 0 },
+			wantErr: true,
+			errMsg:  "batch_interval",
+		},
+		{
+			name:    "zero buffer queue size",
+			modify:  func(c *PullerConfig) { c.Buffer.QueueSize = 0 },
+			wantErr: true,
+			errMsg:  "queue_size",
 		},
 		{
 			name:    "zero catch up threshold",

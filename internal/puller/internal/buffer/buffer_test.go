@@ -812,6 +812,104 @@ func TestBuffer_LoadCheckpoint_Closed(t *testing.T) {
 	assert.Contains(t, err.Error(), "buffer is closed")
 }
 
+func TestBuffer_Write_BatchesBySize(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	buf, err := New(Options{
+		Path:          dir,
+		BatchSize:     2,
+		BatchInterval: time.Second,
+		QueueSize:     10,
+	})
+	require.NoError(t, err)
+	defer buf.Close()
+
+	evt1 := &events.NormalizedEvent{
+		EventID:    "evt-1",
+		Collection: "testcoll",
+		DocumentID: "doc-1",
+		Type:       events.OperationInsert,
+		ClusterTime: events.ClusterTime{
+			T: 1234567890,
+			I: 1,
+		},
+	}
+	evt2 := &events.NormalizedEvent{
+		EventID:    "evt-2",
+		Collection: "testcoll",
+		DocumentID: "doc-2",
+		Type:       events.OperationInsert,
+		ClusterTime: events.ClusterTime{
+			T: 1234567891,
+			I: 1,
+		},
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- buf.Write(evt1)
+	}()
+
+	select {
+	case err := <-firstDone:
+		t.Fatalf("first write finished early: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	require.NoError(t, buf.Write(evt2))
+	require.NoError(t, <-firstDone)
+
+	read1, err := buf.Read(evt1.BufferKey())
+	require.NoError(t, err)
+	require.NotNil(t, read1)
+
+	read2, err := buf.Read(evt2.BufferKey())
+	require.NoError(t, err)
+	require.NotNil(t, read2)
+}
+
+func TestBuffer_Write_FlushesOnInterval(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	buf, err := New(Options{
+		Path:          dir,
+		BatchSize:     10,
+		BatchInterval: 20 * time.Millisecond,
+		QueueSize:     10,
+	})
+	require.NoError(t, err)
+	defer buf.Close()
+
+	evt := &events.NormalizedEvent{
+		EventID:    "evt-1",
+		Collection: "testcoll",
+		DocumentID: "doc-1",
+		Type:       events.OperationInsert,
+		ClusterTime: events.ClusterTime{
+			T: 1234567890,
+			I: 1,
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- buf.Write(evt)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timeout waiting for batch flush")
+	}
+
+	readEvt, err := buf.Read(evt.BufferKey())
+	require.NoError(t, err)
+	require.NotNil(t, readEvt)
+}
+
 func TestBuffer_DeleteBefore_SkipsCheckpoint(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
