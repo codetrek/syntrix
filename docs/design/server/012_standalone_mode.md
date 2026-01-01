@@ -58,7 +58,7 @@ Standalone mode packages all Syntrix services into a single process, replacing n
 │         │  interface                                                     │
 │         ▼                                                                │
 │  ┌─────────────┐                                                         │
-│  │ CSP Service │  (EmbeddedService impl, no HTTP)                        │
+│  │ CSP Service │  (CSPService impl, no HTTP)                        │
 │  └─────────────┘                                                         │
 │         │                                                                │
 │         │                                                                │
@@ -92,13 +92,13 @@ type Service interface {
     Watch(ctx context.Context, tenant, collection string) (<-chan storage.Event, error)
 }
 
-// EmbeddedService - direct storage access (standalone mode)
-type EmbeddedService struct {
+// CSPService - direct storage access (standalone mode)
+type CSPService struct {
     storage storage.DocumentStore
 }
 
-// RemoteService - HTTP client (distributed mode)
-type RemoteService struct {
+// CSPClient - HTTP client (distributed mode)
+type CSPClient struct {
     baseURL string
     client  *http.Client
 }
@@ -136,7 +136,7 @@ type Options struct {
     RunQuery            bool
     RunTriggerEvaluator bool
     RunTriggerWorker    bool
-    
+
     // new
     Mode DeploymentMode
 }
@@ -150,32 +150,32 @@ func (m *Manager) Init(ctx context.Context) error {
     if err := m.initStorage(ctx); err != nil {
         return err
     }
-    
+
     // CSP service: local or remote based on mode
     var cspService csp.Service
     if m.opts.Mode == ModeStandalone {
-        cspService = csp.NewEmbeddedService(m.docStore)
+        cspService = csp.NewService(m.docStore)
     } else {
-        cspService = csp.NewRemoteService(m.cfg.Query.CSPServiceURL)
+        cspService = csp.NewCSPClient(m.cfg.Query.CSPServiceURL)
     }
-    
+
     // Query service: always local engine in standalone, injected CSP
     queryService := engine.NewServiceWithCSP(m.docStore, cspService)
-    
+
     // API server: direct injection (standalone) or HTTP client (distributed)
     if m.opts.Mode == ModeStandalone {
         m.initAPIServerDirect(queryService)
     } else if m.opts.RunAPI {
         m.initAPIServer(engine.NewClient(m.cfg.Gateway.QueryServiceURL))
     }
-    
+
     // Trigger services
     if m.opts.RunTriggerEvaluator || m.opts.RunTriggerWorker {
         if err := m.initTriggerServices(); err != nil {
             return err
         }
     }
-    
+
     return nil
 }
 ```
@@ -200,17 +200,17 @@ func (m *Manager) startEmbeddedNATS(ctx context.Context) (*nats.Conn, error) {
         StoreDir:  filepath.Join(m.cfg.DataDir, "nats"),
         NoLog:     true,
     }
-    
+
     ns, err := server.NewServer(opts)
     if err != nil {
         return nil, fmt.Errorf("create embedded nats: %w", err)
     }
-    
+
     go ns.Start()
     if !ns.ReadyForConnections(5 * time.Second) {
         return nil, errors.New("nats server not ready")
     }
-    
+
     return nats.Connect(ns.ClientURL())
 }
 ```
@@ -236,11 +236,11 @@ syntrix --api --query --csp
 # config.yml
 deployment:
   mode: standalone  # "standalone" | "distributed"
-  
+
   standalone:
     embedded_nats: true
     nats_data_dir: "./data/nats"
-    
+
   # distributed settings remain unchanged
   distributed:
     query_service_url: "http://localhost:8082"
@@ -252,14 +252,14 @@ deployment:
 ### Phase 1: CSP Interface Abstraction
 
 1. Create `internal/csp/interface.go` with `Service` interface
-2. Implement `EmbeddedService` (direct storage call)
-3. Extract existing HTTP logic to `RemoteService`
+2. Implement `CSPService` (direct storage call)
+3. Extract existing HTTP logic to `CSPClient`
 4. Modify `engine.Engine` to depend on `csp.Service` interface
 
 **Files to modify:**
 - `internal/csp/interface.go` (new)
-- `internal/csp/embedded_service.go` (new)
-- `internal/csp/remote_service.go` (new, extract from engine)
+- `internal/csp/csp_service.go` (new)
+- `internal/csp/csp_client.go` (new, extract from engine)
 - `internal/engine/internal/core/engine.go`
 
 ### Phase 2: Service Manager Refactor

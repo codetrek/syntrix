@@ -22,7 +22,7 @@ func TestMongoBackend_Watch(t *testing.T) {
 	// Start Watching
 	stream, err := backend.Watch(ctx, tenant, "users", nil, types.WatchOptions{})
 	if err != nil {
-		t.Skipf("Skipping Watch test (likely no replica set): %v", err)
+		t.Fatalf("Watch failed (likely no replica set): %v", err)
 		return
 	}
 
@@ -76,7 +76,7 @@ func TestMongoBackend_Watch_Recreate(t *testing.T) {
 
 	stream, err := backend.Watch(ctx, tenant, "users", nil, types.WatchOptions{})
 	if err != nil {
-		t.Skipf("Skipping Watch recreate test (likely no replica set): %v", err)
+		t.Fatalf("Watch recreate test failed (likely no replica set): %v", err)
 		return
 	}
 
@@ -119,7 +119,7 @@ func TestMongoBackend_Watch_Recreate_WithBefore(t *testing.T) {
 
 	stream, err := backend.Watch(ctx, tenant, "users", nil, types.WatchOptions{IncludeBefore: true})
 	if err != nil {
-		t.Skipf("Skipping Watch recreate (before) test (likely no replica set): %v", err)
+		t.Fatalf("Watch recreate (before) test failed (likely no replica set): %v", err)
 		return
 	}
 

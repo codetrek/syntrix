@@ -50,7 +50,7 @@ func TestTriggerIntegration(t *testing.T) {
 	// Clean up NATS Stream before starting
 	nc, err := nats.Connect(natsURL)
 	if err != nil {
-		t.Skipf("Skipping integration test: could not connect to NATS: %v", err)
+		t.Fatalf("Failed to connect to NATS: %v", err)
 	}
 	defer nc.Close()
 

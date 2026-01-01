@@ -20,6 +20,7 @@ type documentStore struct {
 	dataCollection      string
 	sysCollection       string
 	softDeleteRetention time.Duration
+	openStream          func(context.Context, *mongo.Collection, mongo.Pipeline, *options.ChangeStreamOptions) (changeStream, error)
 }
 
 // NewDocumentStore initializes a new MongoDB document store
@@ -31,6 +32,13 @@ func NewDocumentStore(client *mongo.Client, db *mongo.Database, dataColl string,
 		sysCollection:       sysColl,
 		softDeleteRetention: softDeleteRetention,
 	}
+}
+
+type changeStream interface {
+	Next(context.Context) bool
+	Decode(any) error
+	Err() error
+	Close(context.Context) error
 }
 
 func (m *documentStore) getCollection(nameOrPath string) *mongo.Collection {
@@ -110,7 +118,7 @@ func (m *documentStore) Update(ctx context.Context, tenant string, path string, 
 	}
 
 	if result.MatchedCount == 0 {
-		count, _ := collection.CountDocuments(ctx, bson.M{"_id": id})
+		count, _ := collection.CountDocuments(ctx, bson.M{"_id": id, "tenant_id": tenant})
 		if count == 0 {
 			return model.ErrNotFound
 		}
@@ -287,8 +295,13 @@ func (m *documentStore) Watch(ctx context.Context, tenant string, collectionName
 	if resumeToken != nil {
 		changeStreamOpts.SetResumeAfter(resumeToken)
 	}
-
-	stream, err := m.getCollection(collectionName).Watch(ctx, pipeline, changeStreamOpts)
+	if m.openStream == nil {
+		m.openStream = func(ctx context.Context, coll *mongo.Collection, pipeline mongo.Pipeline, opts *options.ChangeStreamOptions) (changeStream, error) {
+			return coll.Watch(ctx, pipeline, opts)
+		}
+	}
+	collection := m.getCollection(collectionName)
+	stream, err := m.openStream(ctx, collection, pipeline, changeStreamOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -300,88 +313,18 @@ func (m *documentStore) Watch(ctx context.Context, tenant string, collectionName
 		defer stream.Close(ctx)
 
 		for stream.Next(ctx) {
-			var changeEvent struct {
-				ID                       interface{}     `bson:"_id"`
-				OperationType            string          `bson:"operationType"`
-				FullDocument             *types.Document `bson:"fullDocument"`
-				FullDocumentBeforeChange *types.Document `bson:"fullDocumentBeforeChange"`
-				DocumentKey              struct {
-					ID string `bson:"_id"`
-				} `bson:"documentKey"`
-				ClusterTime interface{} `bson:"clusterTime"` // Timestamp
-			}
-
+			var changeEvent changeStreamEvent
 			if err := stream.Decode(&changeEvent); err != nil {
 				continue
 			}
 
-			// Client-side filtering for tenant (double check)
-			if tenant != "" {
-				if changeEvent.OperationType == "delete" {
-					if !strings.HasPrefix(changeEvent.DocumentKey.ID, tenant+":") {
-						continue
-					}
-				} else {
-					if changeEvent.FullDocument == nil || changeEvent.FullDocument.TenantID != tenant {
-						continue
-					}
-				}
-			}
-
-			// Client-side filtering for collection (double check)
-			if collectionName != "" && changeEvent.OperationType != "delete" {
-				if changeEvent.FullDocument == nil || changeEvent.FullDocument.Collection != collectionName {
-					continue
-				}
-			}
-
-			// If tenant arg is empty, try to get it from document
-			eventTenant := tenant
-			if eventTenant == "" {
-				if changeEvent.FullDocument != nil {
-					eventTenant = changeEvent.FullDocument.TenantID
-				} else if strings.Contains(changeEvent.DocumentKey.ID, ":") {
-					parts := strings.SplitN(changeEvent.DocumentKey.ID, ":", 2)
-					eventTenant = parts[0]
-				}
-			}
-
-			evt := types.Event{
-				Id:          changeEvent.DocumentKey.ID,
-				TenantID:    eventTenant,
-				ResumeToken: changeEvent.ID,
-				// Timestamp: ... (ClusterTime is complex, let's use current time or parse it if needed)
-				Timestamp: time.Now().UnixNano(),
-				Before:    changeEvent.FullDocumentBeforeChange,
-			}
-
-			switch changeEvent.OperationType {
-			case "insert":
-				evt.Type = types.EventCreate
-				evt.Document = changeEvent.FullDocument
-			case "update", "replace":
-				if changeEvent.FullDocument != nil && changeEvent.FullDocument.Deleted {
-					evt.Type = types.EventDelete
-				} else if changeEvent.OperationType == "replace" {
-					// Replace operation on a non-deleted document is treated as a Create (re-creation)
-					// This happens when overwriting a soft-deleted document
-					evt.Type = types.EventCreate
-					evt.Document = changeEvent.FullDocument
-				} else if changeEvent.FullDocumentBeforeChange != nil && changeEvent.FullDocumentBeforeChange.Deleted {
-					evt.Type = types.EventCreate
-					evt.Document = changeEvent.FullDocument
-				} else {
-					evt.Type = types.EventUpdate
-					evt.Document = changeEvent.FullDocument
-				}
-			case "delete":
-				evt.Type = types.EventDelete
-			default:
+			evt, ok := m.convertChangeEvent(changeEvent, tenant, collectionName)
+			if !ok {
 				continue
 			}
 
 			select {
-			case out <- evt:
+			case out <- *evt:
 			case <-ctx.Done():
 				return
 			}
@@ -389,6 +332,85 @@ func (m *documentStore) Watch(ctx context.Context, tenant string, collectionName
 	}()
 
 	return out, nil
+}
+
+type changeStreamEvent struct {
+	ID                       interface{}     `bson:"_id"`
+	OperationType            string          `bson:"operationType"`
+	FullDocument             *types.Document `bson:"fullDocument"`
+	FullDocumentBeforeChange *types.Document `bson:"fullDocumentBeforeChange"`
+	DocumentKey              struct {
+		ID string `bson:"_id"`
+	} `bson:"documentKey"`
+	ClusterTime interface{} `bson:"clusterTime"` // Timestamp
+}
+
+func (m *documentStore) convertChangeEvent(changeEvent changeStreamEvent, tenant string, collectionName string) (*types.Event, bool) {
+	// Client-side filtering for tenant (double check)
+	if tenant != "" {
+		if changeEvent.OperationType == "delete" {
+			if !strings.HasPrefix(changeEvent.DocumentKey.ID, tenant+":") {
+				return nil, false
+			}
+		} else {
+			if changeEvent.FullDocument == nil || changeEvent.FullDocument.TenantID != tenant {
+				return nil, false
+			}
+		}
+	}
+
+	// Client-side filtering for collection (double check)
+	if collectionName != "" && changeEvent.OperationType != "delete" {
+		if changeEvent.FullDocument == nil || changeEvent.FullDocument.Collection != collectionName {
+			return nil, false
+		}
+	}
+
+	// If tenant arg is empty, try to get it from document
+	eventTenant := tenant
+	if eventTenant == "" {
+		if changeEvent.FullDocument != nil {
+			eventTenant = changeEvent.FullDocument.TenantID
+		} else if strings.Contains(changeEvent.DocumentKey.ID, ":") {
+			parts := strings.SplitN(changeEvent.DocumentKey.ID, ":", 2)
+			eventTenant = parts[0]
+		}
+	}
+
+	evt := types.Event{
+		Id:          changeEvent.DocumentKey.ID,
+		TenantID:    eventTenant,
+		ResumeToken: changeEvent.ID,
+		Timestamp:   time.Now().UnixNano(),
+		Before:      changeEvent.FullDocumentBeforeChange,
+	}
+
+	switch changeEvent.OperationType {
+	case "insert":
+		evt.Type = types.EventCreate
+		evt.Document = changeEvent.FullDocument
+	case "update", "replace":
+		if changeEvent.FullDocument != nil && changeEvent.FullDocument.Deleted {
+			evt.Type = types.EventDelete
+		} else if changeEvent.OperationType == "replace" {
+			// Replace operation on a non-deleted document is treated as a Create (re-creation)
+			// This happens when overwriting a soft-deleted document
+			evt.Type = types.EventCreate
+			evt.Document = changeEvent.FullDocument
+		} else if changeEvent.FullDocumentBeforeChange != nil && changeEvent.FullDocumentBeforeChange.Deleted {
+			evt.Type = types.EventCreate
+			evt.Document = changeEvent.FullDocument
+		} else {
+			evt.Type = types.EventUpdate
+			evt.Document = changeEvent.FullDocument
+		}
+	case "delete":
+		evt.Type = types.EventDelete
+	default:
+		return nil, false
+	}
+
+	return &evt, true
 }
 
 // EnsureIndexes creates necessary indexes

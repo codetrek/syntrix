@@ -50,3 +50,32 @@ trigger:
   rules_file: "triggers.example.json"
   worker_count: 32
   stream_name: "TRIGGERS"
+
+puller:
+  grpc:
+    address: ":50051"
+    max_connections: 100
+    channel_size: 10000
+  backends:
+    - name: "default_mongo"
+      exclude_collections: ["_system", "logs"]
+  buffer:
+    path: ".syntrix/data/puller/events"
+    max_size: "10GiB"
+    batch_size: 100
+    batch_interval: 100ms
+    queue_size: 10000
+  consumer:
+    catch_up_threshold: 100000
+    coalesce_on_catch_up: true
+  cleaner:
+    interval: 1m
+    retention: 1h
+  bootstrap:
+    mode: "from_now"
+  metrics:
+    port: 9090
+    path: "/metrics"
+  health:
+    port: 8081
+    path: "/health"

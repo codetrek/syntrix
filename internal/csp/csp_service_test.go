@@ -64,17 +64,17 @@ func (m *MockDocumentStore) Close(ctx context.Context) error {
 	return args.Error(0)
 }
 
-func TestNewEmbeddedService(t *testing.T) {
+func TestNewService(t *testing.T) {
 	mockStore := new(MockDocumentStore)
-	svc := NewEmbeddedService(mockStore)
+	svc := NewService(mockStore)
 
 	assert.NotNil(t, svc)
 	assert.Equal(t, mockStore, svc.storage)
 }
 
-func TestEmbeddedService_Watch_Success(t *testing.T) {
+func TestNewService_Watch_Success(t *testing.T) {
 	mockStore := new(MockDocumentStore)
-	svc := NewEmbeddedService(mockStore)
+	svc := NewService(mockStore)
 
 	ctx := context.Background()
 	tenant := "test-tenant"
@@ -106,9 +106,9 @@ func TestEmbeddedService_Watch_Success(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
-func TestEmbeddedService_Watch_Error(t *testing.T) {
+func TestNewService_Watch_Error(t *testing.T) {
 	mockStore := new(MockDocumentStore)
-	svc := NewEmbeddedService(mockStore)
+	svc := NewService(mockStore)
 
 	ctx := context.Background()
 	tenant := "test-tenant"
@@ -123,9 +123,9 @@ func TestEmbeddedService_Watch_Error(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
-func TestEmbeddedService_Watch_EmptyTenantAndCollection(t *testing.T) {
+func TestNewService_Watch_EmptyTenantAndCollection(t *testing.T) {
 	mockStore := new(MockDocumentStore)
-	svc := NewEmbeddedService(mockStore)
+	svc := NewService(mockStore)
 
 	ctx := context.Background()
 	// Empty tenant and collection should watch all
@@ -144,8 +144,8 @@ func TestEmbeddedService_Watch_EmptyTenantAndCollection(t *testing.T) {
 	mockStore.AssertExpectations(t)
 }
 
-func TestEmbeddedService_ImplementsService(t *testing.T) {
+func TestNewService_ImplementsService(t *testing.T) {
 	mockStore := new(MockDocumentStore)
-	var svc Service = NewEmbeddedService(mockStore)
+	var svc Service = NewService(mockStore)
 	assert.NotNil(t, svc)
 }

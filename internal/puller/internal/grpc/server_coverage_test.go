@@ -8,7 +8,7 @@ import (
 
 	pullerv1 "github.com/codetrek/syntrix/api/puller/v1"
 	"github.com/codetrek/syntrix/internal/config"
-	"github.com/codetrek/syntrix/internal/events"
+	"github.com/codetrek/syntrix/internal/puller/events"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -167,6 +167,7 @@ func TestServer_Start_ListenError(t *testing.T) {
 func TestServer_Subscribe_SendError(t *testing.T) {
 	t.Parallel()
 	srv := NewServer(config.PullerGRPCConfig{}, &mockEventSource{}, nil)
+	go srv.processEvents()
 
 	req := &pullerv1.SubscribeRequest{ConsumerId: "c1"}
 	stream := &mockSubscribeServer{
@@ -241,6 +242,8 @@ func TestServer_Subscribe_SubscriberClosed(t *testing.T) {
 func TestServer_Subscribe_NilEvent(t *testing.T) {
 	t.Parallel()
 	srv := NewServer(config.PullerGRPCConfig{}, &mockEventSource{}, nil)
+	go srv.processEvents()
+
 	req := &pullerv1.SubscribeRequest{ConsumerId: "c1"}
 	stream := &mockSubscribeServer{ctx: context.Background()}
 
@@ -274,6 +277,8 @@ func TestServer_Subscribe_NilEvent(t *testing.T) {
 func TestServer_Subscribe_ConvertError(t *testing.T) {
 	t.Parallel()
 	srv := NewServer(config.PullerGRPCConfig{}, &mockEventSource{}, nil)
+	go srv.processEvents()
+
 	req := &pullerv1.SubscribeRequest{ConsumerId: "c1"}
 	stream := &mockSubscribeServer{ctx: context.Background()}
 

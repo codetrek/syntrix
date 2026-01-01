@@ -41,7 +41,7 @@ import (
 	"log/slog"
 
 	"github.com/codetrek/syntrix/internal/config"
-	"github.com/codetrek/syntrix/internal/events"
+	"github.com/codetrek/syntrix/internal/puller/events"
 	"github.com/codetrek/syntrix/internal/puller/internal/client"
 	"github.com/codetrek/syntrix/internal/puller/internal/core"
 	pullergrpc "github.com/codetrek/syntrix/internal/puller/internal/grpc"
@@ -76,6 +76,9 @@ type LocalService interface {
 
 	// SetEventHandler sets the event handler for processing events.
 	SetEventHandler(handler func(ctx context.Context, backendName string, event *events.NormalizedEvent) error)
+
+	// Replay returns an iterator that replays events from the given progress marker.
+	Replay(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error)
 }
 
 // NewService creates a new local Puller service (in-process).
@@ -141,16 +144,17 @@ func NewGRPCServer(cfg config.PullerGRPCConfig, svc LocalService, logger *slog.L
 }
 
 // ============================================================================
-// Deprecated type aliases and functions - for backward compatibility.
-// These will be removed in a future release.
-// ============================================================================
+// Types
 
-// Puller is a deprecated alias. Use NewService instead.
-// Deprecated: Use NewService to get a LocalService interface.
-type Puller = core.Puller
+type Event = events.NormalizedEvent
+type UpdateDescription = events.UpdateDescription
+type TruncatedArray = events.TruncatedArray
+type ClusterTime = events.ClusterTime
+type OperationType = events.OperationType
 
-// NewPuller is deprecated. Use NewService instead.
-// Deprecated: Use NewService to get a LocalService interface.
-func NewPuller(cfg config.PullerConfig, logger *slog.Logger) *Puller {
-	return core.New(cfg, logger)
-}
+const (
+	OperationInsert  = events.OperationInsert
+	OperationUpdate  = events.OperationUpdate
+	OperationReplace = events.OperationReplace
+	OperationDelete  = events.OperationDelete
+)

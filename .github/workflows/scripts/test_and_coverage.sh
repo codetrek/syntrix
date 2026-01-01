@@ -9,8 +9,12 @@ set -o pipefail
 failed=0
 # Run tests with coverage, excluding cmd/ directory
 go test -covermode=atomic -coverprofile=coverage.out $(go list ./... | \
-  grep -vE "syntrix/cmd/|syntrix/api/") | \
-  tee test_output.txt
+  grep -vE "syntrix/cmd/|syntrix/api/|syntrix/scripts/") | \
+  tee test_output.txt || failed=1
+if [ $failed -ne 0 ]; then
+  echo "::error::Some tests failed."
+  exit 1
+fi
 
 sed -i 's/of statements//g; s/github.com\/codetrek\/syntrix\///g' test_output.txt
 
@@ -103,4 +107,13 @@ awk -v threshold_func="$threshold_func" -v failed="$failed" '
   END {
     if (failed) exit 1
   }
-' coverage.clean.txt
+' coverage.clean.txt || failed=1
+
+echo ""
+echo "---------------------------------------------------------------------------------------------------------"
+echo "Checking for uncovered blocks..."
+go run scripts/lib/uncovered_blocks.go coverage.out false 20 || failed=1
+
+if [ $failed -ne 0 ]; then
+  exit 1
+fi

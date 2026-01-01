@@ -12,6 +12,8 @@ import (
 	"github.com/gorilla/schema"
 )
 
+var validateReplicationPushFn = validateReplicationPush
+
 func (h *Handler) handlePull(w http.ResponseWriter, r *http.Request) {
 	var reqBody ReplicaPullRequest
 	decoder := schema.NewDecoder()
@@ -155,7 +157,7 @@ func (h *Handler) handlePush(w http.ResponseWriter, r *http.Request) {
 		Changes:    changes,
 	}
 
-	if err := validateReplicationPush(pushReq); err != nil {
+	if err := validateReplicationPushFn(pushReq); err != nil {
 		log.Println("[Warning][Push] validation error:", err)
 		writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Invalid replication parameters")
 		return

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/codetrek/syntrix/internal/config"
-	"github.com/codetrek/syntrix/internal/events"
+	"github.com/codetrek/syntrix/internal/puller/events"
 	"github.com/codetrek/syntrix/internal/puller/internal/buffer"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -19,7 +19,6 @@ func TestPuller_WatchAndCheckpoint(t *testing.T) {
 
 	// Configure puller with checkpoint settings
 	cfg := newTestConfig(t)
-	cfg.Checkpoint.Interval = 100 * time.Millisecond
 
 	p := New(cfg, nil)
 
@@ -46,6 +45,9 @@ func TestPuller_WatchAndCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
+
+	// Wait for change stream to be established
+	time.Sleep(500 * time.Millisecond)
 
 	// Insert a document to trigger an event
 	coll := env.DB.Collection("users")
@@ -115,8 +117,6 @@ func TestPuller_ResumeFromCheckpoint(t *testing.T) {
 
 	// We need a valid resume token. Run a short session to generate one.
 	cfg := newTestConfig(t)
-	cfg.Checkpoint.Interval = 10 * time.Millisecond
-	cfg.Checkpoint.EventCount = 1
 	p := New(cfg, nil)
 	backendCfg := config.PullerBackendConfig{IncludeCollections: []string{"users"}}
 	_ = p.AddBackend("backend1", env.Client, env.DBName, backendCfg)
@@ -126,6 +126,9 @@ func TestPuller_ResumeFromCheckpoint(t *testing.T) {
 
 	_, _ = p.Subscribe(ctx, "c1", "")
 	_ = p.Start(ctx)
+
+	// Wait for change stream to be established
+	time.Sleep(100 * time.Millisecond)
 
 	// Generate event
 	coll := env.DB.Collection("users")
@@ -170,24 +173,6 @@ func TestPuller_ResumeFromCheckpoint(t *testing.T) {
 	p2.Stop(ctx2)
 }
 
-func TestPuller_SaveCheckpointOnShutdown_Error(t *testing.T) {
-	env := setupTestEnv(t)
-	cfg := newTestConfig(t)
-	p := New(cfg, nil)
-	backendCfg := config.PullerBackendConfig{IncludeCollections: []string{"users"}}
-	_ = p.AddBackend("backend1", env.Client, env.DBName, backendCfg)
-
-	// Close buffer to force SaveCheckpoint error
-	_ = p.backends["backend1"].buffer.Close()
-
-	// Record a token so there is something to save
-	token := bson.Raw{0x05, 0x00, 0x00, 0x00, 0x00} // Minimal valid bson document
-	p.backends["backend1"].tracker.RecordEvent(token)
-
-	// Should not panic
-	p.saveCheckpointOnShutdown(p.backends["backend1"], p.logger)
-}
-
 func TestPuller_EventHandlerError(t *testing.T) {
 	env := setupTestEnv(t)
 	cfg := newTestConfig(t)
@@ -204,6 +189,9 @@ func TestPuller_EventHandlerError(t *testing.T) {
 	defer cancel()
 	_ = p.Start(ctx)
 
+	// Wait for change stream to be established
+	time.Sleep(100 * time.Millisecond)
+
 	// Generate event
 	coll := env.DB.Collection("users")
 	_, _ = coll.InsertOne(ctx, bson.M{"a": 1})
@@ -219,7 +207,7 @@ func TestPuller_ChangeStreamError_Reconnect(t *testing.T) {
 	ctx := context.Background()
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
 	if err != nil {
-		t.Skip("Skipping test: failed to connect to MongoDB")
+		t.Fatal("Failed to connect to MongoDB")
 	}
 	// We don't defer disconnect here because we want to disconnect manually during test
 	// But we should ensure it's cleaned up if test fails before disconnect
@@ -243,6 +231,7 @@ func TestPuller_ChangeStreamError_Reconnect(t *testing.T) {
 
 	cfg := newTestConfig(t)
 	p := New(cfg, nil)
+	p.retryDelay = 10 * time.Millisecond
 	backendCfg := config.PullerBackendConfig{IncludeCollections: []string{"users"}}
 	_ = p.AddBackend("backend1", client, dbName, backendCfg)
 
@@ -318,6 +307,7 @@ func TestPuller_WatchChangeStream_Invalidate(t *testing.T) {
 	env := setupTestEnv(t)
 	cfg := newTestConfig(t)
 	p := New(cfg, nil)
+	p.retryDelay = 10 * time.Millisecond
 	backendCfg := config.PullerBackendConfig{IncludeCollections: []string{"users"}}
 	_ = p.AddBackend("backend1", env.Client, env.DBName, backendCfg)
 

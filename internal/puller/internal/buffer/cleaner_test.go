@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/syntrix/internal/events"
+	"github.com/codetrek/syntrix/internal/puller/events"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNewCleaner(t *testing.T) {
@@ -70,7 +71,7 @@ func TestCleaner_StartAndStop(t *testing.T) {
 	cleaner.Start(ctx)
 
 	// Let it run briefly
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 
 	// Stop should not block
 	done := make(chan struct{})
@@ -95,7 +96,10 @@ func TestCleaner_CleanupNow(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	buf, err := New(Options{Path: dir})
+	buf, err := New(Options{
+		Path:          dir,
+		BatchInterval: 5 * time.Millisecond,
+	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -112,7 +116,7 @@ func TestCleaner_CleanupNow(t *testing.T) {
 			I: 1,
 		},
 	}
-	if err := buf.Write(oldEvt); err != nil {
+	if err := buf.Write(oldEvt, testToken); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -127,9 +131,12 @@ func TestCleaner_CleanupNow(t *testing.T) {
 			I: 1,
 		},
 	}
-	if err := buf.Write(recentEvt); err != nil {
+	if err := buf.Write(recentEvt, testToken); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
+
+	// Wait for batch flush
+	time.Sleep(20 * time.Millisecond)
 
 	// Create cleaner with very short retention
 	cleaner := NewCleaner(CleanerOptions{
@@ -182,7 +189,7 @@ func TestCleaner_ContextCancellation(t *testing.T) {
 	cancel()
 
 	// Wait a bit and then stop to ensure no deadlock
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 
 	done := make(chan struct{})
 	go func() {
@@ -206,7 +213,10 @@ func TestCleaner_RunTriggersCleanup(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	buf, err := New(Options{Path: dir})
+	buf, err := New(Options{
+		Path:          dir,
+		BatchInterval: 5 * time.Millisecond,
+	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -223,7 +233,7 @@ func TestCleaner_RunTriggersCleanup(t *testing.T) {
 			I: 1,
 		},
 	}
-	if err := buf.Write(oldEvt); err != nil {
+	if err := buf.Write(oldEvt, testToken); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -240,7 +250,7 @@ func TestCleaner_RunTriggersCleanup(t *testing.T) {
 	cleaner.Start(ctx)
 
 	// Wait for at least one cleanup cycle
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 
 	cleaner.Stop()
 
@@ -270,7 +280,7 @@ func TestCleaner_CleanupError(t *testing.T) {
 	cleaner := NewCleaner(CleanerOptions{
 		Buffer:    buf,
 		Retention: time.Millisecond,
-		Interval:  50 * time.Millisecond,
+		Interval:  150 * time.Millisecond,
 	})
 
 	// Close buffer before cleanup runs - this will cause cleanup to fail
@@ -296,5 +306,90 @@ func TestCleaner_CleanupError(t *testing.T) {
 		// Expected - should not hang
 	case <-time.After(time.Second):
 		t.Error("Stop() took too long after cleanup error")
+	}
+}
+
+func TestCleaner_MaxSize(t *testing.T) {
+	t.Parallel()
+	dir, err := os.MkdirTemp("", "cleaner-test-maxsize-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(dir)
+
+	buf, err := New(Options{
+		Path:          dir,
+		BatchInterval: 5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer buf.Close()
+
+	// Write 10 events
+	for i := 0; i < 10; i++ {
+		evt := &events.NormalizedEvent{
+			EventID:    "evt-" + string(rune('a'+i)),
+			Collection: "testcoll",
+			DocumentID: "doc-1",
+			Type:       events.OperationInsert,
+			ClusterTime: events.ClusterTime{
+				T: uint32(time.Now().Unix()) + uint32(i),
+				I: 1,
+			},
+			// Add some payload to increase size
+			FullDocument: map[string]any{"data": "some payload"},
+		}
+		if err := buf.Write(evt, testToken); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+	}
+
+	// Wait for flush
+	time.Sleep(50 * time.Millisecond)
+
+	// Wait for size to be > 0
+	assert.Eventually(t, func() bool {
+		s, _ := buf.Size()
+		return s > 0
+	}, 5*time.Second, 100*time.Millisecond, "Buffer size should be > 0")
+
+	initialCount, err := buf.Count()
+	if err != nil {
+		t.Fatalf("Count() error = %v", err)
+	}
+	if initialCount != 10 {
+		t.Fatalf("Initial count = %d, want 10", initialCount)
+	}
+
+	// Create cleaner with MaxSize = 1 (force eviction)
+	cleaner := NewCleaner(CleanerOptions{
+		Buffer:    buf,
+		Retention: time.Hour,
+		MaxSize:   1, // Force eviction
+		Interval:  time.Hour,
+	})
+
+	// Run cleanup
+	ctx := context.Background()
+	err = cleaner.CleanupNow(ctx)
+	if err != nil {
+		t.Fatalf("CleanupNow() error = %v", err)
+	}
+
+	// Should have evicted events
+	finalCount, err := buf.Count()
+	if err != nil {
+		t.Fatalf("Count() error = %v", err)
+	}
+
+	// Since MaxSize is 1, it should try to evict everything until empty or size < 0 (impossible)
+	// But it stops when buffer is empty.
+	// However, PebbleDB size might not update immediately or might not go down to 0.
+	// But the loop checks .
+	// If size stays high (due to overhead), it will keep deleting until empty.
+
+	if finalCount != 0 {
+		t.Errorf("Final count = %d, want 0 (evicted all)", finalCount)
 	}
 }

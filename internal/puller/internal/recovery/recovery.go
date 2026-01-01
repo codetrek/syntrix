@@ -8,8 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/codetrek/syntrix/internal/events"
-	"github.com/codetrek/syntrix/internal/puller/internal/checkpoint"
+	"github.com/codetrek/syntrix/internal/puller/events"
 )
 
 // GapThreshold is the default time gap that triggers a gap detection alert.
@@ -128,9 +127,14 @@ func (a Action) String() string {
 	}
 }
 
+// CheckpointManager defines the interface for managing checkpoints.
+type CheckpointManager interface {
+	DeleteCheckpoint() error
+}
+
 // Handler handles change stream errors and determines recovery action.
 type Handler struct {
-	checkpoint checkpoint.Store
+	checkpoint CheckpointManager
 	logger     *slog.Logger
 
 	// consecutiveErrors counts consecutive errors
@@ -145,7 +149,7 @@ type Handler struct {
 
 // HandlerOptions configures the recovery handler.
 type HandlerOptions struct {
-	Checkpoint           checkpoint.Store
+	Checkpoint           CheckpointManager
 	MaxConsecutiveErrors int
 	Logger               *slog.Logger
 }
@@ -221,7 +225,7 @@ func (h *Handler) RecoverFromResumeTokenError(ctx context.Context) error {
 	}
 
 	h.logger.Warn("deleting checkpoint due to resume token error")
-	if err := h.checkpoint.Delete(ctx); err != nil {
+	if err := h.checkpoint.DeleteCheckpoint(); err != nil {
 		return fmt.Errorf("failed to delete checkpoint: %w", err)
 	}
 

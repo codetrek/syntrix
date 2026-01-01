@@ -12,15 +12,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestNewRemoteService(t *testing.T) {
-	client := NewRemoteService("http://localhost:8083")
+func TestNewCSPClient(t *testing.T) {
+	client := NewClient("http://localhost:8083")
 	assert.NotNil(t, client)
 	assert.Equal(t, "http://localhost:8083", client.baseURL)
 	assert.NotNil(t, client.client)
 }
 
-func TestRemoteService_SetHTTPClient(t *testing.T) {
-	client := NewRemoteService("http://localhost:8083")
+func TestCSPClient_SetHTTPClient(t *testing.T) {
+	client := NewClient("http://localhost:8083")
 	customHTTPClient := &http.Client{Timeout: 30 * time.Second}
 
 	client.SetHTTPClient(customHTTPClient)
@@ -28,7 +28,7 @@ func TestRemoteService_SetHTTPClient(t *testing.T) {
 	assert.Equal(t, customHTTPClient, client.client)
 }
 
-func TestRemoteService_Watch_Success(t *testing.T) {
+func TestCSPClient_Watch_Success(t *testing.T) {
 	// Create a mock server that streams events
 	events := []storage.Event{
 		{Id: "users/1", Type: storage.EventCreate},
@@ -63,7 +63,7 @@ func TestRemoteService_Watch_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewRemoteService(server.URL)
+	client := NewClient(server.URL)
 	ctx := context.Background()
 
 	ch, err := client.Watch(ctx, "test-tenant", "users", nil, storage.WatchOptions{})
@@ -84,13 +84,13 @@ func TestRemoteService_Watch_Success(t *testing.T) {
 	assert.Equal(t, storage.EventUpdate, receivedEvents[1].Type)
 }
 
-func TestRemoteService_Watch_ServerError(t *testing.T) {
+func TestCSPClient_Watch_ServerError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
 
-	client := NewRemoteService(server.URL)
+	client := NewClient(server.URL)
 	ctx := context.Background()
 
 	ch, err := client.Watch(ctx, "test-tenant", "users", nil, storage.WatchOptions{})
@@ -100,9 +100,9 @@ func TestRemoteService_Watch_ServerError(t *testing.T) {
 	assert.Contains(t, err.Error(), "500")
 }
 
-func TestRemoteService_Watch_ConnectionError(t *testing.T) {
+func TestCSPClient_Watch_ConnectionError(t *testing.T) {
 	// Use an invalid URL to trigger connection error
-	client := NewRemoteService("http://localhost:1") // Port 1 is typically not listening
+	client := NewClient("http://localhost:1") // Port 1 is typically not listening
 	ctx := context.Background()
 
 	ch, err := client.Watch(ctx, "test-tenant", "users", nil, storage.WatchOptions{})
@@ -112,7 +112,7 @@ func TestRemoteService_Watch_ConnectionError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to connect to CSP service")
 }
 
-func TestRemoteService_Watch_ContextCancel(t *testing.T) {
+func TestCSPClient_Watch_ContextCancel(t *testing.T) {
 	// Create a server that sends one event then blocks
 	serverReady := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -130,7 +130,7 @@ func TestRemoteService_Watch_ContextCancel(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewRemoteService(server.URL)
+	client := NewClient(server.URL)
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
@@ -163,7 +163,7 @@ func TestRemoteService_Watch_ContextCancel(t *testing.T) {
 	}
 }
 
-func TestRemoteService_Watch_InvalidJSON(t *testing.T) {
+func TestCSPClient_Watch_InvalidJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -172,7 +172,7 @@ func TestRemoteService_Watch_InvalidJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewRemoteService(server.URL)
+	client := NewClient(server.URL)
 	ctx := context.Background()
 
 	ch, err := client.Watch(ctx, "test-tenant", "users", nil, storage.WatchOptions{})
@@ -186,7 +186,7 @@ func TestRemoteService_Watch_InvalidJSON(t *testing.T) {
 	assert.Equal(t, storage.Event{}, evt)
 }
 
-func TestRemoteService_Watch_EmptyTenantAndCollection(t *testing.T) {
+func TestCSPClient_Watch_EmptyTenantAndCollection(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Decode request body
 		var req struct {
@@ -203,7 +203,7 @@ func TestRemoteService_Watch_EmptyTenantAndCollection(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewRemoteService(server.URL)
+	client := NewClient(server.URL)
 	ctx := context.Background()
 
 	ch, err := client.Watch(ctx, "", "", nil, storage.WatchOptions{})
@@ -215,7 +215,7 @@ func TestRemoteService_Watch_EmptyTenantAndCollection(t *testing.T) {
 	<-ch
 }
 
-func TestRemoteService_ImplementsService(t *testing.T) {
-	var svc Service = NewRemoteService("http://localhost:8083")
+func TestCSPClient_ImplementsService(t *testing.T) {
+	var svc Service = NewClient("http://localhost:8083")
 	assert.NotNil(t, svc)
 }

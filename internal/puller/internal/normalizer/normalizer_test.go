@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/syntrix/internal/events"
+	"github.com/codetrek/syntrix/internal/puller/events"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -493,5 +493,53 @@ func TestNormalizer_NilDocumentKey(t *testing.T) {
 	_, err := n.Normalize(raw)
 	if err == nil {
 		t.Error("Normalize() should fail with nil DocumentKey")
+	}
+}
+
+func TestParseEventID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		id      string
+		wantT   uint32
+		wantI   uint32
+		wantErr bool
+	}{
+		{
+			name:    "valid id",
+			id:      "1234567890-1-abcdef12",
+			wantT:   1234567890,
+			wantI:   1,
+			wantErr: false,
+		},
+		{
+			name:    "invalid format",
+			id:      "invalid",
+			wantErr: true,
+		},
+		{
+			name:    "missing hash",
+			id:      "1234567890-1",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ct, err := ParseEventID(tt.id)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseEventID() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr {
+				if ct.T != tt.wantT {
+					t.Errorf("ParseEventID() T = %v, want %v", ct.T, tt.wantT)
+				}
+				if ct.I != tt.wantI {
+					t.Errorf("ParseEventID() I = %v, want %v", ct.I, tt.wantI)
+				}
+			}
+		})
 	}
 }

@@ -87,15 +87,6 @@ func TestNewGRPCServer_WithLogger(t *testing.T) {
 	}
 }
 
-func TestDeprecatedNewPuller(t *testing.T) {
-	cfg := config.PullerConfig{}
-
-	p := NewPuller(cfg, nil)
-	if p == nil {
-		t.Fatal("NewPuller() returned nil")
-	}
-}
-
 func TestHealthStatusConstants(t *testing.T) {
 	// Just verify the constants are exported correctly
 	if HealthOK == "" {

@@ -2,17 +2,19 @@ package buffer
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
-	"github.com/codetrek/syntrix/internal/events"
+	"github.com/codetrek/syntrix/internal/puller/events"
 )
 
 // Cleaner periodically removes old events from the buffer.
 type Cleaner struct {
 	buffer    *Buffer
 	retention time.Duration
+	maxSize   int64
 	interval  time.Duration
 	logger    *slog.Logger
 
@@ -31,6 +33,9 @@ type CleanerOptions struct {
 	// Retention is how long to keep events.
 	Retention time.Duration
 
+	// MaxSize is the maximum size in bytes.
+	MaxSize int64
+
 	// Interval is how often to run cleanup.
 	Interval time.Duration
 
@@ -47,6 +52,7 @@ func NewCleaner(opts CleanerOptions) *Cleaner {
 	return &Cleaner{
 		buffer:    opts.Buffer,
 		retention: opts.Retention,
+		maxSize:   opts.MaxSize,
 		interval:  opts.Interval,
 		logger:    logger.With("component", "event-cleaner"),
 		done:      make(chan struct{}),
@@ -103,6 +109,68 @@ func (c *Cleaner) cleanup(ctx context.Context) error {
 
 	if count > 0 {
 		c.logger.Debug("cleaned up old events", "count", count)
+	}
+
+	// MaxSize cleanup
+	if c.maxSize > 0 {
+		size, err := c.buffer.Size()
+		if err != nil {
+			return fmt.Errorf("failed to get buffer size: %w", err)
+		}
+
+		if size > c.maxSize {
+			c.logger.Info("buffer size exceeded, evicting", "size", size, "maxSize", c.maxSize)
+
+			// Evict until size < maxSize * 0.9 (hysteresis)
+			targetSize := int64(float64(c.maxSize) * 0.9)
+
+			for size > targetSize {
+				first, err := c.buffer.First()
+				if err != nil {
+					return fmt.Errorf("failed to get first event: %w", err)
+				}
+				if first == "" {
+					break // Buffer empty
+				}
+
+				// Scan 1000 events forward to find a deletion point
+				iter, err := c.buffer.ScanFrom(first)
+				if err != nil {
+					return fmt.Errorf("failed to scan buffer: %w", err)
+				}
+
+				var lastKey string
+				count := 0
+				for count < 1000 && iter.Next() {
+					lastKey = iter.Key()
+					count++
+				}
+				iter.Close()
+
+				if lastKey != "" {
+					deleted, err := c.buffer.DeleteBefore(lastKey)
+					if err != nil {
+						return fmt.Errorf("failed to evict events: %w", err)
+					}
+
+					// DeleteBefore is exclusive, so we also delete the lastKey itself
+					// to ensure we make progress and don't get stuck on the last item.
+					if err := c.buffer.Delete(lastKey); err != nil {
+						return fmt.Errorf("failed to delete last key: %w", err)
+					}
+					deleted++
+
+					c.logger.Info("evicted events", "count", deleted)
+				} else {
+					break
+				}
+
+				size, err = c.buffer.Size()
+				if err != nil {
+					return fmt.Errorf("failed to get buffer size: %w", err)
+				}
+			}
+		}
 	}
 
 	return nil

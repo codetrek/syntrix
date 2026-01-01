@@ -85,10 +85,10 @@ func TestNewProvider_Success(t *testing.T) {
 	clientOpts := options.Client().ApplyURI(testMongoURI)
 	client, err := mongo.Connect(ctx, clientOpts)
 	if err != nil {
-		t.Skip("MongoDB not available")
+		t.Fatal("MongoDB not available")
 	}
 	if err := client.Ping(ctx, nil); err != nil {
-		t.Skip("MongoDB not available")
+		t.Fatal("MongoDB not available")
 	}
 	client.Disconnect(ctx)
 

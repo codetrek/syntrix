@@ -13,19 +13,13 @@ MODE=${1:-html}
 # Optional output path override: COVERPROFILE=/path/to/coverage.out ./scripts/coverage.sh
 COVERPROFILE=${COVERPROFILE:-"/tmp/coverage.out"}
 
-# Default exclusion: skip command entrypoints under cmd/ and generated protobuf code
-DEFAULT_EXCLUDE='syntrix/cmd/|syntrix/api/'
-EXTRA_EXCLUDE=${EXCLUDE_PATTERN:-}
-EXCLUDE_REGEX="${DEFAULT_EXCLUDE}${EXTRA_EXCLUDE:+|${EXTRA_EXCLUDE}}"
-
-PKGS=$(go list ./... | grep -Ev "${EXCLUDE_REGEX}")
+PKGS="./internal/... ./tests/... ./pkg/..."
 
 threshold_func=80.0
 threshold_package=85.0
-threshold_print=90.0
+threshold_print=85.0
 threshold_total=90.0
 
-echo "Excluding packages matching: ${EXCLUDE_REGEX}"
 # Use a temp file to capture output for sorting
 TMP_OUTPUT=$(mktemp)
 trap 'rm -f "$TMP_OUTPUT"' EXIT
@@ -38,6 +32,10 @@ set -e
 
 sed -i 's/of statements//g; s/github.com\/codetrek\/syntrix\///g' "$TMP_OUTPUT"
 
+echo
+echo "Package coverage summary:"
+printf "%-3s %-40s %-10s %s\n" "OK" "PACKAGE" "STATEMENTS" "COVERAGE"
+echo "-------------------------------------------------------------------"
 # Process and sort 'ok' lines (coverage data)
 grep "^ok" "$TMP_OUTPUT" | \
     grep -vE "^ok\s+tests/" | \
@@ -46,12 +44,12 @@ grep "^ok" "$TMP_OUTPUT" | \
         sub("%", "", cov);
         if (cov + 0 < threshold_package + 0) {
             # Mark packages below package threshold with *
-            printf "%-3s %-40s %-10s %-10s \033[31m%s\033[0m (CRITICAL: < %s%%)\n", $1, $2, $3, $4, $5, threshold_package
+            printf "%-3s %-40s %-10s \033[31m%s\033[0m (CRITICAL: < %s%%)\n", $1, $2, $3, $5, threshold_package
         } else {
-            printf "%-3s %-40s %-10s %-10s %s\n", $1, $2, $3, $4, $5
+            printf "%-3s %-40s %-10s %s\n", $1, $2, $3, $5
         }
     }' | \
-    sort -k5 -nr || true
+    sort -k4 -nr || true
 
 # Process and print other lines (skipped, failures, etc.)
 grep -v "^ok" "$TMP_OUTPUT" | \
@@ -68,13 +66,19 @@ if [ $EXIT_CODE -ne 0 ]; then
 fi
 
 echo -e "\nFunction coverage details (excluding >= ${threshold_print}%):"
-printf "%-60s %-35s %s\n" "LOCATION" "FUNCTION" "COVERAGE"
-echo "---------------------------------------------------------------------------------------------------------"
 
 FUNC_DATA=$(go tool cover -func="$COVERPROFILE" | sed 's/github.com\/codetrek\/syntrix\///g')
 
-go tool cover -html=$COVERPROFILE -o test_coverage.html
-
+printf "%-60s %-35s %s\n" "LOCATION" "FUNCTION" "COVERAGE"
+echo "---------------------------------------------------------------------------------------------------------"
+echo "$FUNC_DATA" | \
+    grep -v "^total:" | \
+    awk -v threshold_print="$threshold_print" 'BEGIN {total=0}{
+        cov = $3;sub("%", "", cov);
+        if (cov + 0 >= threshold_print + 0) {
+            total += 1
+        }
+    } END{print "... " total " more..."}'
 # Print functions with < 85% coverage
 echo "$FUNC_DATA" | \
     grep -v "^total:" | \
@@ -118,3 +122,12 @@ echo "Functions with <85% coverage: $COUNT_LE_85"
 
 TOTAL_TESTS=$(go test ${PKGS} -list '^Test' | grep -c '^Test')
 echo "Total tests: $TOTAL_TESTS"
+
+# Generate HTML report or print function details based on mode
+go tool cover -html=$COVERPROFILE -o test_coverage.html
+
+echo ""
+echo "---------------------------------------------------------------------------------------------------------"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+go run "$SCRIPT_DIR/lib/uncovered_blocks.go" "$COVERPROFILE" "false" 10

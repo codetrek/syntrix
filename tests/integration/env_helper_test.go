@@ -62,7 +62,7 @@ func setupServiceEnvWithOptions(t *testing.T, rulesContent string, configModifie
 	// Connect using driver to drop database
 	client, err := mongo.Connect(connCtx, options.Client().ApplyURI(mongoURI))
 	if err != nil {
-		t.Skipf("Skipping integration test: could not connect to MongoDB: %v", err)
+		t.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
 	defer client.Disconnect(ctx)
 
@@ -548,9 +548,6 @@ func mustMarshal(v interface{}) []byte {
 
 func TestEnvHelper(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
 
 	// Test setupServiceEnv
 	env := setupServiceEnv(t, "")

@@ -9,6 +9,8 @@ import (
 	"github.com/codetrek/syntrix/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func TestDocumentStore_Delete_Coverage(t *testing.T) {
@@ -218,4 +220,100 @@ func TestDocumentStore_Watch_Coverage(t *testing.T) {
 			t.Fatal("timeout waiting for channel close")
 		}
 	})
+
+	t.Run("ConvertChangeEvent_DefaultAndReplace", func(t *testing.T) {
+		ds := store.(*documentStore)
+
+		// Unknown operation should be skipped
+		noOp := changeStreamEvent{OperationType: "noop", DocumentKey: struct {
+			ID string `bson:"_id"`
+		}{ID: "tenant:path"}}
+		_, ok := ds.convertChangeEvent(noOp, "tenant", "")
+		assert.False(t, ok)
+
+		// Replace with soft-deleted before-state should yield create
+		change := changeStreamEvent{
+			OperationType:            "replace",
+			FullDocument:             &types.Document{TenantID: "t1", Collection: "c1"},
+			FullDocumentBeforeChange: &types.Document{Deleted: true},
+			DocumentKey: struct {
+				ID string `bson:"_id"`
+			}{ID: "t1:path"},
+		}
+		evt, ok := ds.convertChangeEvent(change, "", "")
+		assert.True(t, ok)
+		assert.Equal(t, types.EventCreate, evt.Type)
+		assert.Equal(t, "t1", evt.TenantID)
+	})
+
+	t.Run("ConvertChangeEvent_UpdateFromDeleted", func(t *testing.T) {
+		ds := store.(*documentStore)
+		change := changeStreamEvent{
+			OperationType:            "update",
+			FullDocumentBeforeChange: &types.Document{Deleted: true},
+			FullDocument:             &types.Document{TenantID: "t1", Collection: "c1"},
+			DocumentKey: struct {
+				ID string `bson:"_id"`
+			}{ID: "t1:path"},
+		}
+		evt, ok := ds.convertChangeEvent(change, "", "")
+		assert.True(t, ok)
+		assert.Equal(t, types.EventCreate, evt.Type)
+	})
+
+	t.Run("Watch_CtxDoneDuringSend", func(t *testing.T) {
+		ds := &documentStore{
+			client:              env.Client,
+			db:                  env.DB,
+			dataCollection:      "docs",
+			sysCollection:       "sys",
+			softDeleteRetention: 0,
+			openStream: func(ctx context.Context, coll *mongo.Collection, pipeline mongo.Pipeline, opts *options.ChangeStreamOptions) (changeStream, error) {
+				return &stubChangeStream{}, nil
+			},
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		ch, err := ds.Watch(ctx, "tenant", "docs", nil, types.WatchOptions{})
+		require.NoError(t, err)
+
+		// Cancel immediately so the select favors ctx.Done over the blocked send.
+		cancel()
+
+		require.Eventually(t, func() bool {
+			select {
+			case _, ok := <-ch:
+				return !ok
+			default:
+				return false
+			}
+		}, time.Second, 10*time.Millisecond)
+	})
 }
+
+type stubChangeStream struct {
+	emitted bool
+}
+
+func (s *stubChangeStream) Next(ctx context.Context) bool {
+	if s.emitted {
+		<-ctx.Done()
+		return false
+	}
+	s.emitted = true
+	return true
+}
+
+func (s *stubChangeStream) Decode(v any) error {
+	ce := v.(*changeStreamEvent)
+	ce.OperationType = "insert"
+	ce.FullDocument = &types.Document{TenantID: "tenant", Collection: "docs"}
+	ce.DocumentKey = struct {
+		ID string `bson:"_id"`
+	}{ID: "tenant:docs/id"}
+	return nil
+}
+
+func (s *stubChangeStream) Err() error { return nil }
+
+func (s *stubChangeStream) Close(context.Context) error { return nil }

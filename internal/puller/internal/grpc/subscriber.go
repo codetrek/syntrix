@@ -4,7 +4,10 @@ package grpc
 import (
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"sync"
+
+	"github.com/codetrek/syntrix/internal/puller/events"
 )
 
 // ProgressMarker tracks consumer positions across all backends.
@@ -22,26 +25,26 @@ func NewProgressMarker() *ProgressMarker {
 }
 
 // DecodeProgressMarker decodes a progress marker from its string representation.
-// Returns an empty marker if the string is empty or invalid.
-func DecodeProgressMarker(s string) *ProgressMarker {
+// Returns an error if the string is invalid.
+func DecodeProgressMarker(s string) (*ProgressMarker, error) {
 	if s == "" {
-		return NewProgressMarker()
+		return NewProgressMarker(), nil
 	}
 
-	data, err := base64.StdEncoding.DecodeString(s)
+	data, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
-		return NewProgressMarker()
+		return nil, err
 	}
 
 	var pm ProgressMarker
 	if err := json.Unmarshal(data, &pm); err != nil {
-		return NewProgressMarker()
+		return nil, err
 	}
 
 	if pm.Positions == nil {
 		pm.Positions = make(map[string]string)
 	}
-	return &pm
+	return &pm, nil
 }
 
 // Encode encodes the progress marker to a string.
@@ -55,7 +58,7 @@ func (pm *ProgressMarker) Encode() string {
 		return ""
 	}
 
-	return base64.StdEncoding.EncodeToString(data)
+	return base64.RawURLEncoding.EncodeToString(data)
 }
 
 // SetPosition updates the position for a backend.
@@ -101,32 +104,78 @@ type Subscriber struct {
 	// currentPos tracks the current position for each backend.
 	currentPos *ProgressMarker
 
+	// lastClusterTime tracks the timestamp of the last sent event per backend.
+	lastClusterTime map[string]events.ClusterTime
+
 	// mu protects currentPos.
 	mu sync.RWMutex
 
 	// done is closed when the subscriber is terminated.
 	done chan struct{}
+
+	// ch receives events for this subscriber.
+	ch chan *backendEvent
+
+	// overflow indicates if the subscriber channel has overflowed.
+	overflow bool
+	// overflowMu protects overflow.
+	overflowMu sync.Mutex
 }
 
 // NewSubscriber creates a new subscriber.
-func NewSubscriber(id string, after *ProgressMarker, coalesceOnCatchUp bool) *Subscriber {
+func NewSubscriber(id string, after *ProgressMarker, coalesceOnCatchUp bool, channelSize int) *Subscriber {
 	if after == nil {
 		after = NewProgressMarker()
+	}
+	if channelSize <= 0 {
+		channelSize = 10000
 	}
 	return &Subscriber{
 		ID:                id,
 		After:             after,
 		CoalesceOnCatchUp: coalesceOnCatchUp,
 		currentPos:        after.Clone(),
+		lastClusterTime:   make(map[string]events.ClusterTime),
 		done:              make(chan struct{}),
+		// Increase buffer size to handle transient spikes and avoid flapping between live and catchup modes.
+		// 10000 events * ~1KB/event ~= 10MB memory per subscriber.
+		ch: make(chan *backendEvent, channelSize),
 	}
 }
 
+// SetOverflow sets the overflow flag.
+func (s *Subscriber) SetOverflow() {
+	s.overflowMu.Lock()
+	defer s.overflowMu.Unlock()
+	s.overflow = true
+}
+
+// GetAndResetOverflow returns the current overflow state and resets it to false.
+func (s *Subscriber) GetAndResetOverflow() bool {
+	s.overflowMu.Lock()
+	defer s.overflowMu.Unlock()
+	overflow := s.overflow
+	s.overflow = false
+	return overflow
+}
+
 // UpdatePosition updates the current position for a backend.
-func (s *Subscriber) UpdatePosition(backend, eventID string) {
+func (s *Subscriber) UpdatePosition(backend, eventID string, clusterTime events.ClusterTime) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.currentPos.SetPosition(backend, eventID)
+	s.lastClusterTime[backend] = clusterTime
+}
+
+// ShouldSend checks if an event should be sent based on its timestamp.
+func (s *Subscriber) ShouldSend(backend string, clusterTime events.ClusterTime) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	last, ok := s.lastClusterTime[backend]
+	if !ok {
+		return true
+	}
+	return clusterTime.Compare(last) > 0
 }
 
 // CurrentProgress returns the current progress marker.
@@ -154,13 +203,18 @@ func (s *Subscriber) Close() {
 // SubscriberManager manages active subscribers.
 type SubscriberManager struct {
 	subscribers map[string]*Subscriber
+	logger      *slog.Logger
 	mu          sync.RWMutex
 }
 
 // NewSubscriberManager creates a new subscriber manager.
-func NewSubscriberManager() *SubscriberManager {
+func NewSubscriberManager(logger *slog.Logger) *SubscriberManager {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &SubscriberManager{
 		subscribers: make(map[string]*Subscriber),
+		logger:      logger.With("component", "subscriber-manager"),
 	}
 }
 
@@ -214,4 +268,19 @@ func (m *SubscriberManager) CloseAll() {
 		sub.Close()
 	}
 	m.subscribers = make(map[string]*Subscriber)
+}
+
+// Broadcast sends an event to all subscribers.
+func (m *SubscriberManager) Broadcast(be *backendEvent) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for id, sub := range m.subscribers {
+		select {
+		case sub.ch <- be:
+		default:
+			// Slow consumer: mark as overflowed instead of disconnecting
+			m.logger.Warn("slow consumer detected, marking overflow", "consumerId", id)
+			sub.SetOverflow()
+		}
+	}
 }

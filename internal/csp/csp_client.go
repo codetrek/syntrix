@@ -11,23 +11,23 @@ import (
 	"github.com/codetrek/syntrix/internal/storage"
 )
 
-// RemoteService provides HTTP-based access to a remote CSP service.
+// CSPClient provides HTTP-based access to a remote CSP service.
 // Use this in distributed mode where CSP runs as a separate service.
-type RemoteService struct {
+type CSPClient struct {
 	baseURL string
 	client  *http.Client
 }
 
-// NewRemoteService creates a new RemoteService with the given CSP service URL.
-func NewRemoteService(baseURL string) *RemoteService {
-	return &RemoteService{
+// NewClient creates a new CSPClient with the given CSP service URL.
+func NewClient(baseURL string) *CSPClient {
+	return &CSPClient{
 		baseURL: baseURL,
 		client:  &http.Client{},
 	}
 }
 
 // SetHTTPClient sets a custom HTTP client (useful for testing).
-func (c *RemoteService) SetHTTPClient(client *http.Client) {
+func (c *CSPClient) SetHTTPClient(client *http.Client) {
 	c.client = client
 }
 
@@ -35,7 +35,7 @@ func (c *RemoteService) SetHTTPClient(client *http.Client) {
 // Note: resumeToken and opts are not currently supported over HTTP protocol;
 // the server manages state internally. These parameters are accepted for
 // interface compatibility but are ignored.
-func (c *RemoteService) Watch(ctx context.Context, tenant, collection string, resumeToken interface{}, opts storage.WatchOptions) (<-chan storage.Event, error) {
+func (c *CSPClient) Watch(ctx context.Context, tenant, collection string, resumeToken interface{}, opts storage.WatchOptions) (<-chan storage.Event, error) {
 	reqBody, err := json.Marshal(map[string]string{
 		"collection": collection,
 		"tenant":     tenant,
@@ -70,7 +70,7 @@ func (c *RemoteService) Watch(ctx context.Context, tenant, collection string, re
 		for {
 			var evt storage.Event
 			if err := decoder.Decode(&evt); err != nil {
-				log.Printf("[Error][CSP RemoteService] Watch decode event failed: %v\n", err)
+				log.Printf("[Error][CSP CSPClient] Watch decode event failed: %v\n", err)
 				return
 			}
 			select {
@@ -84,5 +84,5 @@ func (c *RemoteService) Watch(ctx context.Context, tenant, collection string, re
 	return out, nil
 }
 
-// Ensure RemoteService implements Service interface at compile time.
-var _ Service = (*RemoteService)(nil)
+// Ensure CSPClient implements Service interface at compile time.
+var _ Service = (*CSPClient)(nil)

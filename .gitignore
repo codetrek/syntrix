@@ -38,3 +38,6 @@ vendor/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local running cache
+.syntrix/

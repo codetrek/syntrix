@@ -33,12 +33,12 @@ func getGlobalTestClient(t *testing.T) *mongo.Client {
 
 		client, err := mongo.Connect(ctx, options.Client().ApplyURI(testMongoURI))
 		if err != nil {
-			t.Skipf("Skipping test: failed to connect to MongoDB: %v", err)
+			t.Fatalf("Failed to connect to MongoDB: %v", err)
 			return
 		}
 
 		if err := client.Ping(ctx, nil); err != nil {
-			t.Skipf("Skipping test: failed to ping MongoDB: %v", err)
+			t.Fatalf("Failed to ping MongoDB: %v", err)
 			return
 		}
 
@@ -46,7 +46,7 @@ func getGlobalTestClient(t *testing.T) *mongo.Client {
 	})
 
 	if globalClient == nil {
-		t.Skip("Skipping test: MongoDB client not initialized")
+		t.Fatal("MongoDB client not initialized")
 	}
 
 	return globalClient

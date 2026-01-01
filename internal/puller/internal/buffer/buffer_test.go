@@ -5,11 +5,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/syntrix/internal/events"
+	"github.com/codetrek/syntrix/internal/puller/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
 )
+
+var testToken = bson.Raw{0x05, 0x00, 0x00, 0x00, 0x00}
 
 func TestBuffer_NewAndClose(t *testing.T) {
 	t.Parallel()
@@ -33,6 +35,46 @@ func TestBuffer_NewAndClose(t *testing.T) {
 	}
 }
 
+func TestBuffer_Close_MultipleTimes(t *testing.T) {
+	t.Parallel()
+	buf, err := New(Options{Path: t.TempDir()})
+	require.NoError(t, err)
+
+	assert.NoError(t, buf.Close())
+	assert.NoError(t, buf.Close())
+}
+
+func TestBuffer_Close_DBError(t *testing.T) {
+	t.Parallel()
+	buf, err := New(Options{Path: t.TempDir()})
+	require.NoError(t, err)
+
+	// Close the underlying DB early to force the error branch in Buffer.Close.
+	require.NoError(t, buf.db.Close())
+
+	err = buf.Close()
+	assert.Error(t, err)
+}
+
+func TestBuffer_Close_PanicHandled(t *testing.T) {
+	t.Parallel()
+	buf, err := New(Options{Path: t.TempDir()})
+	require.NoError(t, err)
+
+	// Corrupt the db pointer to trigger panic inside Close and ensure we recover.
+	buf.db = nil
+
+	err = buf.Close()
+	assert.Error(t, err)
+}
+
+func TestBufferIterator_Close_NilIter(t *testing.T) {
+	t.Parallel()
+	it := &bufferIterator{}
+
+	assert.NoError(t, it.Close())
+}
+
 func TestBuffer_WriteAndRead(t *testing.T) {
 	t.Parallel()
 	dir, err := os.MkdirTemp("", "buffer-test-*")
@@ -41,7 +83,10 @@ func TestBuffer_WriteAndRead(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	buf, err := New(Options{Path: dir})
+	buf, err := New(Options{
+		Path:          dir,
+		BatchInterval: 5 * time.Millisecond,
+	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -63,9 +108,12 @@ func TestBuffer_WriteAndRead(t *testing.T) {
 		},
 	}
 
-	if err := buf.Write(evt); err != nil {
+	if err := buf.Write(evt, testToken); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
+
+	// Wait for batch flush
+	time.Sleep(20 * time.Millisecond)
 
 	key := evt.BufferKey()
 	readEvt, err := buf.Read(key)
@@ -92,7 +140,10 @@ func TestBuffer_ScanFrom(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	buf, err := New(Options{Path: dir})
+	buf, err := New(Options{
+		Path:          dir,
+		BatchInterval: 5 * time.Millisecond,
+	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -112,10 +163,13 @@ func TestBuffer_ScanFrom(t *testing.T) {
 			},
 			Timestamp: time.Now().UnixMilli(),
 		}
-		if err := buf.Write(evt); err != nil {
+		if err := buf.Write(evt, testToken); err != nil {
 			t.Fatalf("Write() error = %v", err)
 		}
 	}
+
+	// Wait for batch flush
+	time.Sleep(20 * time.Millisecond)
 
 	// Scan from beginning
 	iter, err := buf.ScanFrom("")
@@ -148,7 +202,10 @@ func TestBuffer_Head(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	buf, err := New(Options{Path: dir})
+	buf, err := New(Options{
+		Path:          dir,
+		BatchInterval: 5 * time.Millisecond,
+	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -174,9 +231,12 @@ func TestBuffer_Head(t *testing.T) {
 			I: 1,
 		},
 	}
-	if err := buf.Write(evt); err != nil {
+	if err := buf.Write(evt, testToken); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
+
+	// Wait for batch flush
+	time.Sleep(20 * time.Millisecond)
 
 	head, err = buf.Head()
 	if err != nil {
@@ -195,7 +255,10 @@ func TestBuffer_Delete(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	buf, err := New(Options{Path: dir})
+	buf, err := New(Options{
+		Path:          dir,
+		BatchInterval: 5 * time.Millisecond,
+	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -211,9 +274,12 @@ func TestBuffer_Delete(t *testing.T) {
 			I: 1,
 		},
 	}
-	if err := buf.Write(evt); err != nil {
+	if err := buf.Write(evt, testToken); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
+
+	// Wait for batch flush
+	time.Sleep(20 * time.Millisecond)
 
 	key := evt.BufferKey()
 
@@ -240,7 +306,10 @@ func TestBuffer_Count(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	buf, err := New(Options{Path: dir})
+	buf, err := New(Options{
+		Path:          dir,
+		BatchInterval: 5 * time.Millisecond,
+	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -266,10 +335,13 @@ func TestBuffer_Count(t *testing.T) {
 				I: 1,
 			},
 		}
-		if err := buf.Write(evt); err != nil {
+		if err := buf.Write(evt, testToken); err != nil {
 			t.Fatalf("Write() error = %v", err)
 		}
 	}
+
+	// Wait for batch flush
+	time.Sleep(20 * time.Millisecond)
 
 	count, err = buf.Count()
 	if err != nil {
@@ -333,7 +405,7 @@ func TestBuffer_Write_Closed(t *testing.T) {
 			I: 1,
 		},
 	}
-	err = buf.Write(evt)
+	err = buf.Write(evt, testToken)
 	if err == nil {
 		t.Error("Write() should fail on closed buffer")
 	}
@@ -431,7 +503,10 @@ func TestBuffer_DeleteBefore(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	buf, err := New(Options{Path: dir})
+	buf, err := New(Options{
+		Path:          dir,
+		BatchInterval: 5 * time.Millisecond,
+	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -450,11 +525,14 @@ func TestBuffer_DeleteBefore(t *testing.T) {
 				I: 1,
 			},
 		}
-		if err := buf.Write(evt); err != nil {
+		if err := buf.Write(evt, testToken); err != nil {
 			t.Fatalf("Write() error = %v", err)
 		}
 		keys = append(keys, evt.BufferKey())
 	}
+
+	// Wait for batch flush
+	time.Sleep(20 * time.Millisecond)
 
 	// Delete before the 3rd key (index 2)
 	deleted, err := buf.DeleteBefore(keys[2])
@@ -525,7 +603,10 @@ func TestBuffer_CountAfter(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	buf, err := New(Options{Path: dir})
+	buf, err := New(Options{
+		Path:          dir,
+		BatchInterval: 5 * time.Millisecond,
+	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -544,11 +625,14 @@ func TestBuffer_CountAfter(t *testing.T) {
 				I: 1,
 			},
 		}
-		if err := buf.Write(evt); err != nil {
+		if err := buf.Write(evt, testToken); err != nil {
 			t.Fatalf("Write() error = %v", err)
 		}
 		keys = append(keys, evt.BufferKey())
 	}
+
+	// Wait for batch flush
+	time.Sleep(20 * time.Millisecond)
 
 	// Count after empty key should return all
 	count, err := buf.CountAfter("")
@@ -620,7 +704,10 @@ func TestIterator_Key(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	buf, err := New(Options{Path: dir})
+	buf, err := New(Options{
+		Path:          dir,
+		BatchInterval: 5 * time.Millisecond,
+	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -636,9 +723,12 @@ func TestIterator_Key(t *testing.T) {
 			I: 1,
 		},
 	}
-	if err := buf.Write(evt); err != nil {
+	if err := buf.Write(evt, testToken); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
+
+	// Wait for batch flush
+	time.Sleep(20 * time.Millisecond)
 
 	iter, err := buf.ScanFrom("")
 	if err != nil {
@@ -659,11 +749,14 @@ func TestIterator_Key(t *testing.T) {
 	}
 }
 
-func TestBuffer_WriteWithCheckpoint(t *testing.T) {
+func TestBuffer_Write(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	buf, err := New(Options{Path: dir})
+	buf, err := New(Options{
+		Path:          dir,
+		BatchInterval: 5 * time.Millisecond,
+	})
 	require.NoError(t, err)
 	defer buf.Close()
 
@@ -679,8 +772,11 @@ func TestBuffer_WriteWithCheckpoint(t *testing.T) {
 	}
 	token := bson.Raw{0x05, 0x00, 0x00, 0x00, 0x00}
 
-	err = buf.WriteWithCheckpoint(evt, token, true)
+	err = buf.Write(evt, token)
 	require.NoError(t, err)
+
+	// Wait for batch flush
+	time.Sleep(20 * time.Millisecond)
 
 	readEvt, err := buf.Read(evt.BufferKey())
 	require.NoError(t, err)
@@ -710,7 +806,7 @@ func TestBuffer_WriteWithCheckpoint(t *testing.T) {
 	assert.Equal(t, 1, iterCount)
 }
 
-func TestBuffer_WriteWithCheckpoint_NilToken(t *testing.T) {
+func TestBuffer_Write_NilToken_Error(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
@@ -729,9 +825,9 @@ func TestBuffer_WriteWithCheckpoint_NilToken(t *testing.T) {
 		},
 	}
 
-	err = buf.WriteWithCheckpoint(evt, nil, true)
+	err = buf.Write(evt, nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "checkpoint token is nil")
+	assert.Contains(t, err.Error(), "checkpoint token is required")
 }
 
 func TestBuffer_SaveCheckpoint_NoEvents(t *testing.T) {
@@ -846,21 +942,19 @@ func TestBuffer_Write_BatchesBySize(t *testing.T) {
 		},
 	}
 
-	firstDone := make(chan error, 1)
-	go func() {
-		firstDone <- buf.Write(evt1)
-	}()
+	require.NoError(t, buf.Write(evt1, testToken))
 
-	select {
-	case err := <-firstDone:
-		t.Fatalf("first write finished early: %v", err)
-	case <-time.After(20 * time.Millisecond):
-	}
-
-	require.NoError(t, buf.Write(evt2))
-	require.NoError(t, <-firstDone)
-
+	// Should not be in DB yet (batch size 2)
 	read1, err := buf.Read(evt1.BufferKey())
+	require.NoError(t, err)
+	require.Nil(t, read1)
+
+	require.NoError(t, buf.Write(evt2, testToken))
+
+	// Wait for flush
+	time.Sleep(50 * time.Millisecond)
+
+	read1, err = buf.Read(evt1.BufferKey())
 	require.NoError(t, err)
 	require.NotNil(t, read1)
 
@@ -893,19 +987,17 @@ func TestBuffer_Write_FlushesOnInterval(t *testing.T) {
 		},
 	}
 
-	done := make(chan error, 1)
-	go func() {
-		done <- buf.Write(evt)
-	}()
+	require.NoError(t, buf.Write(evt, testToken))
 
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("timeout waiting for batch flush")
-	}
-
+	// Should not be in DB yet
 	readEvt, err := buf.Read(evt.BufferKey())
+	require.NoError(t, err)
+	require.Nil(t, readEvt)
+
+	// Wait for interval
+	time.Sleep(50 * time.Millisecond)
+
+	readEvt, err = buf.Read(evt.BufferKey())
 	require.NoError(t, err)
 	require.NotNil(t, readEvt)
 }
@@ -914,7 +1006,10 @@ func TestBuffer_DeleteBefore_SkipsCheckpoint(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	buf, err := New(Options{Path: dir})
+	buf, err := New(Options{
+		Path:          dir,
+		BatchInterval: 5 * time.Millisecond,
+	})
 	require.NoError(t, err)
 	defer buf.Close()
 
@@ -941,8 +1036,11 @@ func TestBuffer_DeleteBefore_SkipsCheckpoint(t *testing.T) {
 			I: 1,
 		},
 	}
-	require.NoError(t, buf.Write(evt1))
-	require.NoError(t, buf.Write(evt2))
+	require.NoError(t, buf.Write(evt1, testToken))
+	require.NoError(t, buf.Write(evt2, testToken))
+
+	// Wait for batch flush
+	time.Sleep(20 * time.Millisecond)
 
 	deleted, err := buf.DeleteBefore(evt2.BufferKey())
 	require.NoError(t, err)
@@ -951,4 +1049,187 @@ func TestBuffer_DeleteBefore_SkipsCheckpoint(t *testing.T) {
 	ckpt, err := buf.LoadCheckpoint()
 	require.NoError(t, err)
 	assert.Equal(t, token, ckpt)
+}
+
+func TestBuffer_First(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	buf, err := New(Options{
+		Path:          dir,
+		BatchInterval: 5 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	defer buf.Close()
+
+	// Empty buffer
+	key, err := buf.First()
+	require.NoError(t, err)
+	assert.Empty(t, key)
+
+	// Write events
+	evt1 := &events.NormalizedEvent{
+		EventID:     "1",
+		ClusterTime: events.ClusterTime{T: 1, I: 1},
+	}
+	evt2 := &events.NormalizedEvent{
+		EventID:     "2",
+		ClusterTime: events.ClusterTime{T: 2, I: 2},
+	}
+
+	require.NoError(t, buf.Write(evt1, testToken))
+	require.NoError(t, buf.Write(evt2, testToken))
+
+	// Wait for flush
+	require.Eventually(t, func() bool {
+		k, _ := buf.First()
+		return k != ""
+	}, 1*time.Second, 10*time.Millisecond)
+
+	key, err = buf.First()
+	require.NoError(t, err)
+	assert.Equal(t, evt1.BufferKey(), key)
+}
+
+func TestBuffer_Size(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	buf, err := New(Options{
+		Path:          dir,
+		BatchInterval: 5 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	defer buf.Close()
+
+	initialSize, err := buf.Size()
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, initialSize, int64(0))
+
+	// Write event
+	evt := &events.NormalizedEvent{
+		EventID:     "1",
+		ClusterTime: events.ClusterTime{T: 1, I: 1},
+		FullDocument: map[string]any{
+			"data": make([]byte, 1024*10), // 10KB data
+		},
+	}
+	require.NoError(t, buf.Write(evt, testToken))
+
+	// Wait for flush
+	require.Eventually(t, func() bool {
+		s, _ := buf.Size()
+		return s > initialSize
+	}, 1*time.Second, 10*time.Millisecond)
+
+	size, err := buf.Size()
+	require.NoError(t, err)
+	assert.Greater(t, size, initialSize)
+}
+
+func TestBuffer_DeleteCheckpoint(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	buf, err := New(Options{
+		Path:          dir,
+		BatchInterval: 5 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	defer buf.Close()
+
+	// Save checkpoint
+	err = buf.SaveCheckpoint(testToken)
+	require.NoError(t, err)
+
+	// Verify exists
+	ckpt, err := buf.LoadCheckpoint()
+	require.NoError(t, err)
+	assert.Equal(t, testToken, ckpt)
+
+	// Delete
+	err = buf.DeleteCheckpoint()
+	require.NoError(t, err)
+
+	// Verify gone
+	ckpt, err = buf.LoadCheckpoint()
+	require.NoError(t, err)
+	assert.Nil(t, ckpt)
+}
+
+func TestBuffer_ClosedScenarios(t *testing.T) {
+	t.Parallel()
+	dir, err := os.MkdirTemp("", "buffer-test-closed-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(dir)
+
+	buf, err := New(Options{Path: dir})
+	require.NoError(t, err)
+
+	// Close the buffer immediately
+	err = buf.Close()
+	require.NoError(t, err)
+
+	// Test all methods that should fail when closed
+	t.Run("Write", func(t *testing.T) {
+		err := buf.Write(&events.NormalizedEvent{}, testToken)
+		assert.ErrorContains(t, err, "buffer is closed")
+	})
+
+	t.Run("Read", func(t *testing.T) {
+		_, err := buf.Read("some-key")
+		assert.ErrorContains(t, err, "buffer is closed")
+	})
+
+	t.Run("ScanFrom", func(t *testing.T) {
+		_, err := buf.ScanFrom("")
+		assert.ErrorContains(t, err, "buffer is closed")
+	})
+
+	t.Run("Head", func(t *testing.T) {
+		_, err := buf.Head()
+		assert.ErrorContains(t, err, "buffer is closed")
+	})
+
+	t.Run("First", func(t *testing.T) {
+		_, err := buf.First()
+		assert.ErrorContains(t, err, "buffer is closed")
+	})
+
+	t.Run("Size", func(t *testing.T) {
+		_, err := buf.Size()
+		assert.ErrorContains(t, err, "buffer is closed")
+	})
+
+	t.Run("Delete", func(t *testing.T) {
+		err := buf.Delete("some-key")
+		assert.ErrorContains(t, err, "buffer is closed")
+	})
+
+	t.Run("DeleteBefore", func(t *testing.T) {
+		_, err := buf.DeleteBefore("some-key")
+		assert.ErrorContains(t, err, "buffer is closed")
+	})
+
+	t.Run("Count", func(t *testing.T) {
+		_, err := buf.Count()
+		assert.ErrorContains(t, err, "buffer is closed")
+	})
+
+	t.Run("CountAfter", func(t *testing.T) {
+		_, err := buf.CountAfter("some-key")
+		assert.ErrorContains(t, err, "buffer is closed")
+	})
+
+	t.Run("LoadCheckpoint", func(t *testing.T) {
+		_, err := buf.LoadCheckpoint()
+		assert.ErrorContains(t, err, "buffer is closed")
+	})
+
+	t.Run("SaveCheckpoint", func(t *testing.T) {
+		err := buf.SaveCheckpoint(testToken)
+		assert.ErrorContains(t, err, "buffer is closed")
+	})
+
+	t.Run("DeleteCheckpoint", func(t *testing.T) {
+		err := buf.DeleteCheckpoint()
+		assert.ErrorContains(t, err, "buffer is closed")
+	})
 }

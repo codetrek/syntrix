@@ -312,12 +312,6 @@ func (h *Handler) authorized(handler http.HandlerFunc, action string) http.Handl
 		if action == "create" || action == "update" {
 			bodyBytes, err := io.ReadAll(r.Body)
 			if err != nil {
-				slog.Warn("Failed to read request body",
-					"path", path,
-					"action", action,
-					"error", err,
-					"request_id", getRequestID(r.Context()),
-				)
 				writeError(w, http.StatusBadRequest, ErrCodeBadRequest, "Failed to read request body")
 				return
 			}

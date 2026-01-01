@@ -500,3 +500,33 @@ func TestFactory_CloseError(t *testing.T) {
 	assert.ErrorContains(t, err, "errors closing providers")
 	assert.ErrorContains(t, err, "close failed")
 }
+
+type noopProvider struct{}
+
+func (n *noopProvider) Close(ctx context.Context) error { return nil }
+
+func TestFactory_GetMongoClient_Success(t *testing.T) {
+	t.Parallel()
+
+	f := &factory{providers: make(map[string]Provider)}
+	client, _ := mongo.Connect(context.Background(), options.Client().ApplyURI("mongodb://mock"))
+	f.providers["primary"] = &mockMongoProvider{client: client, dbName: "db1"}
+
+	cli, dbName, err := f.GetMongoClient("primary")
+	require.NoError(t, err)
+	assert.Equal(t, client, cli)
+	assert.Equal(t, "db1", dbName)
+}
+
+func TestFactory_GetMongoClient_Errors(t *testing.T) {
+	t.Parallel()
+
+	f := &factory{providers: make(map[string]Provider)}
+
+	_, _, err := f.GetMongoClient("missing")
+	assert.ErrorContains(t, err, "backend not found")
+
+	f.providers["noop"] = &noopProvider{}
+	_, _, err = f.GetMongoClient("noop")
+	assert.ErrorContains(t, err, "not a mongo provider")
+}

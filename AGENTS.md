@@ -6,7 +6,7 @@ applyTo: "**"
 
 - always disucss in "中文" with user and write document and code in English.
 - always run testing to ensure code quality.
-- always run `make coverage` to ensure test coverage, run `./scripts/uncovered_blocks.sh` to get detailed uncovered code blocks.
+- always run `make coverage` to evaluate test coverage and fix as needed.
 - always write unit tests for newly added code and use "github.com/stretchr/testify" for unit testing.
 - always ask "should I add more testing" and make robust but not over-engineering testing.
 - always document the "Why" (reasoning/analysis) alongside the "How" (decision/implementation) in design discussion documents.
@@ -45,7 +45,7 @@ IMMEDIATELY STOP and ask user when:
 ## 🚫 FORBIDDEN PATTERNS
 
 - Using unverified parameters from external interfaces (Strict validation required).
-- Skip any unit test or integration testing.
+- `Skip` any unit test or integration testing.
 - Using `cat` or `echo` to write or append to files in the terminal.
 - **Integration Tests**: Direct calls to internal service components (e.g., `query.Engine`, `storage.Backend`) are FORBIDDEN in `tests/integration`. Tests must treat the service as a black box and interact ONLY via public interfaces (HTTP API, etc.).
 

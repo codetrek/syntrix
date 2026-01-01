@@ -1,7 +1,9 @@
 package buffer
 
 import (
-	"github.com/codetrek/syntrix/internal/events"
+	"sort"
+
+	"github.com/codetrek/syntrix/internal/puller/events"
 )
 
 // Coalescer merges events for the same document during catch-up.
@@ -56,6 +58,10 @@ func (c *Coalescer) Flush() []*events.NormalizedEvent {
 	for _, evt := range c.pending {
 		result = append(result, evt)
 	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].BufferKey() < result[j].BufferKey()
+	})
 
 	c.pending = make(map[string]*events.NormalizedEvent)
 	return result

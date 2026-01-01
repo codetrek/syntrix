@@ -19,7 +19,7 @@ func TestDocumentProvider(t *testing.T) {
 
 	provider, err := NewDocumentProvider(ctx, testMongoURI, env.DBName, "docs", "sys", 0)
 	if err != nil {
-		t.Skipf("Skipping test: MongoDB not available: %v", err)
+		t.Fatalf("MongoDB not available: %v", err)
 	}
 	require.NoError(t, err)
 

@@ -20,14 +20,6 @@ func TestDefaultPullerConfig(t *testing.T) {
 		t.Errorf("Backends = %v, want single 'default_mongo'", cfg.Backends)
 	}
 
-	if cfg.Checkpoint.Backend != "pebble" {
-		t.Errorf("Checkpoint.Backend = %q, want %q", cfg.Checkpoint.Backend, "pebble")
-	}
-
-	if cfg.Checkpoint.Interval != time.Second {
-		t.Errorf("Checkpoint.Interval = %v, want %v", cfg.Checkpoint.Interval, time.Second)
-	}
-
 	if cfg.Consumer.CatchUpThreshold != 100000 {
 		t.Errorf("Consumer.CatchUpThreshold = %d, want %d", cfg.Consumer.CatchUpThreshold, 100000)
 	}
@@ -40,12 +32,12 @@ func TestDefaultPullerConfig(t *testing.T) {
 		t.Errorf("Buffer.BatchSize = %d, want %d", cfg.Buffer.BatchSize, 100)
 	}
 
-	if cfg.Buffer.BatchInterval != 5*time.Millisecond {
-		t.Errorf("Buffer.BatchInterval = %v, want %v", cfg.Buffer.BatchInterval, 5*time.Millisecond)
+	if cfg.Buffer.BatchInterval != 100*time.Millisecond {
+		t.Errorf("Buffer.BatchInterval = %v, want %v", cfg.Buffer.BatchInterval, 100*time.Millisecond)
 	}
 
-	if cfg.Buffer.QueueSize != 1000 {
-		t.Errorf("Buffer.QueueSize = %d, want %d", cfg.Buffer.QueueSize, 1000)
+	if cfg.Buffer.QueueSize != 10000 {
+		t.Errorf("Buffer.QueueSize = %d, want %d", cfg.Buffer.QueueSize, 10000)
 	}
 
 	if cfg.Bootstrap.Mode != "from_now" {
@@ -117,29 +109,6 @@ func TestPullerConfig_Validate(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "either include_collections or exclude_collections",
-		},
-		{
-			name:    "invalid checkpoint backend",
-			modify:  func(c *PullerConfig) { c.Checkpoint.Backend = "invalid" },
-			wantErr: true,
-			errMsg:  "pebble",
-		},
-		{
-			name:    "pebble checkpoint backend is valid",
-			modify:  func(c *PullerConfig) { c.Checkpoint.Backend = "pebble" },
-			wantErr: false,
-		},
-		{
-			name:    "zero checkpoint interval",
-			modify:  func(c *PullerConfig) { c.Checkpoint.Interval = 0 },
-			wantErr: true,
-			errMsg:  "interval",
-		},
-		{
-			name:    "zero event count",
-			modify:  func(c *PullerConfig) { c.Checkpoint.EventCount = 0 },
-			wantErr: true,
-			errMsg:  "event_count",
 		},
 		{
 			name:    "empty buffer path",

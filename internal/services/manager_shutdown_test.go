@@ -8,12 +8,15 @@ import (
 	"time"
 
 	"github.com/codetrek/syntrix/internal/config"
+	"github.com/codetrek/syntrix/internal/puller"
 	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/internal/storage/types"
+	"github.com/nats-io/nats.go"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 func TestManager_Init_Start_Shutdown_NoServices(t *testing.T) {
@@ -47,6 +50,9 @@ func (m *MockStorageFactory) User() types.UserStore {
 }
 func (m *MockStorageFactory) Revocation() types.TokenRevocationStore {
 	return nil
+}
+func (m *MockStorageFactory) GetMongoClient(name string) (*mongo.Client, string, error) {
+	return nil, "", nil
 }
 func (m *MockStorageFactory) Close() error {
 	args := m.Called()
@@ -109,4 +115,30 @@ func TestManager_Shutdown_Timeout(t *testing.T) {
 
 	// Should timeout and log "Timeout waiting for background tasks."
 	mgr.Shutdown(ctx)
+}
+
+type stubNATSProvider struct {
+	closed bool
+}
+
+func (s *stubNATSProvider) Connect(ctx context.Context) (*nats.Conn, error) { return nil, nil }
+func (s *stubNATSProvider) Close() error {
+	s.closed = true
+	return nil
+}
+
+func TestManager_Shutdown_PullerAndNATS(t *testing.T) {
+	cfg := config.LoadConfig()
+	mgr := NewManager(cfg, Options{})
+
+	np := &stubNATSProvider{}
+	pullerSvc := &stubPullerService{}
+	mgr.natsProvider = np
+	mgr.pullerService = pullerSvc
+	mgr.pullerGRPC = puller.NewGRPCServer(config.PullerGRPCConfig{Address: "127.0.0.1:0"}, pullerSvc, nil)
+
+	mgr.Shutdown(context.Background())
+
+	assert.True(t, np.closed)
+	assert.Equal(t, int32(1), pullerSvc.stopCount.Load())
 }

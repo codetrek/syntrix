@@ -5,12 +5,15 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/codetrek/syntrix/internal/api/realtime"
 	"github.com/codetrek/syntrix/internal/config"
+	"github.com/codetrek/syntrix/internal/puller"
+	"github.com/codetrek/syntrix/internal/puller/events"
 	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/internal/trigger"
 	"github.com/codetrek/syntrix/pkg/model"
@@ -246,6 +249,23 @@ func TestManager_Start_TriggerWorker_CallsStart(t *testing.T) {
 	}, 1*time.Second, 10*time.Millisecond, "Should call Start exactly once")
 }
 
+func TestManager_Start_PullerAndGRPC(t *testing.T) {
+	cfg := config.LoadConfig()
+	mgr := NewManager(cfg, Options{RunPuller: true})
+
+	pullerSvc := &stubPullerService{}
+	mgr.pullerService = pullerSvc
+	mgr.pullerGRPC = puller.NewGRPCServer(config.PullerGRPCConfig{Address: "127.0.0.1:0"}, pullerSvc, nil)
+
+	bgCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mgr.Start(bgCtx)
+	mgr.Shutdown(context.Background())
+
+	assert.Equal(t, int32(1), pullerSvc.startCount.Load())
+}
+
 type rtQueryStub struct {
 	calls      atomic.Int32
 	failFirst  bool
@@ -286,6 +306,42 @@ func (s *rtQueryStub) Pull(context.Context, string, storage.ReplicationPullReque
 }
 func (s *rtQueryStub) Push(context.Context, string, storage.ReplicationPushRequest) (*storage.ReplicationPushResponse, error) {
 	return nil, nil
+}
+
+type stubPullerService struct {
+	startCount atomic.Int32
+	stopCount  atomic.Int32
+	mu         sync.Mutex
+	addCalls   []pullerBackendCall
+}
+
+type pullerBackendCall struct {
+	name string
+	db   string
+}
+
+func (s *stubPullerService) AddBackend(name string, _ *mongo.Client, dbName string, _ config.PullerBackendConfig) error {
+	s.mu.Lock()
+	s.addCalls = append(s.addCalls, pullerBackendCall{name: name, db: dbName})
+	s.mu.Unlock()
+	return nil
+}
+func (s *stubPullerService) Start(ctx context.Context) error {
+	s.startCount.Add(1)
+	return nil
+}
+func (s *stubPullerService) Stop(ctx context.Context) error {
+	s.stopCount.Add(1)
+	return nil
+}
+func (s *stubPullerService) BackendNames() []string { return nil }
+func (s *stubPullerService) SetEventHandler(func(ctx context.Context, backendName string, event *events.NormalizedEvent) error) {
+}
+func (s *stubPullerService) Replay(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error) {
+	return nil, nil
+}
+func (s *stubPullerService) Subscribe(ctx context.Context, consumerID string, after string) (<-chan *events.NormalizedEvent, error) {
+	return make(chan *events.NormalizedEvent), nil
 }
 
 func freeAddr() string {

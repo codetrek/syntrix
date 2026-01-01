@@ -57,7 +57,7 @@ func setupStandaloneEnv(t *testing.T, rulesContent string, configModifiers ...fu
 
 	client, err := mongo.Connect(connCtx, options.Client().ApplyURI(mongoURI))
 	if err != nil {
-		t.Skipf("Skipping integration test: could not connect to MongoDB: %v", err)
+		t.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
 	defer client.Disconnect(ctx)
 

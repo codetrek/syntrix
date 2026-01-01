@@ -76,4 +76,20 @@ func (m *Manager) Start(bgCtx context.Context) {
 			}
 		}()
 	}
+
+	// Start Change Stream Puller
+	if m.opts.RunPuller {
+		log.Println("Starting Change Stream Puller...")
+		if err := m.pullerService.Start(bgCtx); err != nil {
+			log.Printf("Failed to start Change Stream Puller: %v", err)
+		}
+
+		// Start gRPC Server if configured
+		if m.pullerGRPC != nil {
+			log.Println("Starting Puller gRPC Server...")
+			if err := m.pullerGRPC.Start(bgCtx); err != nil {
+				log.Printf("Failed to start Puller gRPC Server: %v", err)
+			}
+		}
+	}
 }

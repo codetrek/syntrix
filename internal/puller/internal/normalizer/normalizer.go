@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/codetrek/syntrix/internal/events"
+	"github.com/codetrek/syntrix/internal/puller/events"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -172,6 +172,22 @@ func generateEventID(ct primitive.Timestamp, collection, docID string) string {
 	hash := sha256.Sum256([]byte(data))
 	hashStr := hex.EncodeToString(hash[:8]) // Use first 8 bytes
 	return fmt.Sprintf("%d-%d-%s", ct.T, ct.I, hashStr)
+}
+
+// ParseEventID parses the cluster time from an event ID.
+func ParseEventID(id string) (events.ClusterTime, error) {
+	var t, i uint32
+	var hash string
+	// Sscanf might not work well if hash contains dashes, but hex string doesn't.
+	// Format is %d-%d-%s.
+	n, err := fmt.Sscanf(id, "%d-%d-%s", &t, &i, &hash)
+	if err != nil {
+		return events.ClusterTime{}, err
+	}
+	if n < 3 {
+		return events.ClusterTime{}, fmt.Errorf("invalid event ID format")
+	}
+	return events.ClusterTime{T: t, I: i}, nil
 }
 
 // convertBsonM converts a bson.M to map[string]any.

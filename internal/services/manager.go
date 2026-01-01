@@ -8,6 +8,7 @@ import (
 	"github.com/codetrek/syntrix/internal/api/realtime"
 	"github.com/codetrek/syntrix/internal/config"
 	"github.com/codetrek/syntrix/internal/identity"
+	"github.com/codetrek/syntrix/internal/puller"
 	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/internal/trigger"
 )
@@ -28,6 +29,7 @@ type Options struct {
 	RunQuery            bool
 	RunTriggerEvaluator bool
 	RunTriggerWorker    bool
+	RunPuller           bool
 	ListenHost          string
 
 	ForceQueryClient bool
@@ -59,6 +61,8 @@ type Manager struct {
 	triggerConsumer triggerConsumer
 	triggerService  triggerService
 	natsProvider    trigger.NATSProvider
+	pullerService   puller.LocalService
+	pullerGRPC      *puller.GRPCServer
 	wg              sync.WaitGroup
 }
 

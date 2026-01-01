@@ -42,4 +42,20 @@ func (m *Manager) Shutdown(ctx context.Context) {
 		log.Println("Closing NATS provider...")
 		m.natsProvider.Close()
 	}
+
+	// Stop Puller gRPC Server
+	if m.pullerGRPC != nil {
+		log.Println("Stopping Puller gRPC Server...")
+		if err := m.pullerGRPC.Stop(ctx); err != nil {
+			log.Printf("Error stopping Puller gRPC Server: %v", err)
+		}
+	}
+
+	// Stop Change Stream Puller
+	if m.pullerService != nil {
+		log.Println("Stopping Change Stream Puller...")
+		if err := m.pullerService.Stop(ctx); err != nil {
+			log.Printf("Error stopping Change Stream Puller: %v", err)
+		}
+	}
 }

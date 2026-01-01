@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -274,6 +275,41 @@ func TestManager_Init_RunRealtimePath(t *testing.T) {
 	assert.Equal(t, "Unified Gateway", mgr.serverNames[0])
 }
 
+func TestManager_initPullerService_Success(t *testing.T) {
+	cfg := config.LoadConfig()
+	cfg.Puller.Buffer.Path = t.TempDir()
+	cfg.Puller.Backends = []config.PullerBackendConfig{{Name: "primary"}}
+
+	mgr := NewManager(cfg, Options{Mode: ModeDistributed})
+	mgr.storageFactory = &stubStorageFactory{
+		dbByName: map[string]string{"primary": "db_primary"},
+		client:   &mongo.Client{},
+	}
+
+	err := mgr.initPullerService(context.Background())
+	assert.NoError(t, err)
+	names := mgr.pullerService.BackendNames()
+	assert.Len(t, names, 1)
+	assert.Equal(t, "primary", names[0])
+	assert.NotNil(t, mgr.pullerGRPC)
+}
+
+func TestManager_initPullerService_GetMongoError(t *testing.T) {
+	cfg := config.LoadConfig()
+	cfg.Puller.Buffer.Path = t.TempDir()
+	cfg.Puller.Backends = []config.PullerBackendConfig{{Name: "missing"}}
+
+	mgr := NewManager(cfg, Options{})
+	mgr.storageFactory = &stubStorageFactory{
+		errByName: map[string]error{"missing": errors.New("no backend")},
+		client:    &mongo.Client{},
+	}
+	mgr.pullerService = &stubPullerService{}
+
+	err := mgr.initPullerService(context.Background())
+	assert.Error(t, err)
+}
+
 type fakeDocumentStore struct {
 	db        *mongo.Database
 	retention time.Duration
@@ -394,6 +430,28 @@ func (s *stubQueryService) Push(context.Context, string, storage.ReplicationPush
 	return nil, nil
 }
 
+type stubStorageFactory struct {
+	dbByName  map[string]string
+	errByName map[string]error
+	client    *mongo.Client
+}
+
+func (s *stubStorageFactory) Document() storage.DocumentStore          { return nil }
+func (s *stubStorageFactory) User() storage.UserStore                  { return nil }
+func (s *stubStorageFactory) Revocation() storage.TokenRevocationStore { return nil }
+func (s *stubStorageFactory) GetMongoClient(name string) (*mongo.Client, string, error) {
+	if err := s.errByName[name]; err != nil {
+		return nil, "", err
+	}
+
+	db := s.dbByName[name]
+	if db == "" {
+		db = name
+	}
+	return s.client, db, nil
+}
+func (s *stubStorageFactory) Close() error { return nil }
+
 type fakeStorageFactory struct {
 	docStore storage.DocumentStore
 	usrStore storage.UserStore
@@ -403,7 +461,10 @@ type fakeStorageFactory struct {
 func (f *fakeStorageFactory) Document() storage.DocumentStore          { return f.docStore }
 func (f *fakeStorageFactory) User() storage.UserStore                  { return f.usrStore }
 func (f *fakeStorageFactory) Revocation() storage.TokenRevocationStore { return f.revStore }
-func (f *fakeStorageFactory) Close() error                             { return nil }
+func (f *fakeStorageFactory) GetMongoClient(name string) (*mongo.Client, string, error) {
+	return nil, "", nil
+}
+func (f *fakeStorageFactory) Close() error { return nil }
 
 type stubAuthN struct{}
 

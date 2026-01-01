@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/codetrek/syntrix/internal/config"
-	"github.com/codetrek/syntrix/internal/events"
+	"github.com/codetrek/syntrix/internal/puller/events"
 )
 
 // mockEventSource implements the EventSource interface for testing
@@ -18,6 +18,24 @@ type mockEventSource struct {
 func (m *mockEventSource) SetEventHandler(handler func(ctx context.Context, backendName string, event *events.NormalizedEvent) error) {
 	m.handler = handler
 }
+
+func (m *mockEventSource) EmitEvent(ctx context.Context, backendName string, event *events.NormalizedEvent) error {
+	if m.handler != nil {
+		return m.handler(ctx, backendName, event)
+	}
+	return nil
+}
+
+func (m *mockEventSource) Replay(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error) {
+	return &mockIterator{}, nil
+}
+
+type mockIterator struct{}
+
+func (m *mockIterator) Next() bool                     { return false }
+func (m *mockIterator) Event() *events.NormalizedEvent { return nil }
+func (m *mockIterator) Err() error                     { return nil }
+func (m *mockIterator) Close() error                   { return nil }
 
 func TestNewServer(t *testing.T) {
 	t.Parallel()
@@ -59,7 +77,7 @@ func TestServer_SubscriberCount(t *testing.T) {
 	}
 
 	// Add a subscriber
-	sub := NewSubscriber("consumer-1", nil, false)
+	sub := NewSubscriber("consumer-1", nil, false, 100)
 	server.subs.Add(sub)
 
 	if server.SubscriberCount() != 1 {
@@ -182,8 +200,8 @@ func TestServer_Stop_Running(t *testing.T) {
 	server.running = true
 
 	// Add some subscribers
-	sub1 := NewSubscriber("consumer-1", nil, false)
-	sub2 := NewSubscriber("consumer-2", nil, false)
+	sub1 := NewSubscriber("consumer-1", nil, false, 100)
+	sub2 := NewSubscriber("consumer-2", nil, false, 100)
 	server.subs.Add(sub1)
 	server.subs.Add(sub2)
 

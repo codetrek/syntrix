@@ -6,8 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/syntrix/internal/events"
-	"go.mongodb.org/mongo-driver/bson"
+	"github.com/codetrek/syntrix/internal/puller/events"
 )
 
 func TestGapDetector_FirstEvent(t *testing.T) {
@@ -201,9 +200,7 @@ type mockCheckpoint struct {
 	deleteErr error
 }
 
-func (m *mockCheckpoint) Save(ctx context.Context, token bson.Raw) error { return nil }
-func (m *mockCheckpoint) Load(ctx context.Context) (bson.Raw, error)     { return nil, nil }
-func (m *mockCheckpoint) Delete(ctx context.Context) error {
+func (m *mockCheckpoint) DeleteCheckpoint() error {
 	m.deleted = true
 	return m.deleteErr
 }

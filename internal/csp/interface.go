@@ -7,7 +7,7 @@ import (
 )
 
 // Service defines the interface for Change Stream processing.
-// Both EmbeddedService and RemoteService implement this interface.
+// Both CSPService and CSPClient implement this interface.
 type Service interface {
 	// Watch returns a channel of events for a collection.
 	// Pass empty string for collection to watch all collections.

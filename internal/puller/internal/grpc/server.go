@@ -10,7 +10,7 @@ import (
 
 	pullerv1 "github.com/codetrek/syntrix/api/puller/v1"
 	"github.com/codetrek/syntrix/internal/config"
-	"github.com/codetrek/syntrix/internal/events"
+	"github.com/codetrek/syntrix/internal/puller/events"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -20,6 +20,7 @@ import (
 // The handler function receives events from the puller for distribution.
 type EventSource interface {
 	SetEventHandler(handler func(ctx context.Context, backendName string, event *events.NormalizedEvent) error)
+	Replay(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error)
 }
 
 // Server implements the PullerService gRPC interface.
@@ -34,6 +35,10 @@ type Server struct {
 
 	// eventChan receives events from the puller for broadcasting
 	eventChan chan *backendEvent
+
+	// ctx controls the server lifecycle
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	// mu protects server state
 	mu sync.RWMutex
@@ -53,12 +58,21 @@ func NewServer(cfg config.PullerGRPCConfig, eventSource EventSource, logger *slo
 	if logger == nil {
 		logger = slog.Default()
 	}
+
+	channelSize := cfg.ChannelSize
+	if channelSize <= 0 {
+		channelSize = 10000
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
 		cfg:         cfg,
 		eventSource: eventSource,
 		logger:      logger.With("component", "puller-grpc"),
-		subs:        NewSubscriberManager(),
-		eventChan:   make(chan *backendEvent, 10000),
+		subs:        NewSubscriberManager(logger),
+		eventChan:   make(chan *backendEvent, channelSize),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 }
 
@@ -94,14 +108,13 @@ func (s *Server) Start(ctx context.Context) error {
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
-		default:
-			// Channel full, log warning
-			s.logger.Warn("event channel full, dropping event", "eventId", event.EventID)
-			return nil
 		}
 	})
 
 	s.logger.Info("gRPC server starting", "address", s.cfg.Address)
+
+	// Start event processing loop
+	go s.processEvents()
 
 	// Serve in a goroutine
 	go func() {
@@ -113,6 +126,21 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// processEvents reads events from the channel and broadcasts them to subscribers.
+func (s *Server) processEvents() {
+	for {
+		select {
+		case event, ok := <-s.eventChan:
+			if !ok {
+				return
+			}
+			s.subs.Broadcast(event)
+		case <-s.ctx.Done():
+			return
+		}
+	}
+}
+
 // Stop stops the gRPC server gracefully.
 func (s *Server) Stop(ctx context.Context) error {
 	s.mu.Lock()
@@ -121,6 +149,9 @@ func (s *Server) Stop(ctx context.Context) error {
 	if !s.running {
 		return nil
 	}
+
+	// Signal shutdown
+	s.cancel()
 
 	// Close all subscribers
 	s.subs.CloseAll()
@@ -152,10 +183,18 @@ func (s *Server) Subscribe(req *pullerv1.SubscribeRequest, stream pullerv1.Pulle
 	ctx := stream.Context()
 
 	// Parse the 'after' progress marker
-	after := DecodeProgressMarker(req.GetAfter())
+	after, err := DecodeProgressMarker(req.GetAfter())
+	if err != nil {
+		return status.Errorf(codes.InvalidArgument, "invalid 'after' progress marker: %v", err)
+	}
+
+	channelSize := s.cfg.ChannelSize
+	if channelSize <= 0 {
+		channelSize = 10000
+	}
 
 	// Create subscriber
-	sub := NewSubscriber(req.GetConsumerId(), after, req.GetCoalesceOnCatchUp())
+	sub := NewSubscriber(req.GetConsumerId(), after, req.GetCoalesceOnCatchUp(), channelSize)
 	s.subs.Add(sub)
 	defer s.subs.Remove(sub.ID)
 
@@ -165,39 +204,126 @@ func (s *Server) Subscribe(req *pullerv1.SubscribeRequest, stream pullerv1.Pulle
 		"coalesceOnCatchUp", sub.CoalesceOnCatchUp,
 	)
 
+	// Mode: "catchup" or "live"
+	mode := "catchup"
+
 	for {
 		select {
 		case <-ctx.Done():
 			s.logger.Info("subscriber disconnected", "consumerId", sub.ID)
 			return nil
-
 		case <-sub.Done():
 			s.logger.Info("subscriber closed", "consumerId", sub.ID)
 			return status.Error(codes.Canceled, "subscription closed")
+		default:
+		}
 
-		case be := <-s.eventChan:
-			if be == nil {
-				continue
-			}
+		if mode == "catchup" {
+			// Drain channel to make space for new events
+			drainChannel(sub.ch)
+			sub.GetAndResetOverflow() // Clear overflow flag
 
-			// Convert to gRPC event
-			evt, err := s.convertEvent(be.backend, be.event)
+			// Start replay
+			iter, err := s.eventSource.Replay(ctx, sub.CurrentProgress().Positions, sub.CoalesceOnCatchUp)
 			if err != nil {
-				s.logger.Error("failed to convert event", "error", err)
+				s.logger.Error("failed to start replay", "error", err)
+				return status.Errorf(codes.Internal, "failed to start replay: %v", err)
+			}
+
+			// Replay loop
+			for iter.Next() {
+				evt := iter.Event()
+
+				// Deduplication: check if event is already sent
+				// This is crucial if Replay restarts or if ScanFrom is inclusive
+				if !sub.ShouldSend(evt.Backend, evt.ClusterTime) {
+					continue
+				}
+
+				if err := s.sendEvent(stream, sub, evt.Backend, evt); err != nil {
+					iter.Close()
+					return err
+				}
+			}
+			iter.Close()
+
+			if err := iter.Err(); err != nil {
+				s.logger.Error("replay error", "error", err)
+				return status.Errorf(codes.Internal, "replay error: %v", err)
+			}
+
+			// Check if we overflowed during replay
+			if sub.GetAndResetOverflow() {
+				s.logger.Info("subscriber overflowed during replay, continuing catchup", "consumerId", sub.ID)
 				continue
 			}
 
-			// Update subscriber position and add progress marker
-			sub.UpdatePosition(be.backend, be.event.EventID)
-			evt.Progress = sub.CurrentProgress().Encode()
+			// Caught up
+			mode = "live"
+			s.logger.Info("subscriber caught up, switching to live mode", "consumerId", sub.ID)
 
-			// Send to client
-			if err := stream.Send(evt); err != nil {
-				s.logger.Error("failed to send event", "error", err, "consumerId", sub.ID)
-				return err
+		} else {
+			// Live loop
+			select {
+			case <-ctx.Done():
+				s.logger.Info("subscriber disconnected", "consumerId", sub.ID)
+				return nil
+
+			case <-sub.Done():
+				s.logger.Info("subscriber closed", "consumerId", sub.ID)
+				return status.Error(codes.Canceled, "subscription closed")
+
+			case be := <-sub.ch:
+				// Check for overflow, but don't switch immediately.
+				// We need to process the current event 'be' first to ensure we don't drop it.
+				// If we switch immediately, 'be' would be lost.
+				hasOverflow := sub.GetAndResetOverflow()
+
+				if be != nil && sub.ShouldSend(be.backend, be.event.ClusterTime) {
+					if err := s.sendEvent(stream, sub, be.backend, be.event); err != nil {
+						return err
+					}
+				}
+
+				if hasOverflow {
+					s.logger.Info("subscriber overflowed, switching to catchup", "consumerId", sub.ID)
+					mode = "catchup"
+					continue
+				}
 			}
 		}
 	}
+}
+
+func drainChannel(ch chan *backendEvent) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
+// sendEvent sends a single event to the stream and updates subscriber position.
+func (s *Server) sendEvent(stream pullerv1.PullerService_SubscribeServer, sub *Subscriber, backend string, evt *events.NormalizedEvent) error {
+	// Convert to gRPC event
+	grpcEvt, err := s.convertEvent(backend, evt)
+	if err != nil {
+		s.logger.Error("failed to convert event", "error", err)
+		return nil // Skip invalid events
+	}
+
+	// Update subscriber position and add progress marker
+	sub.UpdatePosition(backend, evt.EventID, evt.ClusterTime)
+	grpcEvt.Progress = sub.CurrentProgress().Encode()
+
+	// Send to client
+	if err := stream.Send(grpcEvt); err != nil {
+		s.logger.Error("failed to send event", "error", err, "consumerId", sub.ID)
+		return err
+	}
+	return nil
 }
 
 // convertEvent converts a NormalizedEvent to a gRPC Event.

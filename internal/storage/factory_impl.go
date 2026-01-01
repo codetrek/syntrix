@@ -201,6 +201,14 @@ func (f *factory) getMongoProvider(name string) (mongoProvider, error) {
 	return mp, nil
 }
 
+func (f *factory) GetMongoClient(name string) (*mongodriver.Client, string, error) {
+	p, err := f.getMongoProvider(name)
+	if err != nil {
+		return nil, "", err
+	}
+	return p.Client(), p.DatabaseName(), nil
+}
+
 func (f *factory) Document() types.DocumentStore {
 	return f.docStore
 }

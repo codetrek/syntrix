@@ -14,6 +14,7 @@ import (
 	"github.com/codetrek/syntrix/internal/csp"
 	"github.com/codetrek/syntrix/internal/engine"
 	"github.com/codetrek/syntrix/internal/identity"
+	"github.com/codetrek/syntrix/internal/puller"
 	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/internal/trigger"
 	triggerengine "github.com/codetrek/syntrix/internal/trigger/engine"
@@ -37,6 +38,12 @@ func (m *Manager) Init(ctx context.Context) error {
 
 	if err := m.initAuthService(ctx); err != nil {
 		return err
+	}
+
+	if m.opts.RunPuller {
+		if err := m.initPullerService(ctx); err != nil {
+			return err
+		}
 	}
 
 	// Standalone mode: all services run in-process without HTTP inter-service communication
@@ -73,7 +80,7 @@ func (m *Manager) initDistributed(ctx context.Context) error {
 
 	if m.opts.RunQuery {
 		// In distributed mode, create remote CSP client
-		cspService := csp.NewRemoteService(m.cfg.Query.CSPServiceURL)
+		cspService := csp.NewClient(m.cfg.Query.CSPServiceURL)
 		queryService = m.createQueryService(cspService)
 		if !m.opts.ForceQueryClient {
 			m.initQueryHTTPServer(queryService)
@@ -187,7 +194,7 @@ func (m *Manager) initAPIServer(queryService engine.Service) error {
 
 // createCSPService creates a CSP service for local access (standalone mode).
 func (m *Manager) createCSPService() csp.Service {
-	return csp.NewEmbeddedService(m.docStore)
+	return csp.NewService(m.docStore)
 }
 
 // initCSPServer creates an HTTP server for the CSP service (distributed mode).
@@ -257,6 +264,33 @@ func (m *Manager) initTriggerServices() error {
 		m.triggerConsumer = cons
 
 		log.Println("Initialized Trigger Worker Service")
+	}
+
+	return nil
+}
+
+func (m *Manager) initPullerService(ctx context.Context) error {
+	log.Println("Initializing Change Stream Puller Service...")
+
+	// 1. Create Puller Service
+	m.pullerService = puller.NewService(m.cfg.Puller, nil) // Logger is nil for now
+
+	// 2. Add Backends
+	for _, backendCfg := range m.cfg.Puller.Backends {
+		client, dbName, err := m.storageFactory.GetMongoClient(backendCfg.Name)
+		if err != nil {
+			return fmt.Errorf("failed to get mongo client for backend %s: %w", backendCfg.Name, err)
+		}
+
+		if err := m.pullerService.AddBackend(backendCfg.Name, client, dbName, backendCfg); err != nil {
+			return fmt.Errorf("failed to add backend %s: %w", backendCfg.Name, err)
+		}
+		log.Printf("- Added backend: %s (db: %s)", backendCfg.Name, dbName)
+	}
+
+	// 3. Initialize gRPC Server (if distributed mode)
+	if m.opts.Mode == ModeDistributed {
+		m.pullerGRPC = puller.NewGRPCServer(m.cfg.Puller.GRPC, m.pullerService, nil)
 	}
 
 	return nil

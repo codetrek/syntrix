@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	pullerv1 "github.com/codetrek/syntrix/api/puller/v1"
-	"github.com/codetrek/syntrix/internal/events"
+	"github.com/codetrek/syntrix/internal/puller/events"
 )
 
 func TestConvertEvent(t *testing.T) {

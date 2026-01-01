@@ -6,7 +6,10 @@ import (
 	"time"
 
 	"github.com/codetrek/syntrix/internal/storage"
+	"github.com/codetrek/syntrix/internal/storage/types"
+	"github.com/codetrek/syntrix/pkg/model"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHub_Register_Closed(t *testing.T) {
@@ -99,6 +102,51 @@ func TestHub_Broadcast_Closed(t *testing.T) {
 
 	// Broadcast should not panic or block
 	hub.Broadcast(storage.Event{})
+}
+
+func TestHub_Broadcast_BackpressureFallback(t *testing.T) {
+	hub := NewHub()
+	ctx, cancel := context.WithCancel(context.Background())
+	go hub.Run(ctx)
+
+	// Wait for runCtx to be set
+	require.Eventually(t, func() bool { return hub.Done() != nil }, time.Second, 10*time.Millisecond)
+
+	client := &Client{
+		hub:  hub,
+		send: make(chan BaseMessage, 1),
+		subscriptions: map[string]Subscription{
+			"sub1": {
+				Query:       model.Query{Collection: "rooms"},
+				IncludeData: true,
+			},
+		},
+		allowAllTenants: true,
+	}
+
+	// Fill the channel to force default branch in non-blocking send.
+	client.send <- BaseMessage{Type: "primed"}
+
+	require.True(t, hub.Register(client))
+
+	evt := storage.Event{
+		Type: types.EventUpdate,
+		Id:   "rooms/doc1",
+		Document: &storage.Document{
+			Collection: "rooms",
+			Data:       map[string]interface{}{"x": 1},
+		},
+	}
+
+	hub.Broadcast(evt)
+
+	// Wait for the fallback select (with time.After) to trigger while channel remains full.
+	time.Sleep(100 * time.Millisecond)
+
+	// No new message should be enqueued because channel stayed full and fallback timeout fired.
+	assert.Equal(t, 1, len(client.send))
+
+	cancel()
 }
 
 func TestDetermineEventTenant(t *testing.T) {

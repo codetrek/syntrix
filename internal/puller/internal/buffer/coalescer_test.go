@@ -3,7 +3,7 @@ package buffer
 import (
 	"testing"
 
-	"github.com/codetrek/syntrix/internal/events"
+	"github.com/codetrek/syntrix/internal/puller/events"
 )
 
 func TestCoalescer_Add_FirstEvent(t *testing.T) {

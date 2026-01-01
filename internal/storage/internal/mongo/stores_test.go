@@ -39,7 +39,7 @@ func TestDocumentStore_Close(t *testing.T) {
 	ctx := context.Background()
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(testMongoURI))
 	if err != nil {
-		t.Skip("Skipping test: MongoDB not available")
+		t.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
 	defer client.Disconnect(ctx)
 

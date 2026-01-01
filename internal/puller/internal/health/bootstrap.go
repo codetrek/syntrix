@@ -5,8 +5,13 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/codetrek/syntrix/internal/puller/internal/checkpoint"
+	"go.mongodb.org/mongo-driver/bson"
 )
+
+// CheckpointLoader defines the interface for loading checkpoints.
+type CheckpointLoader interface {
+	LoadCheckpoint() (bson.Raw, error)
+}
 
 // BootstrapMode defines how to start the change stream.
 type BootstrapMode string
@@ -23,7 +28,7 @@ const (
 // Bootstrap handles first-run initialization and mode detection.
 type Bootstrap struct {
 	mode       BootstrapMode
-	checkpoint checkpoint.Store
+	checkpoint CheckpointLoader
 	logger     *slog.Logger
 
 	// mu protects state
@@ -39,7 +44,7 @@ type Bootstrap struct {
 // BootstrapOptions configures the bootstrap.
 type BootstrapOptions struct {
 	Mode       BootstrapMode
-	Checkpoint checkpoint.Store
+	Checkpoint CheckpointLoader
 	Logger     *slog.Logger
 }
 
@@ -74,7 +79,7 @@ func (b *Bootstrap) Run(ctx context.Context) (bool, error) {
 
 	// Check if we have a checkpoint
 	if b.checkpoint != nil {
-		token, err := b.checkpoint.Load(ctx)
+		token, err := b.checkpoint.LoadCheckpoint()
 		if err != nil {
 			return false, err
 		}

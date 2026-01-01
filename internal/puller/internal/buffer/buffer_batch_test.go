@@ -3,19 +3,23 @@ package buffer
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/codetrek/syntrix/internal/events"
+	"github.com/codetrek/syntrix/internal/puller/events"
 )
 
 func TestBuffer_Write_CommitErrorUsesBatch(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	buf, err := New(Options{Path: dir})
+	buf, err := New(Options{
+		Path:          dir,
+		BatchInterval: 5 * time.Millisecond,
+	})
 	require.NoError(t, err)
 	defer buf.Close()
 
@@ -25,11 +29,16 @@ func TestBuffer_Write_CommitErrorUsesBatch(t *testing.T) {
 		return mockBatch
 	}
 
-	err = buf.Write(&events.NormalizedEvent{EventID: "evt-1"})
+	err = buf.Write(&events.NormalizedEvent{EventID: "evt-1"}, testToken)
+	require.NoError(t, err)
+
+	// Wait for batcher to fail and close buffer
+	time.Sleep(20 * time.Millisecond)
+
+	// Buffer should be closed
+	err = buf.Write(&events.NormalizedEvent{EventID: "evt-2"}, testToken)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "commit")
-	assert.Equal(t, 1, mockBatch.setCalls)
-	assert.True(t, mockBatch.closed)
+	assert.Contains(t, err.Error(), "buffer is closed")
 }
 
 func TestBuffer_Delete_CommitErrorUsesBatch(t *testing.T) {

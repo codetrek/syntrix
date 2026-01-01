@@ -1,254 +1,197 @@
 package grpc
 
 import (
+	"log/slog"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/codetrek/syntrix/internal/puller/events"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestProgressMarker_NewProgressMarker(t *testing.T) {
-	t.Parallel()
-	pm := NewProgressMarker()
-	if pm == nil {
-		t.Fatal("NewProgressMarker() returned nil")
-	}
-	if pm.Positions == nil {
-		t.Error("Positions should not be nil")
-	}
+func TestSubscriber_ShouldSend(t *testing.T) {
+	sub := NewSubscriber("test-sub", nil, false, 100)
+
+	// Initial state: no history for backend "db1"
+	// Should send any event
+	ct1 := events.ClusterTime{T: 100, I: 1}
+	assert.True(t, sub.ShouldSend("db1", ct1), "Should send first event")
+
+	// Update position
+	sub.UpdatePosition("db1", "evt1", ct1)
+
+	// Test older event
+	ctOld := events.ClusterTime{T: 99, I: 1}
+	assert.False(t, sub.ShouldSend("db1", ctOld), "Should not send older event")
+
+	// Test same event
+	assert.False(t, sub.ShouldSend("db1", ct1), "Should not send same event")
+
+	// Test newer event
+	ctNew := events.ClusterTime{T: 100, I: 2}
+	assert.True(t, sub.ShouldSend("db1", ctNew), "Should send newer event")
+
+	// Test different backend
+	assert.True(t, sub.ShouldSend("db2", ctOld), "Should send event for new backend")
 }
 
-func TestProgressMarker_SetAndGetPosition(t *testing.T) {
-	t.Parallel()
-	pm := NewProgressMarker()
-	pm.SetPosition("backend-1", "evt-123")
+func TestProgressMarker(t *testing.T) {
+	t.Run("EncodeDecode", func(t *testing.T) {
+		pm := NewProgressMarker()
+		pm.SetPosition("db1", "pos1")
+		pm.SetPosition("db2", "pos2")
 
-	pos := pm.GetPosition("backend-1")
-	if pos != "evt-123" {
-		t.Errorf("GetPosition() = %q, want 'evt-123'", pos)
-	}
+		encoded := pm.Encode()
+		require.NotEmpty(t, encoded)
 
-	// Non-existent
-	pos = pm.GetPosition("backend-2")
-	if pos != "" {
-		t.Errorf("GetPosition() = %q, want empty string", pos)
-	}
+		decoded, err := DecodeProgressMarker(encoded)
+		require.NoError(t, err)
+		assert.Equal(t, "pos1", decoded.GetPosition("db1"))
+		assert.Equal(t, "pos2", decoded.GetPosition("db2"))
+	})
+
+	t.Run("Empty", func(t *testing.T) {
+		pm, err := DecodeProgressMarker("")
+		require.NoError(t, err)
+		assert.NotNil(t, pm)
+		assert.Empty(t, pm.Positions)
+
+		assert.Equal(t, "", pm.Encode())
+	})
+
+	t.Run("InvalidBase64", func(t *testing.T) {
+		_, err := DecodeProgressMarker("invalid-base64!@#$")
+		assert.Error(t, err)
+	})
+
+	t.Run("InvalidJSON", func(t *testing.T) {
+		// "invalid" in base64
+		encoded := "aW52YWxpZA"
+		_, err := DecodeProgressMarker(encoded)
+		assert.Error(t, err)
+	})
+
+	t.Run("Clone", func(t *testing.T) {
+		pm := NewProgressMarker()
+		pm.SetPosition("db1", "pos1")
+		clone := pm.Clone()
+		assert.Equal(t, "pos1", clone.GetPosition("db1"))
+
+		pm.SetPosition("db1", "pos2")
+		assert.Equal(t, "pos1", clone.GetPosition("db1"), "Clone should be independent")
+	})
 }
 
-func TestProgressMarker_EncodeAndDecode(t *testing.T) {
-	t.Parallel()
-	pm := NewProgressMarker()
-	pm.SetPosition("backend-1", "evt-123")
-	pm.SetPosition("backend-2", "evt-456")
+func TestSubscriber_Overflow(t *testing.T) {
+	sub := NewSubscriber("test-sub", nil, false, 100)
 
-	encoded := pm.Encode()
-	if encoded == "" {
-		t.Fatal("Encode() returned empty string")
-	}
+	assert.False(t, sub.GetAndResetOverflow())
 
-	decoded := DecodeProgressMarker(encoded)
-	if decoded.GetPosition("backend-1") != "evt-123" {
-		t.Errorf("backend-1 position = %q, want 'evt-123'", decoded.GetPosition("backend-1"))
+	sub.SetOverflow()
+	assert.True(t, sub.GetAndResetOverflow())
+	assert.False(t, sub.GetAndResetOverflow())
+
+	// Concurrency test
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sub.SetOverflow()
+		}()
 	}
-	if decoded.GetPosition("backend-2") != "evt-456" {
-		t.Errorf("backend-2 position = %q, want 'evt-456'", decoded.GetPosition("backend-2"))
-	}
+	wg.Wait()
+	assert.True(t, sub.GetAndResetOverflow())
 }
 
-func TestProgressMarker_DecodeEmpty(t *testing.T) {
-	t.Parallel()
-	pm := DecodeProgressMarker("")
-	if pm == nil {
-		t.Fatal("DecodeProgressMarker('') returned nil")
-	}
-	if len(pm.Positions) != 0 {
-		t.Errorf("Positions should be empty, got %d", len(pm.Positions))
-	}
-}
+func TestSubscriberManager(t *testing.T) {
+	logger := slog.Default() // Use default logger for tests
+	mgr := NewSubscriberManager(logger)
 
-func TestProgressMarker_DecodeInvalid(t *testing.T) {
-	t.Parallel()
-	pm := DecodeProgressMarker("not-valid-base64!!!")
-	if pm == nil {
-		t.Fatal("DecodeProgressMarker() returned nil for invalid input")
+	// Test Add/Get/Count
+	sub1 := NewSubscriber("sub1", nil, false, 10)
+	mgr.Add(sub1)
+	assert.Equal(t, 1, mgr.Count())
+	assert.Equal(t, sub1, mgr.Get("sub1"))
+
+	// Test Broadcast
+	evt := &backendEvent{
+		backend: "db1",
+		event: &events.NormalizedEvent{
+			EventID: "evt1",
+		},
 	}
-	// Should return empty marker
-	if len(pm.Positions) != 0 {
-		t.Errorf("Positions should be empty for invalid input, got %d", len(pm.Positions))
-	}
-}
-
-func TestProgressMarker_Clone(t *testing.T) {
-	t.Parallel()
-	pm := NewProgressMarker()
-	pm.SetPosition("backend-1", "evt-123")
-
-	clone := pm.Clone()
-	if clone.GetPosition("backend-1") != "evt-123" {
-		t.Error("Clone should have same positions")
-	}
-
-	// Modify original
-	pm.SetPosition("backend-1", "evt-456")
-
-	// Clone should be unchanged
-	if clone.GetPosition("backend-1") != "evt-123" {
-		t.Error("Clone should be independent of original")
-	}
-}
-
-func TestProgressMarker_EncodeEmpty(t *testing.T) {
-	t.Parallel()
-	pm := NewProgressMarker()
-	encoded := pm.Encode()
-	if encoded != "" {
-		t.Errorf("Encode() = %q, want empty string for empty marker", encoded)
-	}
-
-	// nil marker
-	var nilPm *ProgressMarker
-	encoded = nilPm.Encode()
-	if encoded != "" {
-		t.Errorf("Encode() = %q, want empty string for nil marker", encoded)
-	}
-}
-
-func TestSubscriber_NewSubscriber(t *testing.T) {
-	t.Parallel()
-	sub := NewSubscriber("consumer-1", nil, false)
-	if sub == nil {
-		t.Fatal("NewSubscriber() returned nil")
-	}
-	if sub.ID != "consumer-1" {
-		t.Errorf("ID = %q, want 'consumer-1'", sub.ID)
-	}
-	if sub.After == nil {
-		t.Error("After should not be nil")
-	}
-}
-
-func TestSubscriber_UpdatePosition(t *testing.T) {
-	t.Parallel()
-	sub := NewSubscriber("consumer-1", nil, false)
-	sub.UpdatePosition("backend-1", "evt-123")
-
-	progress := sub.CurrentProgress()
-	if progress.GetPosition("backend-1") != "evt-123" {
-		t.Errorf("Position = %q, want 'evt-123'", progress.GetPosition("backend-1"))
-	}
-}
-
-func TestSubscriber_CurrentProgress_Clone(t *testing.T) {
-	t.Parallel()
-	sub := NewSubscriber("consumer-1", nil, false)
-	sub.UpdatePosition("backend-1", "evt-123")
-
-	progress1 := sub.CurrentProgress()
-	sub.UpdatePosition("backend-1", "evt-456")
-	progress2 := sub.CurrentProgress()
-
-	if progress1.GetPosition("backend-1") != "evt-123" {
-		t.Error("First progress should not change")
-	}
-	if progress2.GetPosition("backend-1") != "evt-456" {
-		t.Error("Second progress should have updated value")
-	}
-}
-
-func TestSubscriber_Done(t *testing.T) {
-	t.Parallel()
-	sub := NewSubscriber("consumer-1", nil, false)
+	mgr.Broadcast(evt)
 
 	select {
-	case <-sub.Done():
-		t.Error("Done should not be closed initially")
-	default:
-		// Expected
+	case received := <-sub1.ch:
+		assert.Equal(t, evt, received)
+	case <-time.After(time.Second):
+		t.Fatal("Timeout waiting for event")
 	}
 
-	sub.Close()
+	// Test Overflow
+	// Fill the channel
+	for i := 0; i < 10; i++ {
+		sub1.ch <- evt
+	}
+
+	// Broadcast one more, should trigger overflow
+	mgr.Broadcast(evt)
+	assert.True(t, sub1.GetAndResetOverflow())
+
+	// Test Remove
+	mgr.Remove("sub1")
+	assert.Equal(t, 0, mgr.Count())
 
 	select {
-	case <-sub.Done():
-		// Expected
-	default:
-		t.Error("Done should be closed after Close()")
+	case <-sub1.Done():
+	// Success, subscriber closed
+	case <-time.After(time.Second):
+		t.Fatal("Subscriber not closed after remove")
 	}
 }
 
-func TestSubscriber_CloseIdempotent(t *testing.T) {
-	t.Parallel()
-	sub := NewSubscriber("consumer-1", nil, false)
+func TestSubscriberManager_Race(t *testing.T) {
+	mgr := NewSubscriberManager(nil)
+	sub := NewSubscriber("sub1", nil, false, 1000)
+	mgr.Add(sub)
 
-	// Should not panic
-	sub.Close()
-	sub.Close()
-	sub.Close()
-}
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				mgr.Broadcast(&backendEvent{})
+			}
+		}
+	}()
 
-func TestSubscriberManager_AddAndRemove(t *testing.T) {
-	t.Parallel()
-	m := NewSubscriberManager()
+	go func() {
+		for i := 0; i < 100; i++ {
+			mgr.Add(NewSubscriber("sub-race", nil, false, 10))
+			mgr.Remove("sub-race")
+		}
+		close(done)
+	}()
 
-	sub := NewSubscriber("consumer-1", nil, false)
-	m.Add(sub)
-
-	if m.Count() != 1 {
-		t.Errorf("Count() = %d, want 1", m.Count())
-	}
-
-	got := m.Get("consumer-1")
-	if got != sub {
-		t.Error("Get() returned wrong subscriber")
-	}
-
-	m.Remove("consumer-1")
-	if m.Count() != 0 {
-		t.Errorf("Count() = %d, want 0", m.Count())
-	}
-
-	got = m.Get("consumer-1")
-	if got != nil {
-		t.Error("Get() should return nil after remove")
-	}
+	<-done
 }
 
 func TestSubscriberManager_All(t *testing.T) {
-	m := NewSubscriberManager()
+	m := NewSubscriberManager(nil)
+	sub1 := NewSubscriber("sub1", nil, false, 100)
+	sub2 := NewSubscriber("sub2", nil, false, 100)
 
-	sub1 := NewSubscriber("consumer-1", nil, false)
-	sub2 := NewSubscriber("consumer-2", nil, false)
 	m.Add(sub1)
 	m.Add(sub2)
 
 	all := m.All()
-	if len(all) != 2 {
-		t.Errorf("All() returned %d, want 2", len(all))
-	}
-}
-
-func TestSubscriberManager_CloseAll(t *testing.T) {
-	m := NewSubscriberManager()
-
-	sub1 := NewSubscriber("consumer-1", nil, false)
-	sub2 := NewSubscriber("consumer-2", nil, false)
-	m.Add(sub1)
-	m.Add(sub2)
-
-	m.CloseAll()
-
-	if m.Count() != 0 {
-		t.Errorf("Count() = %d, want 0", m.Count())
-	}
-
-	// Check subscribers are closed
-	select {
-	case <-sub1.Done():
-		// Expected
-	default:
-		t.Error("sub1 should be closed")
-	}
-	select {
-	case <-sub2.Done():
-		// Expected
-	default:
-		t.Error("sub2 should be closed")
-	}
+	assert.Len(t, all, 2)
+	assert.Contains(t, all, sub1)
+	assert.Contains(t, all, sub2)
 }

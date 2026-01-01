@@ -14,9 +14,6 @@ type PullerConfig struct {
 	// Backend configurations - references storage.backends by name
 	Backends []PullerBackendConfig `yaml:"backends"`
 
-	// Checkpoint configuration
-	Checkpoint CheckpointConfig `yaml:"checkpoint"`
-
 	// Event buffer configuration
 	Buffer BufferConfig `yaml:"buffer"`
 
@@ -38,6 +35,9 @@ type PullerConfig struct {
 type PullerGRPCConfig struct {
 	Address        string `yaml:"address"`
 	MaxConnections int    `yaml:"max_connections"`
+	// ChannelSize is the size of the subscriber channel.
+	// Defaults to 10000 if not set.
+	ChannelSize int `yaml:"channel_size"`
 }
 
 // PullerBackendConfig references a storage backend and adds puller-specific settings.
@@ -49,18 +49,6 @@ type PullerBackendConfig struct {
 	// Only ONE of include/exclude should be specified
 	IncludeCollections []string `yaml:"include_collections"`
 	ExcludeCollections []string `yaml:"exclude_collections"`
-}
-
-// CheckpointConfig holds checkpoint persistence configuration.
-type CheckpointConfig struct {
-	// Backend type: "mongodb" or "etcd"
-	Backend string `yaml:"backend"`
-
-	// Time-based checkpoint interval
-	Interval time.Duration `yaml:"interval"`
-
-	// Event-based checkpoint count
-	EventCount int `yaml:"event_count"`
 }
 
 // BufferConfig holds PebbleDB event buffer configuration.
@@ -131,17 +119,12 @@ func DefaultPullerConfig() PullerConfig {
 				ExcludeCollections: []string{"_system", "logs"},
 			},
 		},
-		Checkpoint: CheckpointConfig{
-			Backend:    "pebble",
-			Interval:   1 * time.Second,
-			EventCount: 1000,
-		},
 		Buffer: BufferConfig{
-			Path:          "/var/lib/puller/events",
+			Path:          "data/puller/events",
 			MaxSize:       "10GiB",
 			BatchSize:     100,
-			BatchInterval: 5 * time.Millisecond,
-			QueueSize:     1000,
+			BatchInterval: 100 * time.Millisecond,
+			QueueSize:     10000,
 		},
 		Consumer: ConsumerConfig{
 			CatchUpThreshold:  100000,
@@ -159,7 +142,7 @@ func DefaultPullerConfig() PullerConfig {
 			Path: "/metrics",
 		},
 		Health: HealthConfig{
-			Port: 8080,
+			Port: 8081,
 			Path: "/health",
 		},
 	}
@@ -186,18 +169,6 @@ func (c *PullerConfig) Validate() error {
 		if len(b.IncludeCollections) > 0 && len(b.ExcludeCollections) > 0 {
 			return fmt.Errorf("puller.backends[%d]: specify either include_collections or exclude_collections, not both", i)
 		}
-	}
-
-	if c.Checkpoint.Backend != "pebble" {
-		return fmt.Errorf("puller.checkpoint.backend must be 'pebble', got %q", c.Checkpoint.Backend)
-	}
-
-	if c.Checkpoint.Interval <= 0 {
-		return errors.New("puller.checkpoint.interval must be positive")
-	}
-
-	if c.Checkpoint.EventCount <= 0 {
-		return errors.New("puller.checkpoint.event_count must be positive")
 	}
 
 	if c.Buffer.Path == "" {

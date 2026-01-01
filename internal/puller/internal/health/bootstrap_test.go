@@ -22,11 +22,9 @@ type mockCheckpointForBootstrap struct {
 	err   error
 }
 
-func (m *mockCheckpointForBootstrap) Save(ctx context.Context, token bson.Raw) error { return nil }
-func (m *mockCheckpointForBootstrap) Load(ctx context.Context) (bson.Raw, error) {
+func (m *mockCheckpointForBootstrap) LoadCheckpoint() (bson.Raw, error) {
 	return m.token, m.err
 }
-func (m *mockCheckpointForBootstrap) Delete(ctx context.Context) error { return nil }
 
 func TestBootstrap_FirstRun(t *testing.T) {
 	t.Parallel()

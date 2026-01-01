@@ -29,11 +29,11 @@ type Service interface {
 // NewService creates a new local Query Service with a remote CSP client.
 // Use this for distributed mode where CSP runs as a separate service.
 func NewService(store storage.DocumentStore, cspURL string) Service {
-	return core.New(store, csp.NewRemoteService(cspURL))
+	return core.New(store, csp.NewClient(cspURL))
 }
 
 // NewServiceWithCSP creates a new local Query Service with a custom CSP implementation.
-// Use this for standalone mode with csp.NewEmbeddedService() or for testing with mocks.
+// Use this for standalone mode with csp.NewService() or for testing with mocks.
 func NewServiceWithCSP(store storage.DocumentStore, cspService csp.Service) Service {
 	return core.New(store, cspService)
 }
@@ -70,7 +70,7 @@ type Client = client.Client
 // NewEngine is deprecated. Use NewService instead.
 // Deprecated: Use NewService to get a Service interface.
 func NewEngine(store storage.DocumentStore, cspURL string) *Engine {
-	return core.New(store, csp.NewRemoteService(cspURL))
+	return core.New(store, csp.NewClient(cspURL))
 }
 
 // NewHandler is deprecated. Use NewHTTPHandler instead.

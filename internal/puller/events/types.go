@@ -3,9 +3,6 @@
 package events
 
 import (
-	"encoding/json"
-	"time"
-
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -110,53 +107,7 @@ type NormalizedEvent struct {
 	ClusterTime ClusterTime `json:"clusterTime"`
 	TxnNumber   *int64      `json:"txnNumber,omitempty"`
 	Timestamp   int64       `json:"timestamp"` // Unix milliseconds
-}
-
-// NewNormalizedEvent creates a new NormalizedEvent with the current timestamp.
-func NewNormalizedEvent(
-	eventID, tenantID, collection, documentID string,
-	opType OperationType,
-	clusterTime ClusterTime,
-) *NormalizedEvent {
-	return &NormalizedEvent{
-		EventID:     eventID,
-		TenantID:    tenantID,
-		Collection:  collection,
-		DocumentID:  documentID,
-		Type:        opType,
-		ClusterTime: clusterTime,
-		Timestamp:   time.Now().UnixMilli(),
-	}
-}
-
-// WithFullDocument sets the full document and returns the event for chaining.
-func (e *NormalizedEvent) WithFullDocument(doc map[string]any) *NormalizedEvent {
-	e.FullDocument = doc
-	return e
-}
-
-// WithUpdateDescription sets the update description and returns the event for chaining.
-func (e *NormalizedEvent) WithUpdateDescription(desc *UpdateDescription) *NormalizedEvent {
-	e.UpdateDesc = desc
-	return e
-}
-
-// WithTxnNumber sets the transaction number and returns the event for chaining.
-func (e *NormalizedEvent) WithTxnNumber(txn int64) *NormalizedEvent {
-	e.TxnNumber = &txn
-	return e
-}
-
-// MarshalJSON implements json.Marshaler.
-func (e *NormalizedEvent) MarshalJSON() ([]byte, error) {
-	type Alias NormalizedEvent
-	return json.Marshal((*Alias)(e))
-}
-
-// UnmarshalJSON implements json.Unmarshaler.
-func (e *NormalizedEvent) UnmarshalJSON(data []byte) error {
-	type Alias NormalizedEvent
-	return json.Unmarshal(data, (*Alias)(e))
+	Backend     string      `json:"backend,omitempty"`
 }
 
 // BufferKey generates the PebbleDB key for this event.
@@ -192,4 +143,19 @@ func uintToString(v uint32) string {
 		v /= 10
 	}
 	return string(buf[i:])
+}
+
+// Iterator provides ordered iteration over events.
+type Iterator interface {
+	// Next advances to the next event. Returns false when done.
+	Next() bool
+
+	// Event returns the current event.
+	Event() *NormalizedEvent
+
+	// Err returns any error encountered during iteration.
+	Err() error
+
+	// Close releases the iterator resources.
+	Close() error
 }

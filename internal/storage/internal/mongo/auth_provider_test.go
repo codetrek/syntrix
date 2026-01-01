@@ -19,7 +19,7 @@ func TestAuthProvider(t *testing.T) {
 
 	provider, err := NewAuthProvider(ctx, testMongoURI, env.DBName)
 	if err != nil {
-		t.Skipf("Skipping test: MongoDB not available: %v", err)
+		t.Fatalf("MongoDB not available: %v", err)
 	}
 	require.NoError(t, err)
 	defer provider.Close(ctx)
@@ -44,7 +44,7 @@ func TestAuthProvider_EnsureIndexesError(t *testing.T) {
 	// Connect manually to create conflicting index
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(testMongoURI))
 	if err != nil {
-		t.Skipf("Skipping test: MongoDB not available: %v", err)
+		t.Fatalf("MongoDB not available: %v", err)
 	}
 	defer client.Disconnect(ctx)
 

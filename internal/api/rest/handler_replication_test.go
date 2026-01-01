@@ -235,3 +235,86 @@ func TestHandlePush_EngineError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rr.Code)
 	mockService.AssertExpectations(t)
 }
+
+func TestHandlePush_FlattensConflicts(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := createTestServer(mockService, nil, nil)
+
+	conflictDoc := &storage.Document{
+		Id:         "rooms/room-1/messages/msg-1",
+		Fullpath:   "rooms/room-1/messages/msg-1",
+		Collection: "rooms/room-1/messages",
+		Data:       map[string]interface{}{"name": "Alice"},
+		Version:    2,
+	}
+	mockService.On("Push", mock.Anything, "default", mock.AnythingOfType("types.ReplicationPushRequest")).Return(&storage.ReplicationPushResponse{
+		Conflicts: []*storage.Document{conflictDoc},
+	}, nil)
+
+	pushReq := ReplicaPushRequest{
+		Collection: "rooms/room-1/messages",
+		Changes: []ReplicaChange{
+			{Doc: model.Document{"id": "msg-1", "name": "Bob", "version": float64(1)}},
+		},
+	}
+	body, _ := json.Marshal(pushReq)
+	req, _ := http.NewRequest("POST", "/replication/v1/push", bytes.NewBuffer(body))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var resp ReplicaPushResponse
+	assert.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	assert.Len(t, resp.Conflicts, 1)
+	assert.Equal(t, "msg-1", resp.Conflicts[0]["id"])
+	mockService.AssertExpectations(t)
+}
+
+func TestHandlePush_DeleteAction(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := createTestServer(mockService, nil, nil)
+
+	mockService.On("Push", mock.Anything, "default", mock.AnythingOfType("types.ReplicationPushRequest")).Return(&storage.ReplicationPushResponse{}, nil)
+
+	pushReq := ReplicaPushRequest{
+		Collection: "rooms/room-1/messages",
+		Changes: []ReplicaChange{
+			{Doc: model.Document{"id": "msg-2", "version": float64(2)}, Action: "delete"},
+		},
+	}
+	body, _ := json.Marshal(pushReq)
+	req, _ := http.NewRequest("POST", "/replication/v1/push", bytes.NewBuffer(body))
+	rr := httptest.NewRecorder()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	mockService.AssertExpectations(t)
+}
+
+func TestHandlePush_ValidateReplicationPushError(t *testing.T) {
+	mockService := new(MockQueryService)
+	server := createTestServer(mockService, nil, nil)
+
+	pushReq := ReplicaPushRequest{
+		Collection: "rooms/room-1/messages",
+		Changes: []ReplicaChange{
+			{Doc: model.Document{"id": "msg-3", "version": float64(1)}},
+		},
+	}
+	body, _ := json.Marshal(pushReq)
+	req, _ := http.NewRequest("POST", "/replication/v1/push", bytes.NewBuffer(body))
+	rr := httptest.NewRecorder()
+
+	orig := validateReplicationPushFn
+	validateReplicationPushFn = func(storage.ReplicationPushRequest) error {
+		return errors.New("forced validation error")
+	}
+	defer func() { validateReplicationPushFn = orig }()
+
+	server.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
