@@ -10,7 +10,11 @@ failed=0
 # Run tests with coverage, excluding cmd/ directory
 go test -covermode=atomic -coverprofile=coverage.out $(go list ./... | \
   grep -vE "syntrix/cmd/|syntrix/api/|syntrix/scripts/") | \
-  tee test_output.txt
+  tee test_output.txt || failed=1
+if [ $failed -ne 0 ]; then
+  echo "::error::Some tests failed."
+  exit 1
+fi
 
 sed -i 's/of statements//g; s/github.com\/codetrek\/syntrix\///g' test_output.txt
 
