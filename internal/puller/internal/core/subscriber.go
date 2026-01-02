@@ -1,94 +1,13 @@
-// Package grpc provides the gRPC server for the puller service.
-package grpc
+// Package core implements the local puller service.
+package core
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"log/slog"
 	"sync"
 
 	"github.com/codetrek/syntrix/internal/puller/events"
+	"github.com/codetrek/syntrix/internal/puller/internal/cursor"
 )
-
-// ProgressMarker tracks consumer positions across all backends.
-// This is an internal structure - consumers see it as an opaque string.
-type ProgressMarker struct {
-	// Positions maps backend name to last event ID for that backend.
-	Positions map[string]string `json:"p"`
-}
-
-// NewProgressMarker creates an empty progress marker.
-func NewProgressMarker() *ProgressMarker {
-	return &ProgressMarker{
-		Positions: make(map[string]string),
-	}
-}
-
-// DecodeProgressMarker decodes a progress marker from its string representation.
-// Returns an error if the string is invalid.
-func DecodeProgressMarker(s string) (*ProgressMarker, error) {
-	if s == "" {
-		return NewProgressMarker(), nil
-	}
-
-	data, err := base64.RawURLEncoding.DecodeString(s)
-	if err != nil {
-		return nil, err
-	}
-
-	var pm ProgressMarker
-	if err := json.Unmarshal(data, &pm); err != nil {
-		return nil, err
-	}
-
-	if pm.Positions == nil {
-		pm.Positions = make(map[string]string)
-	}
-	return &pm, nil
-}
-
-// Encode encodes the progress marker to a string.
-func (pm *ProgressMarker) Encode() string {
-	if pm == nil || len(pm.Positions) == 0 {
-		return ""
-	}
-
-	data, err := json.Marshal(pm)
-	if err != nil {
-		return ""
-	}
-
-	return base64.RawURLEncoding.EncodeToString(data)
-}
-
-// SetPosition updates the position for a backend.
-func (pm *ProgressMarker) SetPosition(backend, eventID string) {
-	if pm.Positions == nil {
-		pm.Positions = make(map[string]string)
-	}
-	pm.Positions[backend] = eventID
-}
-
-// GetPosition returns the position for a backend.
-func (pm *ProgressMarker) GetPosition(backend string) string {
-	if pm.Positions == nil {
-		return ""
-	}
-	return pm.Positions[backend]
-}
-
-// Clone creates a deep copy of the progress marker.
-func (pm *ProgressMarker) Clone() *ProgressMarker {
-	if pm == nil {
-		return NewProgressMarker()
-	}
-
-	clone := NewProgressMarker()
-	for k, v := range pm.Positions {
-		clone.Positions[k] = v
-	}
-	return clone
-}
 
 // Subscriber represents an active subscription to the event stream.
 type Subscriber struct {
@@ -96,13 +15,13 @@ type Subscriber struct {
 	ID string
 
 	// After is the initial position to start from.
-	After *ProgressMarker
+	After *cursor.ProgressMarker
 
 	// CoalesceOnCatchUp enables catch-up coalescing.
 	CoalesceOnCatchUp bool
 
 	// currentPos tracks the current position for each backend.
-	currentPos *ProgressMarker
+	currentPos *cursor.ProgressMarker
 
 	// lastClusterTime tracks the timestamp of the last sent event per backend.
 	lastClusterTime map[string]events.ClusterTime
@@ -114,7 +33,7 @@ type Subscriber struct {
 	done chan struct{}
 
 	// ch receives events for this subscriber.
-	ch chan *backendEvent
+	ch chan *events.ChangeEvent
 
 	// overflow indicates if the subscriber channel has overflowed.
 	overflow bool
@@ -123,9 +42,9 @@ type Subscriber struct {
 }
 
 // NewSubscriber creates a new subscriber.
-func NewSubscriber(id string, after *ProgressMarker, coalesceOnCatchUp bool, channelSize int) *Subscriber {
+func NewSubscriber(id string, after *cursor.ProgressMarker, coalesceOnCatchUp bool, channelSize int) *Subscriber {
 	if after == nil {
-		after = NewProgressMarker()
+		after = cursor.NewProgressMarker()
 	}
 	if channelSize <= 0 {
 		channelSize = 10000
@@ -139,7 +58,7 @@ func NewSubscriber(id string, after *ProgressMarker, coalesceOnCatchUp bool, cha
 		done:              make(chan struct{}),
 		// Increase buffer size to handle transient spikes and avoid flapping between live and catchup modes.
 		// 10000 events * ~1KB/event ~= 10MB memory per subscriber.
-		ch: make(chan *backendEvent, channelSize),
+		ch: make(chan *events.ChangeEvent, channelSize),
 	}
 }
 
@@ -179,10 +98,15 @@ func (s *Subscriber) ShouldSend(backend string, clusterTime events.ClusterTime) 
 }
 
 // CurrentProgress returns the current progress marker.
-func (s *Subscriber) CurrentProgress() *ProgressMarker {
+func (s *Subscriber) CurrentProgress() *cursor.ProgressMarker {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.currentPos.Clone()
+}
+
+// Events returns the channel of events for this subscriber.
+func (s *Subscriber) Events() <-chan *events.ChangeEvent {
+	return s.ch
 }
 
 // Done returns a channel that is closed when the subscriber is terminated.
@@ -271,7 +195,7 @@ func (m *SubscriberManager) CloseAll() {
 }
 
 // Broadcast sends an event to all subscribers.
-func (m *SubscriberManager) Broadcast(be *backendEvent) {
+func (m *SubscriberManager) Broadcast(be *events.ChangeEvent) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for id, sub := range m.subscribers {

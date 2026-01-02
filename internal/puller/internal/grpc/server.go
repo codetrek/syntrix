@@ -11,6 +11,8 @@ import (
 	pullerv1 "github.com/codetrek/syntrix/api/puller/v1"
 	"github.com/codetrek/syntrix/internal/config"
 	"github.com/codetrek/syntrix/internal/puller/events"
+	"github.com/codetrek/syntrix/internal/puller/internal/core"
+	"github.com/codetrek/syntrix/internal/puller/internal/cursor"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -19,7 +21,7 @@ import (
 // EventSource provides the event handler setter interface.
 // The handler function receives events from the puller for distribution.
 type EventSource interface {
-	SetEventHandler(handler func(ctx context.Context, backendName string, event *events.NormalizedEvent) error)
+	SetEventHandler(handler func(ctx context.Context, backendName string, event *events.ChangeEvent) error)
 	Replay(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error)
 }
 
@@ -31,10 +33,10 @@ type Server struct {
 	eventSource EventSource
 	logger      *slog.Logger
 	grpcServer  *grpc.Server
-	subs        *SubscriberManager
+	subs        *core.SubscriberManager
 
 	// eventChan receives events from the puller for broadcasting
-	eventChan chan *backendEvent
+	eventChan chan *events.ChangeEvent
 
 	// ctx controls the server lifecycle
 	ctx    context.Context
@@ -45,12 +47,6 @@ type Server struct {
 
 	// running indicates if the server is running
 	running bool
-}
-
-// backendEvent pairs an event with its backend name
-type backendEvent struct {
-	backend string
-	event   *events.NormalizedEvent
 }
 
 // NewServer creates a new gRPC server.
@@ -69,8 +65,8 @@ func NewServer(cfg config.PullerGRPCConfig, eventSource EventSource, logger *slo
 		cfg:         cfg,
 		eventSource: eventSource,
 		logger:      logger.With("component", "puller-grpc"),
-		subs:        NewSubscriberManager(logger),
-		eventChan:   make(chan *backendEvent, channelSize),
+		subs:        core.NewSubscriberManager(logger),
+		eventChan:   make(chan *events.ChangeEvent, channelSize),
 		ctx:         ctx,
 		cancel:      cancel,
 	}
@@ -102,9 +98,13 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mu.Unlock()
 
 	// Set up event handler to receive events from puller
-	s.eventSource.SetEventHandler(func(ctx context.Context, backendName string, event *events.NormalizedEvent) error {
+	s.eventSource.SetEventHandler(func(ctx context.Context, backendName string, event *events.ChangeEvent) error {
+		// Ensure backend name is set
+		if event.Backend == "" {
+			event.Backend = backendName
+		}
 		select {
-		case s.eventChan <- &backendEvent{backend: backendName, event: event}:
+		case s.eventChan <- event:
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
@@ -183,7 +183,7 @@ func (s *Server) Subscribe(req *pullerv1.SubscribeRequest, stream pullerv1.Pulle
 	ctx := stream.Context()
 
 	// Parse the 'after' progress marker
-	after, err := DecodeProgressMarker(req.GetAfter())
+	after, err := cursor.DecodeProgressMarker(req.GetAfter())
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "invalid 'after' progress marker: %v", err)
 	}
@@ -194,7 +194,7 @@ func (s *Server) Subscribe(req *pullerv1.SubscribeRequest, stream pullerv1.Pulle
 	}
 
 	// Create subscriber
-	sub := NewSubscriber(req.GetConsumerId(), after, req.GetCoalesceOnCatchUp(), channelSize)
+	sub := core.NewSubscriber(req.GetConsumerId(), after, req.GetCoalesceOnCatchUp(), channelSize)
 	s.subs.Add(sub)
 	defer s.subs.Remove(sub.ID)
 
@@ -220,7 +220,7 @@ func (s *Server) Subscribe(req *pullerv1.SubscribeRequest, stream pullerv1.Pulle
 
 		if mode == "catchup" {
 			// Drain channel to make space for new events
-			drainChannel(sub.ch)
+			drainChannel(sub.Events())
 			sub.GetAndResetOverflow() // Clear overflow flag
 
 			// Start replay
@@ -273,14 +273,14 @@ func (s *Server) Subscribe(req *pullerv1.SubscribeRequest, stream pullerv1.Pulle
 				s.logger.Info("subscriber closed", "consumerId", sub.ID)
 				return status.Error(codes.Canceled, "subscription closed")
 
-			case be := <-sub.ch:
+			case evt := <-sub.Events():
 				// Check for overflow, but don't switch immediately.
-				// We need to process the current event 'be' first to ensure we don't drop it.
-				// If we switch immediately, 'be' would be lost.
+				// We need to process the current event 'evt' first to ensure we don't drop it.
+				// If we switch immediately, 'evt' would be lost.
 				hasOverflow := sub.GetAndResetOverflow()
 
-				if be != nil && sub.ShouldSend(be.backend, be.event.ClusterTime) {
-					if err := s.sendEvent(stream, sub, be.backend, be.event); err != nil {
+				if evt != nil && sub.ShouldSend(evt.Backend, evt.ClusterTime) {
+					if err := s.sendEvent(stream, sub, evt.Backend, evt); err != nil {
 						return err
 					}
 				}
@@ -295,7 +295,7 @@ func (s *Server) Subscribe(req *pullerv1.SubscribeRequest, stream pullerv1.Pulle
 	}
 }
 
-func drainChannel(ch chan *backendEvent) {
+func drainChannel(ch <-chan *events.ChangeEvent) {
 	for {
 		select {
 		case <-ch:
@@ -306,9 +306,9 @@ func drainChannel(ch chan *backendEvent) {
 }
 
 // sendEvent sends a single event to the stream and updates subscriber position.
-func (s *Server) sendEvent(stream pullerv1.PullerService_SubscribeServer, sub *Subscriber, backend string, evt *events.NormalizedEvent) error {
+func (s *Server) sendEvent(stream pullerv1.PullerService_SubscribeServer, sub *core.Subscriber, backend string, evt *events.ChangeEvent) error {
 	// Convert to gRPC event
-	grpcEvt, err := s.convertEvent(backend, evt)
+	changeEvt, err := s.convertEvent(backend, evt)
 	if err != nil {
 		s.logger.Error("failed to convert event", "error", err)
 		return nil // Skip invalid events
@@ -316,18 +316,22 @@ func (s *Server) sendEvent(stream pullerv1.PullerService_SubscribeServer, sub *S
 
 	// Update subscriber position and add progress marker
 	sub.UpdatePosition(backend, evt.EventID, evt.ClusterTime)
-	grpcEvt.Progress = sub.CurrentProgress().Encode()
+
+	pullerEvt := &pullerv1.PullerEvent{
+		ChangeEvent: changeEvt,
+		Progress:    sub.CurrentProgress().Encode(),
+	}
 
 	// Send to client
-	if err := stream.Send(grpcEvt); err != nil {
+	if err := stream.Send(pullerEvt); err != nil {
 		s.logger.Error("failed to send event", "error", err, "consumerId", sub.ID)
 		return err
 	}
 	return nil
 }
 
-// convertEvent converts a NormalizedEvent to a gRPC Event.
-func (s *Server) convertEvent(backend string, evt *events.NormalizedEvent) (*pullerv1.Event, error) {
+// convertEvent converts a ChangeEvent to a gRPC ChangeEvent.
+func (s *Server) convertEvent(backend string, evt *events.ChangeEvent) (*pullerv1.ChangeEvent, error) {
 	var fullDocBytes []byte
 	var updateDescBytes []byte
 	var err error
@@ -346,19 +350,26 @@ func (s *Server) convertEvent(backend string, evt *events.NormalizedEvent) (*pul
 		}
 	}
 
-	return &pullerv1.Event{
-		Id:                evt.EventID,
-		Tenant:            evt.TenantID,
-		Collection:        evt.Collection,
-		DocumentId:        evt.DocumentID,
-		OperationType:     string(evt.Type),
-		FullDocument:      fullDocBytes,
-		UpdateDescription: updateDescBytes,
+	var txnNumber int64
+	if evt.TxnNumber != nil {
+		txnNumber = *evt.TxnNumber
+	}
+
+	return &pullerv1.ChangeEvent{
+		EventId:    evt.EventID,
+		Tenant:     evt.TenantID,
+		MgoColl:    evt.MgoColl,
+		MgoDocId:   evt.MgoDocID,
+		OpType:     string(evt.OpType),
+		FullDoc:    fullDocBytes,
+		UpdateDesc: updateDescBytes,
 		ClusterTime: &pullerv1.ClusterTime{
 			T: evt.ClusterTime.T,
 			I: evt.ClusterTime.I,
 		},
 		Timestamp: evt.Timestamp,
+		TxnNumber: txnNumber,
+		Backend:   backend,
 	}, nil
 }
 

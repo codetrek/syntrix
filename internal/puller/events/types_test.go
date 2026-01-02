@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/codetrek/syntrix/internal/storage"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -85,18 +86,18 @@ func TestClusterTime_PrimitiveConversion(t *testing.T) {
 	}
 }
 
-func TestNormalizedEvent_JSON(t *testing.T) {
-	evt := &NormalizedEvent{
+func TestChangeEvent_JSON(t *testing.T) {
+	evt := &ChangeEvent{
 		EventID:     "evt-123",
 		TenantID:    "tenant-abc",
-		Collection:  "users",
-		DocumentID:  "doc-456",
-		Type:        OperationInsert,
+		MgoColl:     "users",
+		MgoDocID:    "doc-456",
+		OpType:      OperationInsert,
 		ClusterTime: ClusterTime{T: 1735567890, I: 1},
 		Timestamp:   1735567890000,
-		FullDocument: map[string]any{
-			"name": "test",
-			"age":  30,
+		FullDocument: &storage.Document{
+			Id:       "doc-456",
+			TenantID: "tenant-abc",
 		},
 	}
 
@@ -111,15 +112,21 @@ func TestNormalizedEvent_JSON(t *testing.T) {
 	if !contains(jsonStr, `"tenant"`) {
 		t.Errorf("JSON should contain 'tenant', got: %s", jsonStr)
 	}
-	if !contains(jsonStr, `"documentId"`) {
-		t.Errorf("JSON should contain 'documentId', got: %s", jsonStr)
+	if !contains(jsonStr, `"mgoDocId"`) {
+		t.Errorf("JSON should contain 'mgoDocId', got: %s", jsonStr)
 	}
-	if !contains(jsonStr, `"operationType"`) {
-		t.Errorf("JSON should contain 'operationType', got: %s", jsonStr)
+	if !contains(jsonStr, `"mgoColl"`) {
+		t.Errorf("JSON should contain 'mgoColl', got: %s", jsonStr)
+	}
+	if !contains(jsonStr, `"opType"`) {
+		t.Errorf("JSON should contain 'opType', got: %s", jsonStr)
+	}
+	if !contains(jsonStr, `"fullDoc"`) {
+		t.Errorf("JSON should contain 'fullDoc', got: %s", jsonStr)
 	}
 
 	// Unmarshal
-	var decoded NormalizedEvent
+	var decoded ChangeEvent
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
@@ -130,8 +137,47 @@ func TestNormalizedEvent_JSON(t *testing.T) {
 	if decoded.TenantID != evt.TenantID {
 		t.Errorf("TenantID = %q, want %q", decoded.TenantID, evt.TenantID)
 	}
-	if decoded.Type != evt.Type {
-		t.Errorf("Type = %q, want %q", decoded.Type, evt.Type)
+	if decoded.OpType != evt.OpType {
+		t.Errorf("OpType = %q, want %q", decoded.OpType, evt.OpType)
+	}
+	if decoded.FullDocument.Id != evt.FullDocument.Id {
+		t.Errorf("FullDocument.Id = %q, want %q", decoded.FullDocument.Id, evt.FullDocument.Id)
+	}
+}
+
+func TestPullerEvent_JSON(t *testing.T) {
+	change := &ChangeEvent{
+		EventID: "evt-123",
+		OpType:  OperationInsert,
+	}
+	evt := &PullerEvent{
+		Change:   change,
+		Progress: "resume-token-123",
+	}
+
+	data, err := json.Marshal(evt)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	jsonStr := string(data)
+	if !contains(jsonStr, `"change_event"`) {
+		t.Errorf("JSON should contain 'change_event', got: %s", jsonStr)
+	}
+	if !contains(jsonStr, `"progress"`) {
+		t.Errorf("JSON should contain 'progress', got: %s", jsonStr)
+	}
+
+	var decoded PullerEvent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if decoded.Progress != evt.Progress {
+		t.Errorf("Progress = %q, want %q", decoded.Progress, evt.Progress)
+	}
+	if decoded.Change.EventID != evt.Change.EventID {
+		t.Errorf("Change.EventID = %q, want %q", decoded.Change.EventID, evt.Change.EventID)
 	}
 }
 
@@ -170,7 +216,7 @@ func TestBufferKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			evt := &NormalizedEvent{
+			evt := &ChangeEvent{
 				EventID:     tt.eventID,
 				ClusterTime: tt.ct,
 			}

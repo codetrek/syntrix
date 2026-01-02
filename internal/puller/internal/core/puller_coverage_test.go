@@ -23,7 +23,7 @@ func TestPuller_WatchAndCheckpoint(t *testing.T) {
 	p := New(cfg, nil)
 
 	backendCfg := config.PullerBackendConfig{
-		IncludeCollections: []string{"users"},
+		Collections: []string{"users"},
 	}
 
 	err := p.AddBackend("backend1", env.Client, env.DBName, backendCfg)
@@ -59,8 +59,8 @@ func TestPuller_WatchAndCheckpoint(t *testing.T) {
 	// Wait for event
 	select {
 	case evt := <-ch:
-		if evt.Collection != "users" {
-			t.Errorf("Expected collection 'users', got '%s'", evt.Collection)
+		if evt.Change.MgoColl != "users" {
+			t.Errorf("Expected collection 'users', got '%s'", evt.Change.MgoColl)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Timeout waiting for event")
@@ -100,7 +100,7 @@ func TestPuller_BackendNames_NonEmpty(t *testing.T) {
 	p := New(cfg, nil)
 
 	backendCfg := config.PullerBackendConfig{
-		IncludeCollections: []string{"users"},
+		Collections: []string{"users"},
 	}
 
 	_ = p.AddBackend("backend1", env.Client, env.DBName, backendCfg)
@@ -118,7 +118,7 @@ func TestPuller_ResumeFromCheckpoint(t *testing.T) {
 	// We need a valid resume token. Run a short session to generate one.
 	cfg := newTestConfig(t)
 	p := New(cfg, nil)
-	backendCfg := config.PullerBackendConfig{IncludeCollections: []string{"users"}}
+	backendCfg := config.PullerBackendConfig{Collections: []string{"users"}}
 	_ = p.AddBackend("backend1", env.Client, env.DBName, backendCfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -177,11 +177,11 @@ func TestPuller_EventHandlerError(t *testing.T) {
 	env := setupTestEnv(t)
 	cfg := newTestConfig(t)
 	p := New(cfg, nil)
-	backendCfg := config.PullerBackendConfig{IncludeCollections: []string{"users"}}
+	backendCfg := config.PullerBackendConfig{Collections: []string{"users"}}
 	_ = p.AddBackend("backend1", env.Client, env.DBName, backendCfg)
 
 	// Set a handler that returns an error
-	p.SetEventHandler(func(ctx context.Context, backendName string, event *events.NormalizedEvent) error {
+	p.SetEventHandler(func(ctx context.Context, backendName string, event *events.ChangeEvent) error {
 		return fmt.Errorf("simulated handler error")
 	})
 
@@ -232,7 +232,7 @@ func TestPuller_ChangeStreamError_Reconnect(t *testing.T) {
 	cfg := newTestConfig(t)
 	p := New(cfg, nil)
 	p.retryDelay = 10 * time.Millisecond
-	backendCfg := config.PullerBackendConfig{IncludeCollections: []string{"users"}}
+	backendCfg := config.PullerBackendConfig{Collections: []string{"users"}}
 	_ = p.AddBackend("backend1", client, dbName, backendCfg)
 
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -258,7 +258,7 @@ func TestPuller_WatchChangeStream_LoadError(t *testing.T) {
 	env := setupTestEnv(t)
 	cfg := newTestConfig(t)
 	p := New(cfg, nil)
-	backendCfg := config.PullerBackendConfig{IncludeCollections: []string{"users"}}
+	backendCfg := config.PullerBackendConfig{Collections: []string{"users"}}
 	_ = p.AddBackend("backend1", env.Client, env.DBName, backendCfg)
 
 	// Close buffer to force LoadCheckpoint error
@@ -281,7 +281,7 @@ func TestPuller_WatchChangeStream_WatchError(t *testing.T) {
 	env := setupTestEnv(t)
 	cfg := newTestConfig(t)
 	p := New(cfg, nil)
-	backendCfg := config.PullerBackendConfig{IncludeCollections: []string{"users"}}
+	backendCfg := config.PullerBackendConfig{Collections: []string{"users"}}
 	_ = p.AddBackend("backend1", env.Client, env.DBName, backendCfg)
 
 	// Close client to force Watch error
@@ -308,7 +308,7 @@ func TestPuller_WatchChangeStream_Invalidate(t *testing.T) {
 	cfg := newTestConfig(t)
 	p := New(cfg, nil)
 	p.retryDelay = 10 * time.Millisecond
-	backendCfg := config.PullerBackendConfig{IncludeCollections: []string{"users"}}
+	backendCfg := config.PullerBackendConfig{Collections: []string{"users"}}
 	_ = p.AddBackend("backend1", env.Client, env.DBName, backendCfg)
 
 	ctx, cancel := context.WithCancel(context.Background())

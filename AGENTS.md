@@ -4,35 +4,12 @@ applyTo: "**"
 
 # AI AGENT INSTRUCTIONS
 
-- always disucss in "中文" with user and write document and code in English.
-- always run testing to ensure code quality.
-- always run `make coverage` to evaluate test coverage and fix as needed.
-- always write unit tests for newly added code and use "github.com/stretchr/testify" for unit testing.
-- always ask "should I add more testing" and make robust but not over-engineering testing.
-- always document the "Why" (reasoning/analysis) alongside the "How" (decision/implementation) in design discussion documents.
-- frontend engineering uses `bun` for package scripts and tests unless explicitly overridden.
-- when a task starts or completes, update its Status in the task doc and the task index.
-
-## DOCUMENTATION
-
-### directory `docs/design`
-
-Contains the architecture and design details of the service, maybe implemented, maybe not, it's the single souce of truth to the system.
-When creating design or implementation documentation, follow this structure:
-
-- `000.requirements.md`: Describe specific requirements and constraints.
-- `001.architecture.md`: Record the overall architecture, including module diagrams (ASCII art) and UI layout diagrams (ASCII art).
-- `002.xxx.md`: Specific module details, numbered sequentially.
-
-### directory `tasks`
-
-It's the guidence of implement, contains task breakdowns to implement specific features in docs/design, A refer link to target design doc should be exists. Any details should be noted here:
-
-- Execution steps.
-- How to implement new design.
-- How to migrate current implementation to new design if already implemented in different ways.
-- Detail implement decisions compares to current code.
-- Guidence of comprehensive unittests.
+- Always disucss in "中文" with user and write document and code in English.
+- Always run testing to ensure code quality.
+- Always run `make coverage` to evaluate test coverage and fix as needed.
+- Always ask "should I add more testing" and make robust but not over-engineering testing.
+- Always document the "Why" (reasoning/analysis) alongside the "How" (decision/implementation) in design discussion documents.
+- Reminder: Fix everything in one pass—search globally first, then verify and echo back, so the user never has to repeat the same request.
 
 ## 🚨 STOP CONDITIONS
 
@@ -66,3 +43,10 @@ Before ANY change:
 - Check for AGENTS.md in current directory
 - Subdirectory rules compliment root rules
 - If conflict → subdirectory wins
+
+## Preference
+
+- Use "github.com/stretchr/testify" for Golang tests.
+- Uses `bun` for frontend package scripts.
+- Document design in `docs/design` folder, and follow current directory layout.
+- Create tasks in `tasks` folder.

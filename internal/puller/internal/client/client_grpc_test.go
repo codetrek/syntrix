@@ -14,11 +14,11 @@ import (
 // mockSubscribeClient implements pullerv1.PullerService_SubscribeClient
 type mockSubscribeClient struct {
 	grpc.ClientStream
-	events []*pullerv1.Event
+	events []*pullerv1.PullerEvent
 	index  int
 }
 
-func (m *mockSubscribeClient) Recv() (*pullerv1.Event, error) {
+func (m *mockSubscribeClient) Recv() (*pullerv1.PullerEvent, error) {
 	if m.index >= len(m.events) {
 		return nil, io.EOF
 	}
@@ -38,22 +38,26 @@ func (m *mockPullerServiceClient) Subscribe(ctx context.Context, in *pullerv1.Su
 
 func TestClient_Subscribe(t *testing.T) {
 	t.Parallel()
-	events := []*pullerv1.Event{
+	events := []*pullerv1.PullerEvent{
 		{
-			Id:            "evt-1",
-			Tenant:        "tenant-1",
-			Collection:    "users",
-			DocumentId:    "doc-1",
-			OperationType: "insert",
-			Timestamp:     1234567890,
+			ChangeEvent: &pullerv1.ChangeEvent{
+				EventId:   "evt-1",
+				Tenant:    "tenant-1",
+				MgoColl:   "users",
+				MgoDocId:  "doc-1",
+				OpType:    "insert",
+				Timestamp: 1234567890,
+			},
 		},
 		{
-			Id:            "evt-2",
-			Tenant:        "tenant-1",
-			Collection:    "users",
-			DocumentId:    "doc-2",
-			OperationType: "update",
-			Timestamp:     1234567891,
+			ChangeEvent: &pullerv1.ChangeEvent{
+				EventId:   "evt-2",
+				Tenant:    "tenant-1",
+				MgoColl:   "users",
+				MgoDocId:  "doc-2",
+				OpType:    "update",
+				Timestamp: 1234567891,
+			},
 		},
 	}
 
@@ -97,8 +101,12 @@ func TestClient_Subscribe(t *testing.T) {
 
 func TestClient_SubscribeWithCoalesce(t *testing.T) {
 	t.Parallel()
-	events := []*pullerv1.Event{
-		{Id: "evt-1"},
+	events := []*pullerv1.PullerEvent{
+		{
+			ChangeEvent: &pullerv1.ChangeEvent{
+				EventId: "evt-1",
+			},
+		},
 	}
 
 	mockClient := &mockPullerServiceClient{

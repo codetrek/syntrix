@@ -5,60 +5,10 @@ import (
 	"time"
 
 	"github.com/codetrek/syntrix/internal/puller/events"
+	"github.com/stretchr/testify/assert"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
-
-func TestDefaultTenantExtractor(t *testing.T) {
-	t.Parallel()
-	extractor := &DefaultTenantExtractor{}
-
-	tests := []struct {
-		name       string
-		fullDoc    bson.M
-		docKey     bson.M
-		collection string
-		want       string
-	}{
-		{
-			name:       "tenantId in fullDoc",
-			fullDoc:    bson.M{"tenantId": "tenant-1"},
-			docKey:     nil,
-			collection: "test",
-			want:       "tenant-1",
-		},
-		{
-			name:       "_tenant in fullDoc",
-			fullDoc:    bson.M{"_tenant": "tenant-2"},
-			docKey:     nil,
-			collection: "test",
-			want:       "tenant-2",
-		},
-		{
-			name:       "tenantId in docKey",
-			fullDoc:    nil,
-			docKey:     bson.M{"tenantId": "tenant-3"},
-			collection: "test",
-			want:       "tenant-3",
-		},
-		{
-			name:       "default when no tenant",
-			fullDoc:    bson.M{"other": "field"},
-			docKey:     bson.M{"_id": "123"},
-			collection: "test",
-			want:       "default",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := extractor.Extract(tt.fullDoc, tt.docKey, tt.collection)
-			if got != tt.want {
-				t.Errorf("Extract() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
 
 func makeRawEvent(opType string, clusterT, clusterI uint32, fullDoc bson.M, docKey bson.M, db, coll string) *RawEvent {
 	raw := &RawEvent{
@@ -74,51 +24,74 @@ func makeRawEvent(opType string, clusterT, clusterI uint32, fullDoc bson.M, docK
 
 func TestNormalizer_Normalize(t *testing.T) {
 	t.Parallel()
-	n := New(nil)
+	n := New()
 
 	tests := []struct {
 		name    string
 		raw     *RawEvent
 		wantErr bool
-		check   func(*testing.T, *events.NormalizedEvent)
+		check   func(*testing.T, *events.ChangeEvent)
 	}{
 		{
 			name: "insert operation",
 			raw: makeRawEvent(
 				"insert",
 				1234567890, 1,
-				bson.M{"_id": "doc1", "name": "test"},
+				bson.M{"_id": "doc1", "tenant_id": "tenant-1", "fullpath": "/path"},
 				bson.M{"_id": "doc1"},
 				"testdb", "testcoll",
 			),
 			wantErr: false,
-			check: func(t *testing.T, evt *events.NormalizedEvent) {
-				if evt.Type != events.OperationInsert {
-					t.Errorf("Type = %s, want insert", evt.Type)
+			check: func(t *testing.T, evt *events.ChangeEvent) {
+				if evt.OpType != events.OperationInsert {
+					t.Errorf("OpType = %s, want insert", evt.OpType)
 				}
-				if evt.DocumentID != "doc1" {
-					t.Errorf("DocumentID = %s, want doc1", evt.DocumentID)
+				if evt.MgoDocID != "doc1" {
+					t.Errorf("MgoDocID = %s, want doc1", evt.MgoDocID)
 				}
-				if evt.Collection != "testcoll" {
-					t.Errorf("Collection = %s, want testcoll", evt.Collection)
+				if evt.MgoColl != "testcoll" {
+					t.Errorf("MgoColl = %s, want testcoll", evt.MgoColl)
+				}
+				if evt.TenantID != "tenant-1" {
+					t.Errorf("TenantID = %s, want tenant-1", evt.TenantID)
+				}
+				if evt.FullDocument == nil {
+					t.Error("FullDocument should not be nil")
+				} else if evt.FullDocument.Id != "doc1" {
+					t.Errorf("FullDocument.Id = %s, want doc1", evt.FullDocument.Id)
 				}
 			},
 		},
 		{
-			name: "update operation",
+			name: "update operation with fullDocument",
 			raw: makeRawEvent(
 				"update",
 				1234567890, 2,
-				bson.M{"_id": "doc2", "name": "updated"},
+				bson.M{"_id": "doc2", "tenant_id": "tenant-2", "fullpath": "/path2"},
 				bson.M{"_id": "doc2"},
 				"testdb", "testcoll",
 			),
 			wantErr: false,
-			check: func(t *testing.T, evt *events.NormalizedEvent) {
-				if evt.Type != events.OperationUpdate {
-					t.Errorf("Type = %s, want update", evt.Type)
+			check: func(t *testing.T, evt *events.ChangeEvent) {
+				if evt.OpType != events.OperationUpdate {
+					t.Errorf("OpType = %s, want update", evt.OpType)
+				}
+				if evt.TenantID != "tenant-2" {
+					t.Errorf("TenantID = %s, want tenant-2", evt.TenantID)
 				}
 			},
+		},
+		{
+			name: "update operation missing fullDocument",
+			raw: makeRawEvent(
+				"update",
+				1234567890, 2,
+				nil,
+				bson.M{"_id": "doc2"},
+				"testdb", "testcoll",
+			),
+			wantErr: true, // Should fail
+			check:   nil,
 		},
 		{
 			name: "delete operation",
@@ -130,12 +103,15 @@ func TestNormalizer_Normalize(t *testing.T) {
 				"testdb", "testcoll",
 			),
 			wantErr: false,
-			check: func(t *testing.T, evt *events.NormalizedEvent) {
-				if evt.Type != events.OperationDelete {
-					t.Errorf("Type = %s, want delete", evt.Type)
+			check: func(t *testing.T, evt *events.ChangeEvent) {
+				if evt.OpType != events.OperationDelete {
+					t.Errorf("OpType = %s, want delete", evt.OpType)
 				}
 				if evt.FullDocument != nil {
 					t.Error("FullDocument should be nil for delete")
+				}
+				if evt.TenantID != "" {
+					t.Errorf("TenantID should be empty for delete, got %s", evt.TenantID)
 				}
 			},
 		},
@@ -157,15 +133,15 @@ func TestNormalizer_Normalize(t *testing.T) {
 				return makeRawEvent(
 					"insert",
 					1234567890, 1,
-					bson.M{"_id": oid, "name": "test"},
+					bson.M{"_id": oid, "tenant_id": "t1", "fullpath": "/p"},
 					bson.M{"_id": oid},
 					"testdb", "testcoll",
 				)
 			}(),
 			wantErr: false,
-			check: func(t *testing.T, evt *events.NormalizedEvent) {
-				if evt.DocumentID == "" {
-					t.Error("DocumentID should not be empty")
+			check: func(t *testing.T, evt *events.ChangeEvent) {
+				if evt.MgoDocID == "" {
+					t.Error("MgoDocID should not be empty")
 				}
 			},
 		},
@@ -175,7 +151,7 @@ func TestNormalizer_Normalize(t *testing.T) {
 				raw := makeRawEvent(
 					"insert",
 					1234567890, 1,
-					bson.M{"_id": "doc1"},
+					bson.M{"_id": "doc1", "tenant_id": "t1", "fullpath": "/p"},
 					bson.M{"_id": "doc1"},
 					"testdb", "testcoll",
 				)
@@ -184,7 +160,7 @@ func TestNormalizer_Normalize(t *testing.T) {
 				return raw
 			}(),
 			wantErr: false,
-			check: func(t *testing.T, evt *events.NormalizedEvent) {
+			check: func(t *testing.T, evt *events.ChangeEvent) {
 				if evt.TxnNumber == nil || *evt.TxnNumber != 100 {
 					t.Error("TxnNumber not preserved")
 				}
@@ -206,70 +182,15 @@ func TestNormalizer_Normalize(t *testing.T) {
 	}
 }
 
-func TestNormalizer_ConvertBsonValue(t *testing.T) {
-	t.Parallel()
-	n := New(nil)
-
-	raw := makeRawEvent(
-		"insert",
-		1234567890, 1,
-		bson.M{
-			"_id":       "doc1",
-			"name":      "test",
-			"count":     int32(42),
-			"price":     3.14,
-			"active":    true,
-			"tags":      bson.A{"a", "b", "c"},
-			"nested":    bson.M{"key": "value"},
-			"createdAt": primitive.NewDateTimeFromTime(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)),
-		},
-		bson.M{"_id": "doc1"},
-		"testdb", "testcoll",
-	)
-
-	evt, err := n.Normalize(raw)
-	if err != nil {
-		t.Fatalf("Normalize() error = %v", err)
-	}
-
-	if evt.FullDocument == nil {
-		t.Fatal("FullDocument is nil")
-	}
-
-	// Check nested map
-	nested, ok := evt.FullDocument["nested"].(map[string]any)
-	if !ok {
-		t.Error("nested should be map[string]any")
-	} else if nested["key"] != "value" {
-		t.Errorf("nested.key = %v, want 'value'", nested["key"])
-	}
-
-	// Check array
-	tags, ok := evt.FullDocument["tags"].([]any)
-	if !ok {
-		t.Error("tags should be []any")
-	} else if len(tags) != 3 {
-		t.Errorf("len(tags) = %d, want 3", len(tags))
-	}
-
-	// Check DateTime conversion
-	createdAt, ok := evt.FullDocument["createdAt"].(time.Time)
-	if !ok {
-		t.Errorf("createdAt should be time.Time, got %T", evt.FullDocument["createdAt"])
-	} else if createdAt.Year() != 2024 {
-		t.Errorf("createdAt.Year() = %d, want 2024", createdAt.Year())
-	}
-}
-
 func TestNormalizer_UpdateDescription(t *testing.T) {
 	t.Parallel()
-	n := New(nil)
+	n := New()
 
 	raw := &RawEvent{
 		OperationType: "update",
 		ClusterTime:   primitive.Timestamp{T: 1234567890, I: 1},
 		DocumentKey:   bson.M{"_id": "doc1"},
-		FullDocument:  bson.M{"_id": "doc1", "name": "updated"},
+		FullDocument:  bson.M{"_id": "doc1", "tenant_id": "t1", "fullpath": "/p"},
 		UpdateDescription: bson.M{
 			"updatedFields": bson.M{"name": "updated"},
 			"removedFields": bson.A{"oldField"},
@@ -479,7 +400,7 @@ func TestFormatID(t *testing.T) {
 }
 
 func TestNormalizer_NilDocumentKey(t *testing.T) {
-	n := New(nil)
+	n := New()
 
 	raw := &RawEvent{
 		OperationType: "insert",
@@ -540,6 +461,76 @@ func TestParseEventID(t *testing.T) {
 					t.Errorf("ParseEventID() I = %v, want %v", ct.I, tt.wantI)
 				}
 			}
+		})
+	}
+}
+
+func TestConvertBsonValue(t *testing.T) {
+	t.Parallel()
+
+	oid := primitive.NewObjectID()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	ts := primitive.Timestamp{T: 123, I: 456}
+
+	tests := []struct {
+		name  string
+		input any
+		want  any
+	}{
+		{
+			name:  "string",
+			input: "test",
+			want:  "test",
+		},
+		{
+			name:  "int",
+			input: 123,
+			want:  123,
+		},
+		{
+			name:  "bson.M",
+			input: bson.M{"key": "value"},
+			want:  map[string]any{"key": "value"},
+		},
+		{
+			name:  "bson.A",
+			input: bson.A{"item1", 123},
+			want:  []any{"item1", 123},
+		},
+		{
+			name:  "ObjectID",
+			input: oid,
+			want:  oid.Hex(),
+		},
+		{
+			name:  "DateTime",
+			input: primitive.NewDateTimeFromTime(now),
+			want:  now.Local(),
+		},
+		{
+			name:  "Timestamp",
+			input: ts,
+			want:  map[string]uint32{"T": 123, "I": 456},
+		},
+		{
+			name: "Nested",
+			input: bson.M{
+				"array": bson.A{
+					bson.M{"nested": "value"},
+				},
+			},
+			want: map[string]any{
+				"array": []any{
+					map[string]any{"nested": "value"},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := convertBsonValue(tt.input)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

@@ -9,6 +9,7 @@ import (
 	pullerv1 "github.com/codetrek/syntrix/api/puller/v1"
 	"github.com/codetrek/syntrix/internal/config"
 	"github.com/codetrek/syntrix/internal/puller/events"
+	"github.com/codetrek/syntrix/internal/storage"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -16,7 +17,7 @@ import (
 type mockSubscribeServer struct {
 	grpc.ServerStream
 	ctx      context.Context
-	sendFunc func(*pullerv1.Event) error
+	sendFunc func(*pullerv1.PullerEvent) error
 }
 
 func (m *mockSubscribeServer) Context() context.Context {
@@ -26,7 +27,7 @@ func (m *mockSubscribeServer) Context() context.Context {
 	return context.Background()
 }
 
-func (m *mockSubscribeServer) Send(evt *pullerv1.Event) error {
+func (m *mockSubscribeServer) Send(evt *pullerv1.PullerEvent) error {
 	if m.sendFunc != nil {
 		return m.sendFunc(evt)
 	}
@@ -107,9 +108,9 @@ func TestServer_Subscribe(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	if source.handler != nil {
-		evt := &events.NormalizedEvent{
-			EventID:    "evt-1",
-			Collection: "users",
+		evt := &events.ChangeEvent{
+			EventID: "evt-1",
+			MgoColl: "users",
 		}
 		_ = source.handler(ctx, "backend1", evt)
 	} else {
@@ -122,8 +123,8 @@ func TestServer_Subscribe(t *testing.T) {
 		t.Fatalf("Recv failed: %v", err)
 	}
 
-	if resp.Id != "evt-1" {
-		t.Errorf("Expected event ID evt-1, got %s", resp.Id)
+	if resp.ChangeEvent.EventId != "evt-1" {
+		t.Errorf("Expected event ID evt-1, got %s", resp.ChangeEvent.EventId)
 	}
 }
 
@@ -172,7 +173,7 @@ func TestServer_Subscribe_SendError(t *testing.T) {
 	req := &pullerv1.SubscribeRequest{ConsumerId: "c1"}
 	stream := &mockSubscribeServer{
 		ctx: context.Background(),
-		sendFunc: func(evt *pullerv1.Event) error {
+		sendFunc: func(evt *pullerv1.PullerEvent) error {
 			return fmt.Errorf("send failed")
 		},
 	}
@@ -187,8 +188,8 @@ func TestServer_Subscribe_SendError(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Broadcast event
-	evt := &events.NormalizedEvent{EventID: "evt1"}
-	srv.eventChan <- &backendEvent{backend: "backend1", event: evt}
+	evt := &events.ChangeEvent{EventID: "evt1", Backend: "backend1"}
+	srv.eventChan <- evt
 
 	// Subscribe should return error
 	select {
@@ -257,14 +258,14 @@ func TestServer_Subscribe_NilEvent(t *testing.T) {
 
 	// Send valid event to ensure it's still running
 	done := make(chan struct{})
-	stream.sendFunc = func(e *pullerv1.Event) error {
+	stream.sendFunc = func(e *pullerv1.PullerEvent) error {
 		close(done)
 		return nil
 	}
 
-	srv.eventChan <- &backendEvent{
-		backend: "b1",
-		event:   &events.NormalizedEvent{EventID: "1"},
+	srv.eventChan <- &events.ChangeEvent{
+		Backend: "b1",
+		EventID: "1",
 	}
 
 	select {
@@ -293,25 +294,23 @@ func TestServer_Subscribe_ConvertError(t *testing.T) {
 		"bad": make(chan int),
 	}
 
-	srv.eventChan <- &backendEvent{
-		backend: "b1",
-		event: &events.NormalizedEvent{
-			EventID:      "1",
-			FullDocument: badDoc,
-		},
+	srv.eventChan <- &events.ChangeEvent{
+		Backend:      "b1",
+		EventID:      "1",
+		FullDocument: &storage.Document{Data: badDoc},
 	}
 
 	// Should log error and continue.
 	// Send valid event to verify it continued
 	done := make(chan struct{})
-	stream.sendFunc = func(e *pullerv1.Event) error {
+	stream.sendFunc = func(e *pullerv1.PullerEvent) error {
 		close(done)
 		return nil
 	}
 
-	srv.eventChan <- &backendEvent{
-		backend: "b1",
-		event:   &events.NormalizedEvent{EventID: "2"},
+	srv.eventChan <- &events.ChangeEvent{
+		Backend: "b1",
+		EventID: "2",
 	}
 
 	select {

@@ -55,7 +55,7 @@ func NewGapDetector(opts GapDetectorOptions) *GapDetector {
 
 // RecordEvent records an event and checks for gaps.
 // Returns true if a gap was detected.
-func (g *GapDetector) RecordEvent(evt *events.NormalizedEvent) bool {
+func (g *GapDetector) RecordEvent(evt *events.ChangeEvent) bool {
 	// Convert cluster time to actual time
 	eventTime := time.Unix(int64(evt.ClusterTime.T), 0)
 

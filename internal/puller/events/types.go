@@ -3,6 +3,7 @@
 package events
 
 import (
+	"github.com/codetrek/syntrix/internal/storage"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -86,22 +87,28 @@ type TruncatedArray struct {
 	NewSize int    `json:"newSize"`
 }
 
-// NormalizedEvent is the canonical event schema published by Puller.
-// Field names use shorter JSON keys as defined in the design docs:
-// - "tenant" (not "tenantId")
-// - "documentId" (not "documentKey")
-// - "operationType" is lowercase
-type NormalizedEvent struct {
+// PullerEvent is the top-level wrapper for events emitted by the Puller service.
+// It contains the actual change event and the progress marker.
+type PullerEvent struct {
+	Change   *ChangeEvent `json:"change_event"`
+	Progress string       `json:"progress"`
+}
+
+// ChangeEvent is the canonical event schema published by Puller.
+// Field names use short JSON keys with Mongo provenance as defined in the design docs.
+type ChangeEvent struct {
 	// Identity
-	EventID    string `json:"eventId"`
-	TenantID   string `json:"tenant"` // JSON: "tenant" (NOT "tenantId")
-	Collection string `json:"collection"`
-	DocumentID string `json:"documentId"` // JSON: "documentId" (NOT "documentKey")
+	EventID  string `json:"eventId"`
+	TenantID string `json:"tenant"` // Derived from FullDocument.TenantID
+
+	// Mongo Provenance
+	MgoColl  string `json:"mgoColl"`
+	MgoDocID string `json:"mgoDocId"`
 
 	// Operation
-	Type         OperationType      `json:"operationType"` // lowercase: insert, update, replace, delete
-	FullDocument map[string]any     `json:"fullDocument,omitempty"`
-	UpdateDesc   *UpdateDescription `json:"updateDescription,omitempty"`
+	OpType       OperationType      `json:"opType"`
+	FullDocument *storage.Document  `json:"fullDoc,omitempty"`
+	UpdateDesc   *UpdateDescription `json:"updateDesc,omitempty"`
 
 	// Metadata
 	ClusterTime ClusterTime `json:"clusterTime"`
@@ -113,7 +120,7 @@ type NormalizedEvent struct {
 // BufferKey generates the PebbleDB key for this event.
 // Format: {clusterTime.T}-{clusterTime.I}-{eventId}
 // This ensures events are stored in cluster time order.
-func (e *NormalizedEvent) BufferKey() string {
+func (e *ChangeEvent) BufferKey() string {
 	return FormatBufferKey(e.ClusterTime, e.EventID)
 }
 
@@ -151,7 +158,7 @@ type Iterator interface {
 	Next() bool
 
 	// Event returns the current event.
-	Event() *NormalizedEvent
+	Event() *ChangeEvent
 
 	// Err returns any error encountered during iteration.
 	Err() error

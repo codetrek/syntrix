@@ -29,14 +29,14 @@ func TestBuffer_Write_CommitErrorUsesBatch(t *testing.T) {
 		return mockBatch
 	}
 
-	err = buf.Write(&events.NormalizedEvent{EventID: "evt-1"}, testToken)
+	err = buf.Write(&events.ChangeEvent{EventID: "evt-1"}, testToken)
 	require.NoError(t, err)
 
 	// Wait for batcher to fail and close buffer
 	time.Sleep(20 * time.Millisecond)
 
 	// Buffer should be closed
-	err = buf.Write(&events.NormalizedEvent{EventID: "evt-2"}, testToken)
+	err = buf.Write(&events.ChangeEvent{EventID: "evt-2"}, testToken)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "buffer is closed")
 }

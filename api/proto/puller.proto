@@ -9,7 +9,7 @@ option go_package = "github.com/codetrek/syntrix/api/puller/v1;pullerv1";
 service PullerService {
   // Subscribe to merged event stream from all backends.
   // Events are delivered in order within each backend, merged across backends.
-  rpc Subscribe(SubscribeRequest) returns (stream Event);
+  rpc Subscribe(SubscribeRequest) returns (stream PullerEvent);
 }
 
 // SubscribeRequest configures a subscription to the event stream.
@@ -29,30 +29,41 @@ message SubscribeRequest {
   bool coalesce_on_catch_up = 3;
 }
 
-// Event represents a normalized change event from the database.
-message Event {
+// PullerEvent is the top-level wrapper for events emitted by the Puller service.
+message PullerEvent {
+  // The actual change event.
+  ChangeEvent change_event = 1;
+
+  // Current progress marker (opaque string).
+  // Consumer should save this value and pass it as 'after'
+  // when reconnecting to resume from this position.
+  string progress = 2;
+}
+
+// ChangeEvent represents a normalized change event from the database.
+message ChangeEvent {
   // Unique event identifier.
-  string id = 1;
+  string event_id = 1;
 
   // Tenant identifier.
   string tenant = 2;
 
-  // Collection name where the change occurred.
-  string collection = 3;
+  // Mongo collection name.
+  string mgo_coll = 3;
 
-  // Document identifier that was changed.
-  string document_id = 4;
+  // Mongo document identifier.
+  string mgo_doc_id = 4;
 
   // Operation type: "insert", "update", "replace", or "delete".
-  string operation_type = 5;
+  string op_type = 5;
 
-  // Full document after the change (JSON encoded).
+  // Full document after the change (JSON encoded storage.Document).
   // Empty for delete operations.
-  bytes full_document = 6;
+  bytes full_doc = 6;
 
   // Description of update changes (JSON encoded).
   // Only present for update operations.
-  bytes update_description = 7;
+  bytes update_desc = 7;
 
   // MongoDB cluster timestamp.
   ClusterTime cluster_time = 8;
@@ -60,10 +71,11 @@ message Event {
   // Unix timestamp in milliseconds when the event was received.
   int64 timestamp = 9;
 
-  // Current progress marker (opaque string).
-  // Consumer should save this value and pass it as 'after'
-  // when reconnecting to resume from this position.
-  string progress = 10;
+  // Transaction number if part of a transaction.
+  int64 txn_number = 10;
+
+  // Backend identifier.
+  string backend = 11;
 }
 
 // ClusterTime represents MongoDB cluster timestamp for ordering.

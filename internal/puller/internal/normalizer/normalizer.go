@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/codetrek/syntrix/internal/puller/events"
+	"github.com/codetrek/syntrix/internal/storage"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -27,58 +28,16 @@ type RawEvent struct {
 	ResumeToken bson.Raw `bson:"_id"`
 }
 
-// TenantExtractor defines how to extract tenant ID from a document.
-type TenantExtractor interface {
-	// Extract extracts the tenant ID from a full document or document key.
-	// Returns empty string if tenant cannot be determined.
-	Extract(fullDoc bson.M, docKey bson.M, collection string) string
+// Normalizer converts MongoDB change stream events to ChangeEvents.
+type Normalizer struct{}
+
+// New creates a new Normalizer.
+func New() *Normalizer {
+	return &Normalizer{}
 }
 
-// DefaultTenantExtractor extracts tenant from the "tenantId" or "_tenant" field.
-type DefaultTenantExtractor struct{}
-
-// Extract implements TenantExtractor.
-func (e *DefaultTenantExtractor) Extract(fullDoc bson.M, docKey bson.M, collection string) string {
-	// Try fullDocument first
-	if fullDoc != nil {
-		if tid, ok := fullDoc["tenantId"].(string); ok && tid != "" {
-			return tid
-		}
-		if tid, ok := fullDoc["_tenant"].(string); ok && tid != "" {
-			return tid
-		}
-	}
-
-	// Try documentKey
-	if docKey != nil {
-		if tid, ok := docKey["tenantId"].(string); ok && tid != "" {
-			return tid
-		}
-	}
-
-	// Default tenant
-	return "default"
-}
-
-// Normalizer converts MongoDB change stream events to NormalizedEvents.
-type Normalizer struct {
-	// tenantExtractor extracts tenant ID from the document or collection
-	tenantExtractor TenantExtractor
-}
-
-// New creates a new Normalizer with the given tenant extractor.
-// If extractor is nil, DefaultTenantExtractor is used.
-func New(extractor TenantExtractor) *Normalizer {
-	if extractor == nil {
-		extractor = &DefaultTenantExtractor{}
-	}
-	return &Normalizer{
-		tenantExtractor: extractor,
-	}
-}
-
-// Normalize converts a RawEvent to a NormalizedEvent.
-func (n *Normalizer) Normalize(raw *RawEvent) (*events.NormalizedEvent, error) {
+// Normalize converts a RawEvent to a ChangeEvent.
+func (n *Normalizer) Normalize(raw *RawEvent) (*events.ChangeEvent, error) {
 	// Extract operation type
 	opType := events.OperationType(raw.OperationType)
 	if !opType.IsValid() {
@@ -91,26 +50,44 @@ func (n *Normalizer) Normalize(raw *RawEvent) (*events.NormalizedEvent, error) {
 		return nil, fmt.Errorf("failed to extract document ID: %w", err)
 	}
 
+	// Convert full document
+	var fullDoc *storage.Document
+	if raw.FullDocument != nil {
+		// Marshal/Unmarshal to convert bson.M to storage.Document
+		data, err := bson.Marshal(raw.FullDocument)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal fullDocument: %w", err)
+		}
+		fullDoc = &storage.Document{}
+		if err := bson.Unmarshal(data, fullDoc); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal fullDocument to storage.Document: %w", err)
+		}
+	}
+
+	// Enforce fullDocument for update/replace
+	if (opType == events.OperationUpdate || opType == events.OperationReplace) && fullDoc == nil {
+		return nil, fmt.Errorf("fullDocument missing for %s operation (UpdateLookup required)", opType)
+	}
+
 	// Extract tenant ID
-	tenantID := n.tenantExtractor.Extract(raw.FullDocument, raw.DocumentKey, raw.Namespace.Coll)
+	var tenantID string
+	if fullDoc != nil {
+		tenantID = fullDoc.TenantID
+	}
 
 	// Generate event ID
 	eventID := generateEventID(raw.ClusterTime, raw.Namespace.Coll, docID)
 
-	// Create normalized event
-	evt := &events.NormalizedEvent{
-		EventID:     eventID,
-		TenantID:    tenantID,
-		Collection:  raw.Namespace.Coll,
-		DocumentID:  docID,
-		Type:        opType,
-		ClusterTime: events.ClusterTimeFromPrimitive(raw.ClusterTime),
-		Timestamp:   time.Now().UnixMilli(),
-	}
-
-	// Convert full document
-	if raw.FullDocument != nil {
-		evt.FullDocument = convertBsonM(raw.FullDocument)
+	// Create change event
+	evt := &events.ChangeEvent{
+		EventID:      eventID,
+		TenantID:     tenantID,
+		MgoColl:      raw.Namespace.Coll,
+		MgoDocID:     docID,
+		OpType:       opType,
+		ClusterTime:  events.ClusterTimeFromPrimitive(raw.ClusterTime),
+		Timestamp:    time.Now().UnixMilli(),
+		FullDocument: fullDoc,
 	}
 
 	// Convert update description

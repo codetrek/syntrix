@@ -3,12 +3,14 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 
 	pullerv1 "github.com/codetrek/syntrix/api/puller/v1"
 	"github.com/codetrek/syntrix/internal/puller/events"
+	"github.com/codetrek/syntrix/internal/storage"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -41,7 +43,7 @@ func New(address string, logger *slog.Logger) (*Client, error) {
 // Subscribe subscribes to events from the puller service.
 // The after parameter is the progress marker to resume from.
 // Returns a channel of events that will be closed when the subscription ends.
-func (c *Client) Subscribe(ctx context.Context, consumerID string, after string) (<-chan *events.NormalizedEvent, error) {
+func (c *Client) Subscribe(ctx context.Context, consumerID string, after string) (<-chan *events.PullerEvent, error) {
 	req := &pullerv1.SubscribeRequest{
 		ConsumerId: consumerID,
 		After:      after,
@@ -52,7 +54,7 @@ func (c *Client) Subscribe(ctx context.Context, consumerID string, after string)
 		return nil, fmt.Errorf("failed to subscribe: %w", err)
 	}
 
-	ch := make(chan *events.NormalizedEvent, 1000)
+	ch := make(chan *events.PullerEvent, 1000)
 
 	go func() {
 		defer close(ch)
@@ -81,7 +83,7 @@ func (c *Client) Subscribe(ctx context.Context, consumerID string, after string)
 }
 
 // SubscribeWithCoalesce subscribes with catch-up coalescing enabled.
-func (c *Client) SubscribeWithCoalesce(ctx context.Context, consumerID string, after string) (<-chan *events.NormalizedEvent, error) {
+func (c *Client) SubscribeWithCoalesce(ctx context.Context, consumerID string, after string) (<-chan *events.PullerEvent, error) {
 	req := &pullerv1.SubscribeRequest{
 		ConsumerId:        consumerID,
 		After:             after,
@@ -93,7 +95,7 @@ func (c *Client) SubscribeWithCoalesce(ctx context.Context, consumerID string, a
 		return nil, fmt.Errorf("failed to subscribe: %w", err)
 	}
 
-	ch := make(chan *events.NormalizedEvent, 1000)
+	ch := make(chan *events.PullerEvent, 1000)
 
 	go func() {
 		defer close(ch)
@@ -129,26 +131,48 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// convertEvent converts a gRPC event to a NormalizedEvent.
-func (c *Client) convertEvent(evt *pullerv1.Event) *events.NormalizedEvent {
-	normalized := &events.NormalizedEvent{
-		EventID:    evt.Id,
-		TenantID:   evt.Tenant,
-		Collection: evt.Collection,
-		DocumentID: evt.DocumentId,
-		Type:       events.OperationType(evt.OperationType),
-		Timestamp:  evt.Timestamp,
+// convertEvent converts a gRPC event to a PullerEvent.
+func (c *Client) convertEvent(evt *pullerv1.PullerEvent) *events.PullerEvent {
+	change := evt.ChangeEvent
+
+	normalized := &events.ChangeEvent{
+		EventID:   change.EventId,
+		TenantID:  change.Tenant,
+		MgoColl:   change.MgoColl,
+		MgoDocID:  change.MgoDocId,
+		OpType:    events.OperationType(change.OpType),
+		Timestamp: change.Timestamp,
+		TxnNumber: &change.TxnNumber,
+		Backend:   change.Backend,
 	}
 
-	if evt.ClusterTime != nil {
+	if change.ClusterTime != nil {
 		normalized.ClusterTime = events.ClusterTime{
-			T: evt.ClusterTime.T,
-			I: evt.ClusterTime.I,
+			T: change.ClusterTime.T,
+			I: change.ClusterTime.I,
 		}
 	}
 
-	// Note: FullDocument and UpdateDesc would need JSON unmarshaling
-	// For now, we don't decode them since they're bytes
+	if len(change.FullDoc) > 0 {
+		var doc storage.Document
+		if err := json.Unmarshal(change.FullDoc, &doc); err == nil {
+			normalized.FullDocument = &doc
+		} else {
+			c.logger.Error("failed to unmarshal full document", "error", err)
+		}
+	}
 
-	return normalized
+	if len(change.UpdateDesc) > 0 {
+		var desc events.UpdateDescription
+		if err := json.Unmarshal(change.UpdateDesc, &desc); err == nil {
+			normalized.UpdateDesc = &desc
+		} else {
+			c.logger.Error("failed to unmarshal update description", "error", err)
+		}
+	}
+
+	return &events.PullerEvent{
+		Change:   normalized,
+		Progress: evt.Progress,
+	}
 }

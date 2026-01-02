@@ -1,4 +1,4 @@
-package grpc
+package core
 
 import (
 	"log/slog"
@@ -8,7 +8,6 @@ import (
 
 	"github.com/codetrek/syntrix/internal/puller/events"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestSubscriber_ShouldSend(t *testing.T) {
@@ -35,53 +34,6 @@ func TestSubscriber_ShouldSend(t *testing.T) {
 
 	// Test different backend
 	assert.True(t, sub.ShouldSend("db2", ctOld), "Should send event for new backend")
-}
-
-func TestProgressMarker(t *testing.T) {
-	t.Run("EncodeDecode", func(t *testing.T) {
-		pm := NewProgressMarker()
-		pm.SetPosition("db1", "pos1")
-		pm.SetPosition("db2", "pos2")
-
-		encoded := pm.Encode()
-		require.NotEmpty(t, encoded)
-
-		decoded, err := DecodeProgressMarker(encoded)
-		require.NoError(t, err)
-		assert.Equal(t, "pos1", decoded.GetPosition("db1"))
-		assert.Equal(t, "pos2", decoded.GetPosition("db2"))
-	})
-
-	t.Run("Empty", func(t *testing.T) {
-		pm, err := DecodeProgressMarker("")
-		require.NoError(t, err)
-		assert.NotNil(t, pm)
-		assert.Empty(t, pm.Positions)
-
-		assert.Equal(t, "", pm.Encode())
-	})
-
-	t.Run("InvalidBase64", func(t *testing.T) {
-		_, err := DecodeProgressMarker("invalid-base64!@#$")
-		assert.Error(t, err)
-	})
-
-	t.Run("InvalidJSON", func(t *testing.T) {
-		// "invalid" in base64
-		encoded := "aW52YWxpZA"
-		_, err := DecodeProgressMarker(encoded)
-		assert.Error(t, err)
-	})
-
-	t.Run("Clone", func(t *testing.T) {
-		pm := NewProgressMarker()
-		pm.SetPosition("db1", "pos1")
-		clone := pm.Clone()
-		assert.Equal(t, "pos1", clone.GetPosition("db1"))
-
-		pm.SetPosition("db1", "pos2")
-		assert.Equal(t, "pos1", clone.GetPosition("db1"), "Clone should be independent")
-	})
 }
 
 func TestSubscriber_Overflow(t *testing.T) {
@@ -117,11 +69,9 @@ func TestSubscriberManager(t *testing.T) {
 	assert.Equal(t, sub1, mgr.Get("sub1"))
 
 	// Test Broadcast
-	evt := &backendEvent{
-		backend: "db1",
-		event: &events.NormalizedEvent{
-			EventID: "evt1",
-		},
+	evt := &events.ChangeEvent{
+		Backend: "db1",
+		EventID: "evt1",
 	}
 	mgr.Broadcast(evt)
 
@@ -166,7 +116,7 @@ func TestSubscriberManager_Race(t *testing.T) {
 			case <-done:
 				return
 			default:
-				mgr.Broadcast(&backendEvent{})
+				mgr.Broadcast(&events.ChangeEvent{})
 			}
 		}
 	}()
@@ -194,4 +144,29 @@ func TestSubscriberManager_All(t *testing.T) {
 	assert.Len(t, all, 2)
 	assert.Contains(t, all, sub1)
 	assert.Contains(t, all, sub2)
+}
+
+func TestSubscriberManager_CloseAll(t *testing.T) {
+	m := NewSubscriberManager(nil)
+	sub1 := NewSubscriber("sub1", nil, false, 100)
+	sub2 := NewSubscriber("sub2", nil, false, 100)
+
+	m.Add(sub1)
+	m.Add(sub2)
+
+	m.CloseAll()
+
+	assert.Equal(t, 0, m.Count())
+
+	select {
+	case <-sub1.Done():
+	case <-time.After(time.Second):
+		t.Fatal("sub1 not closed")
+	}
+
+	select {
+	case <-sub2.Done():
+	case <-time.After(time.Second):
+		t.Fatal("sub2 not closed")
+	}
 }

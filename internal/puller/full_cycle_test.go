@@ -72,8 +72,8 @@ func setupIntegrationEnv(t *testing.T) (*mongo.Collection, *core.Puller, *puller
 
 	// Add backend
 	backendCfg := config.PullerBackendConfig{
-		Name:               "backend1",
-		IncludeCollections: []string{collName},
+		Name:        "backend1",
+		Collections: []string{collName},
 	}
 	err = pullerCore.AddBackend("backend1", client, dbName, backendCfg)
 	require.NoError(t, err)
@@ -132,8 +132,8 @@ func TestPuller_FullCycle_DataIntegrity(t *testing.T) {
 	for i := 0; i < count; i++ {
 		evt, err := stream.Recv()
 		require.NoError(t, err)
-		assert.Equal(t, "insert", evt.OperationType)
-		assert.Equal(t, fmt.Sprintf("doc-%d", i), evt.DocumentId)
+		assert.Equal(t, "insert", evt.ChangeEvent.OpType)
+		assert.Equal(t, fmt.Sprintf("doc-%d", i), evt.ChangeEvent.MgoDocId)
 	}
 }
 
@@ -182,8 +182,8 @@ func TestPuller_FullCycle_Resilience(t *testing.T) {
 		p := core.New(cfg, logger)
 
 		backendCfg := config.PullerBackendConfig{
-			Name:               "backend1",
-			IncludeCollections: []string{collName},
+			Name:        "backend1",
+			Collections: []string{collName},
 		}
 		err := p.AddBackend("backend1", mongoClient, dbName, backendCfg)
 		require.NoError(t, err)
@@ -224,7 +224,7 @@ func TestPuller_FullCycle_Resilience(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		evt, err := stream1.Recv()
 		require.NoError(t, err)
-		assert.Equal(t, fmt.Sprintf("doc-%d", i), evt.DocumentId)
+		assert.Equal(t, fmt.Sprintf("doc-%d", i), evt.ChangeEvent.MgoDocId)
 		lastToken = evt.Progress
 	}
 
@@ -252,7 +252,7 @@ func TestPuller_FullCycle_Resilience(t *testing.T) {
 	for i := 5; i < 10; i++ {
 		evt, err := stream2.Recv()
 		require.NoError(t, err)
-		assert.Equal(t, fmt.Sprintf("doc-%d", i), evt.DocumentId)
+		assert.Equal(t, fmt.Sprintf("doc-%d", i), evt.ChangeEvent.MgoDocId)
 	}
 }
 
@@ -279,6 +279,6 @@ func TestPuller_FullCycle_SlowConsumer(t *testing.T) {
 		time.Sleep(10 * time.Millisecond) // Simulate processing time
 		evt, err := stream.Recv()
 		require.NoError(t, err)
-		assert.Equal(t, fmt.Sprintf("doc-%d", i), evt.DocumentId)
+		assert.Equal(t, fmt.Sprintf("doc-%d", i), evt.ChangeEvent.MgoDocId)
 	}
 }

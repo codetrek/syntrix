@@ -17,7 +17,7 @@ type mockErrorSubscribeClient struct {
 	err error
 }
 
-func (m *mockErrorSubscribeClient) Recv() (*pullerv1.Event, error) {
+func (m *mockErrorSubscribeClient) Recv() (*pullerv1.PullerEvent, error) {
 	return nil, m.err
 }
 

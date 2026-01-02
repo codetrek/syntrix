@@ -2,35 +2,52 @@
 
 This directory now splits designs into server-side and SDK-focused documents.
 
-## Server
+## Arch Overview
 
-- [server/000_requirements.md](server/000_requirements.md) - Requirements and constraints
-- [server/001_architecture.md](server/001_architecture.md) - Initial architecture overview
-- [server/002_storage.md](server/002_storage.md) - Storage interfaces, backend abstraction, data model
-- [server/003_query.md](server/003_query.md) - Query engine & DSL
-- [server/004_restful_api.md](server/004_restful_api.md) - RESTful API design
-- [server/005_replication.md](server/005_replication.md) - Replication protocol (server)
-- [server/006_realtime_watching.md](server/006_realtime_watching.md) - Realtime watching mechanism
-- [server/007_triggers.md](server/007_triggers.md) - Triggers system design
-- [server/008_authentication.md](server/008_authentication.md) - Authentication design
-- [server/009_authorization_rules.md](server/009_authorization_rules.md) - Authorization rules and logic
-- [server/010_console.md](server/010_console.md) - Console/Dashboard design
-- [server/011_control_plane.md](server/011_control_plane.md) - Control Plane design
+```mermaid
+graph TB
+    Gateway[Gateway]
+    MongoDB[(MongoDB Storage)]
+    NATS1[(NATS Jetstream)]
+    NATS2[(NATS Jetstream)]
+    Client[Client SDK]
 
-## Monitor
+    Client --> |HTTP/SSE/Websocket|Gateway
 
-- [monitor/000.requirements.md](monitor/000.requirements.md) - Monitoring and observability requirements
-- [monitor/001.architecture.md](monitor/001.architecture.md) - Monitoring architecture and pipeline
-- [monitor/002.pipeline_and_controls.md](monitor/002.pipeline_and_controls.md) - Collector pipeline, controls, schemas, and rollout
+    Gateway ---> |Req over HTTP| QueryServer ---> |Get/Put| MongoDB
+    QueryServer ---> |Query| Indexer
+    Indexer ---> |Subscribe| Puller
 
-## Automata
+    Gateway <---> |Register/Unregister|Streamer
+    Streamer ---> |Pub| NATS1 --> |Sub| Gateway
+    Streamer ---> |Subscribe| Puller
 
-- [automata/000_design.md](automata/000_design.md) - The design of automata
+    Puller <---> |ChangeStream| MongoDB
 
-## SDK
+    TriggerEval --->|Subscribe| Puller
+    subgraph Trigger
+        TriggerEval ---> |Pub| NATS2 -->|Sub| TriggerWorker
+    end
 
-- [sdk/001_sdk_architecture.md](sdk/001_sdk_architecture.md) - SDK Architecture
-- [sdk/002_replication_client.md](sdk/002_replication_client.md) - Replication client design (RxDB + replication/realtime)
-- [sdk/003_authentication.md](sdk/003_authentication.md) - SDK authentication design
-- [sdk/004_syntrix_client.md](sdk/004_syntrix_client.md) - SyntrixClient design (HTTP CRUD/query)
-- [sdk/005_trigger_client.md](sdk/005_trigger_client.md) - TriggerClient design (trigger RPC + batch)
+    TriggerWorker --> External
+
+    subgraph External
+      Webhook[Webhook Worker]
+      Lambda[Cloud Lambda]
+      Function[Function Compute]
+    end
+
+```
+
+## Puller Event Schema
+
+The Puller service emits events with the following characteristics:
+
+- **Event Wrapper**: Events are wrapped in a `PullerEvent` structure containing the `change_event` and a `progress` marker.
+- **Change Event**: The core event payload (`ChangeEvent`) reflects the MongoDB change stream event but with normalized fields.
+- **Mongo Provenance**: Fields `mgoColl` and `mgoDocId` explicitly indicate the MongoDB collection and document ID (document key).
+- **Full Document Contract**:
+  - The `fullDoc` field MUST conform to the `storage.Document` JSON shape (containing `id`, `tenantId`, `fullpath`).
+  - Update operations MUST use `UpdateLookup` to ensure `fullDoc` is present.
+  - Events without `fullDoc` (except deletes) are rejected.
+- **Tenant Identification**: Tenant ID is derived SOLELY from `fullDoc.TenantID`.

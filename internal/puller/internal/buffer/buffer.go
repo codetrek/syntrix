@@ -138,7 +138,7 @@ func NewForBackend(basePath, backendName string, logger *slog.Logger) (*Buffer, 
 }
 
 // Write stores an event and updates the checkpoint in the same batch.
-func (b *Buffer) Write(evt *events.NormalizedEvent, token bson.Raw) error {
+func (b *Buffer) Write(evt *events.ChangeEvent, token bson.Raw) error {
 	b.mu.RLock()
 	if b.closed {
 		b.mu.RUnlock()
@@ -174,7 +174,7 @@ func (b *Buffer) Write(evt *events.NormalizedEvent, token bson.Raw) error {
 }
 
 // Read retrieves an event by its buffer key.
-func (b *Buffer) Read(key string) (*events.NormalizedEvent, error) {
+func (b *Buffer) Read(key string) (*events.ChangeEvent, error) {
 	b.mu.RLock()
 	if b.closed {
 		b.mu.RUnlock()
@@ -191,7 +191,7 @@ func (b *Buffer) Read(key string) (*events.NormalizedEvent, error) {
 	}
 	defer closer.Close()
 
-	var evt events.NormalizedEvent
+	var evt events.ChangeEvent
 	if err := json.Unmarshal(value, &evt); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal event: %w", err)
 	}
@@ -205,7 +205,7 @@ type Iterator interface {
 	Next() bool
 
 	// Event returns the current event.
-	Event() *events.NormalizedEvent
+	Event() *events.ChangeEvent
 
 	// Key returns the current buffer key.
 	Key() string
@@ -219,7 +219,7 @@ type Iterator interface {
 
 type bufferIterator struct {
 	iter  *pebble.Iterator
-	evt   *events.NormalizedEvent
+	evt   *events.ChangeEvent
 	key   string
 	err   error
 	first bool
@@ -250,7 +250,7 @@ func (i *bufferIterator) Next() bool {
 		i.key = string(i.iter.Key())
 		value := i.iter.Value()
 
-		var evt events.NormalizedEvent
+		var evt events.ChangeEvent
 		if err := json.Unmarshal(value, &evt); err != nil {
 			i.err = fmt.Errorf("failed to unmarshal event: %w", err)
 			return false
@@ -261,7 +261,7 @@ func (i *bufferIterator) Next() bool {
 	}
 }
 
-func (i *bufferIterator) Event() *events.NormalizedEvent {
+func (i *bufferIterator) Event() *events.ChangeEvent {
 	return i.evt
 }
 

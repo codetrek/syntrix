@@ -58,7 +58,7 @@ puller:
     channel_size: 10000
   backends:
     - name: "default_mongo"
-      exclude_collections: ["_system", "logs"]
+      collections: ["documents"]
   buffer:
     path: ".syntrix/data/puller/events"
     max_size: "10GiB"

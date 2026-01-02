@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/codetrek/syntrix/internal/puller/events"
+	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -106,11 +107,11 @@ func TestCleaner_CleanupNow(t *testing.T) {
 	defer buf.Close()
 
 	// Write an old event (with very old timestamp)
-	oldEvt := &events.NormalizedEvent{
-		EventID:    "old-evt",
-		Collection: "testcoll",
-		DocumentID: "doc-1",
-		Type:       events.OperationInsert,
+	oldEvt := &events.ChangeEvent{
+		EventID:  "old-evt",
+		MgoColl:  "testcoll",
+		MgoDocID: "doc-1",
+		OpType:   events.OperationInsert,
 		ClusterTime: events.ClusterTime{
 			T: 1, // Very old timestamp
 			I: 1,
@@ -121,11 +122,11 @@ func TestCleaner_CleanupNow(t *testing.T) {
 	}
 
 	// Write a recent event
-	recentEvt := &events.NormalizedEvent{
-		EventID:    "recent-evt",
-		Collection: "testcoll",
-		DocumentID: "doc-2",
-		Type:       events.OperationInsert,
+	recentEvt := &events.ChangeEvent{
+		EventID:  "recent-evt",
+		MgoColl:  "testcoll",
+		MgoDocID: "doc-2",
+		OpType:   events.OperationInsert,
 		ClusterTime: events.ClusterTime{
 			T: uint32(time.Now().Unix()),
 			I: 1,
@@ -223,11 +224,11 @@ func TestCleaner_RunTriggersCleanup(t *testing.T) {
 	defer buf.Close()
 
 	// Write an old event
-	oldEvt := &events.NormalizedEvent{
-		EventID:    "old-evt",
-		Collection: "testcoll",
-		DocumentID: "doc-1",
-		Type:       events.OperationInsert,
+	oldEvt := &events.ChangeEvent{
+		EventID:  "old-evt",
+		MgoColl:  "testcoll",
+		MgoDocID: "doc-1",
+		OpType:   events.OperationInsert,
 		ClusterTime: events.ClusterTime{
 			T: 1, // Very old timestamp
 			I: 1,
@@ -328,17 +329,21 @@ func TestCleaner_MaxSize(t *testing.T) {
 
 	// Write 10 events
 	for i := 0; i < 10; i++ {
-		evt := &events.NormalizedEvent{
-			EventID:    "evt-" + string(rune('a'+i)),
-			Collection: "testcoll",
-			DocumentID: "doc-1",
-			Type:       events.OperationInsert,
+		evt := &events.ChangeEvent{
+			EventID:  "evt-" + string(rune('a'+i)),
+			MgoColl:  "testcoll",
+			MgoDocID: "doc-1",
+			OpType:   events.OperationInsert,
 			ClusterTime: events.ClusterTime{
 				T: uint32(time.Now().Unix()) + uint32(i),
 				I: 1,
 			},
 			// Add some payload to increase size
-			FullDocument: map[string]any{"data": "some payload"},
+			FullDocument: &storage.Document{
+				Id:       "doc-1",
+				TenantID: "tenant-1",
+				Data:     map[string]any{"data": "some payload"},
+			},
 		}
 		if err := buf.Write(evt, testToken); err != nil {
 			t.Fatalf("Write() error = %v", err)

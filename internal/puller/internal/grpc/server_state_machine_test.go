@@ -30,9 +30,9 @@ func (m *mockStream) Context() context.Context {
 	return context.Background()
 }
 
-func (m *mockStream) Send(event *pullerv1.Event) error {
+func (m *mockStream) Send(event *pullerv1.PullerEvent) error {
 	if m.t != nil {
-		m.t.Logf("MockStream.Send called with event: %s", event.Id)
+		m.t.Logf("MockStream.Send called with event: %s", event.ChangeEvent.EventId)
 	}
 	args := m.Called(event)
 	return args.Error(0)
@@ -50,7 +50,7 @@ func (m *mockStream) SetTrailer(md metadata.MD) {
 }
 
 type controllableIterator struct {
-	events []*events.NormalizedEvent
+	events []*events.ChangeEvent
 	idx    int
 }
 
@@ -59,7 +59,7 @@ func (m *controllableIterator) Next() bool {
 	return m.idx <= len(m.events)
 }
 
-func (m *controllableIterator) Event() *events.NormalizedEvent {
+func (m *controllableIterator) Event() *events.ChangeEvent {
 	if m.idx > 0 && m.idx <= len(m.events) {
 		return m.events[m.idx-1]
 	}
@@ -76,14 +76,14 @@ func (m *controllableIterator) Close() error {
 
 type controllableEventSource struct {
 	replayFunc func(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error)
-	handler    func(ctx context.Context, backendName string, event *events.NormalizedEvent) error
+	handler    func(ctx context.Context, backendName string, event *events.ChangeEvent) error
 }
 
-func (m *controllableEventSource) SetEventHandler(handler func(ctx context.Context, backendName string, event *events.NormalizedEvent) error) {
+func (m *controllableEventSource) SetEventHandler(handler func(ctx context.Context, backendName string, event *events.ChangeEvent) error) {
 	m.handler = handler
 }
 
-func (m *controllableEventSource) EmitEvent(ctx context.Context, backendName string, event *events.NormalizedEvent) error {
+func (m *controllableEventSource) EmitEvent(ctx context.Context, backendName string, event *events.ChangeEvent) error {
 	if m.handler != nil {
 		return m.handler(ctx, backendName, event)
 	}
@@ -104,14 +104,14 @@ func TestServer_StateMachine_HappyPath(t *testing.T) {
 
 	// Setup
 	cfg := config.PullerGRPCConfig{ChannelSize: 100}
-	replayEvt := &events.NormalizedEvent{
+	replayEvt := &events.ChangeEvent{
 		EventID:     "replay-1",
 		ClusterTime: events.ClusterTime{T: 100, I: 1},
 	}
 
 	source := &controllableEventSource{
 		replayFunc: func(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error) {
-			return &controllableIterator{events: []*events.NormalizedEvent{replayEvt}}, nil
+			return &controllableIterator{events: []*events.ChangeEvent{replayEvt}}, nil
 		},
 	}
 	server := NewServer(cfg, source, nil)
@@ -129,17 +129,17 @@ func TestServer_StateMachine_HappyPath(t *testing.T) {
 
 	done := make(chan struct{})
 
-	stream.On("Send", mock.MatchedBy(func(event *pullerv1.Event) bool {
+	stream.On("Send", mock.MatchedBy(func(event *pullerv1.PullerEvent) bool {
 		// Check if it's the replay event
-		if event.Id == "replay-1" {
+		if event.ChangeEvent.EventId == "replay-1" {
 			return true
 		}
 		return false
 	})).Return(nil).Once()
 
-	stream.On("Send", mock.MatchedBy(func(event *pullerv1.Event) bool {
+	stream.On("Send", mock.MatchedBy(func(event *pullerv1.PullerEvent) bool {
 		// Check if it's the live event
-		if event.Id == "live-1" {
+		if event.ChangeEvent.EventId == "live-1" {
 			close(done) // Signal completion
 			return true
 		}
@@ -159,7 +159,7 @@ func TestServer_StateMachine_HappyPath(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Broadcast a live event via source
-	liveEvt := &events.NormalizedEvent{
+	liveEvt := &events.ChangeEvent{
 		EventID:     "live-1",
 		ClusterTime: events.ClusterTime{T: 200, I: 1},
 	}
@@ -185,7 +185,7 @@ func TestServer_StateMachine_LiveDowngrade(t *testing.T) {
 	var replayCount int
 	var mu sync.Mutex
 
-	replayEvt2 := &events.NormalizedEvent{
+	replayEvt2 := &events.ChangeEvent{
 		EventID:     "replay-2",
 		ClusterTime: events.ClusterTime{T: 103, I: 1}, // Newer than overflow events
 	}
@@ -198,10 +198,10 @@ func TestServer_StateMachine_LiveDowngrade(t *testing.T) {
 			t.Logf("Replay called. Count: %d", replayCount)
 			if replayCount == 1 {
 				// First replay: empty
-				return &controllableIterator{events: []*events.NormalizedEvent{}}, nil
+				return &controllableIterator{events: []*events.ChangeEvent{}}, nil
 			}
 			// Second replay (after overflow): return some events
-			return &controllableIterator{events: []*events.NormalizedEvent{replayEvt2}}, nil
+			return &controllableIterator{events: []*events.ChangeEvent{replayEvt2}}, nil
 		},
 	}
 	server := NewServer(cfg, source, nil)
@@ -227,12 +227,12 @@ func TestServer_StateMachine_LiveDowngrade(t *testing.T) {
 	time.Sleep(100 * time.Millisecond) // Wait for live mode
 
 	// 2. Fill the channel (size 1)
-	evt1 := &events.NormalizedEvent{EventID: "evt-1", ClusterTime: events.ClusterTime{T: 100}}
+	evt1 := &events.ChangeEvent{EventID: "evt-1", ClusterTime: events.ClusterTime{T: 100}}
 
 	// Let's make stream.Send block for the first event
 	sendBlock := make(chan struct{})
-	stream.On("Send", mock.MatchedBy(func(event *pullerv1.Event) bool {
-		return event.Id == "evt-1"
+	stream.On("Send", mock.MatchedBy(func(event *pullerv1.PullerEvent) bool {
+		return event.ChangeEvent.EventId == "evt-1"
 	})).Run(func(args mock.Arguments) {
 		t.Log("Blocking Send(evt-1)")
 		<-sendBlock // Block here
@@ -247,25 +247,25 @@ func TestServer_StateMachine_LiveDowngrade(t *testing.T) {
 	// Now channel is empty (item picked up), but consumer is blocked.
 	// Broadcast evt-2. It goes to channel (size 1). Channel full.
 	t.Log("Emitting evt-2")
-	evt2 := &events.NormalizedEvent{EventID: "evt-2", ClusterTime: events.ClusterTime{T: 101}}
+	evt2 := &events.ChangeEvent{EventID: "evt-2", ClusterTime: events.ClusterTime{T: 101}}
 	source.EmitEvent(context.Background(), "db1", evt2)
 	time.Sleep(50 * time.Millisecond)
 
 	// Broadcast evt-3. Channel full -> Overflow!
 	t.Log("Emitting evt-3")
-	evt3 := &events.NormalizedEvent{EventID: "evt-3", ClusterTime: events.ClusterTime{T: 102}}
+	evt3 := &events.ChangeEvent{EventID: "evt-3", ClusterTime: events.ClusterTime{T: 102}}
 	source.EmitEvent(context.Background(), "db1", evt3)
 	time.Sleep(50 * time.Millisecond)
 
 	// Expect evt-2 to be sent as well (it was in the channel)
-	stream.On("Send", mock.MatchedBy(func(event *pullerv1.Event) bool {
-		return event.Id == "evt-2"
+	stream.On("Send", mock.MatchedBy(func(event *pullerv1.PullerEvent) bool {
+		return event.ChangeEvent.EventId == "evt-2"
 	})).Return(nil).Once()
 
 	// Expect the second replay event to be sent eventually
 	replayDone := make(chan struct{})
-	stream.On("Send", mock.MatchedBy(func(event *pullerv1.Event) bool {
-		if event.Id == "replay-2" {
+	stream.On("Send", mock.MatchedBy(func(event *pullerv1.PullerEvent) bool {
+		if event.ChangeEvent.EventId == "replay-2" {
 			close(replayDone)
 			return true
 		}
@@ -303,7 +303,7 @@ func TestServer_Boundary_EmptyReplay(t *testing.T) {
 	cfg := config.PullerGRPCConfig{ChannelSize: 100}
 	source := &controllableEventSource{
 		replayFunc: func(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error) {
-			return &controllableIterator{events: []*events.NormalizedEvent{}}, nil
+			return &controllableIterator{events: []*events.ChangeEvent{}}, nil
 		},
 	}
 	server := NewServer(cfg, source, nil)
@@ -313,8 +313,8 @@ func TestServer_Boundary_EmptyReplay(t *testing.T) {
 	stream := &mockStream{ctx: context.Background(), t: t}
 
 	done := make(chan struct{})
-	stream.On("Send", mock.MatchedBy(func(event *pullerv1.Event) bool {
-		if event.Id == "live-1" {
+	stream.On("Send", mock.MatchedBy(func(event *pullerv1.PullerEvent) bool {
+		if event.ChangeEvent.EventId == "live-1" {
 			close(done)
 			return true
 		}
@@ -329,7 +329,7 @@ func TestServer_Boundary_EmptyReplay(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Emit live event
-	liveEvt := &events.NormalizedEvent{EventID: "live-1", ClusterTime: events.ClusterTime{T: 200}}
+	liveEvt := &events.ChangeEvent{EventID: "live-1", ClusterTime: events.ClusterTime{T: 200}}
 	source.EmitEvent(context.Background(), "db1", liveEvt)
 
 	select {
@@ -367,11 +367,11 @@ func TestServer_Boundary_SendError(t *testing.T) {
 	// Scenario: stream.Send returns error -> Should terminate subscription
 
 	cfg := config.PullerGRPCConfig{ChannelSize: 100}
-	replayEvt := &events.NormalizedEvent{EventID: "replay-1", ClusterTime: events.ClusterTime{T: 100}}
+	replayEvt := &events.ChangeEvent{EventID: "replay-1", ClusterTime: events.ClusterTime{T: 100}}
 
 	source := &controllableEventSource{
 		replayFunc: func(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error) {
-			return &controllableIterator{events: []*events.NormalizedEvent{replayEvt}}, nil
+			return &controllableIterator{events: []*events.ChangeEvent{replayEvt}}, nil
 		},
 	}
 	server := NewServer(cfg, source, nil)

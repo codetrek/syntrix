@@ -335,13 +335,13 @@ func (s *stubPullerService) Stop(ctx context.Context) error {
 	return nil
 }
 func (s *stubPullerService) BackendNames() []string { return nil }
-func (s *stubPullerService) SetEventHandler(func(ctx context.Context, backendName string, event *events.NormalizedEvent) error) {
+func (s *stubPullerService) SetEventHandler(func(ctx context.Context, backendName string, event *events.ChangeEvent) error) {
 }
 func (s *stubPullerService) Replay(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error) {
 	return nil, nil
 }
-func (s *stubPullerService) Subscribe(ctx context.Context, consumerID string, after string) (<-chan *events.NormalizedEvent, error) {
-	return make(chan *events.NormalizedEvent), nil
+func (s *stubPullerService) Subscribe(ctx context.Context, consumerID string, after string) (<-chan *events.PullerEvent, error) {
+	return make(chan *events.PullerEvent), nil
 }
 
 func freeAddr() string {

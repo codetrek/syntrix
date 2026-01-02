@@ -45,10 +45,8 @@ type PullerBackendConfig struct {
 	// Name references storage.backends[name]
 	Name string `yaml:"name"`
 
-	// Collection filtering (applied via MongoDB aggregation pipeline)
-	// Only ONE of include/exclude should be specified
-	IncludeCollections []string `yaml:"include_collections"`
-	ExcludeCollections []string `yaml:"exclude_collections"`
+	// Collections to pull (whitelist)
+	Collections []string `yaml:"collections"`
 }
 
 // BufferConfig holds PebbleDB event buffer configuration.
@@ -114,9 +112,8 @@ func DefaultPullerConfig() PullerConfig {
 		},
 		Backends: []PullerBackendConfig{
 			{
-				Name:               "default_mongo",
-				IncludeCollections: nil,
-				ExcludeCollections: []string{"_system", "logs"},
+				Name:        "default_mongo",
+				Collections: []string{"documents"},
 			},
 		},
 		Buffer: BufferConfig{
@@ -166,8 +163,8 @@ func (c *PullerConfig) Validate() error {
 		if b.Name == "" {
 			return fmt.Errorf("puller.backends[%d].name is required", i)
 		}
-		if len(b.IncludeCollections) > 0 && len(b.ExcludeCollections) > 0 {
-			return fmt.Errorf("puller.backends[%d]: specify either include_collections or exclude_collections, not both", i)
+		if len(b.Collections) == 0 {
+			return fmt.Errorf("puller.backends[%d].collections must specify at least one collection", i)
 		}
 	}
 

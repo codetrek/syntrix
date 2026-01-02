@@ -10,6 +10,7 @@ import (
 
 	"github.com/codetrek/syntrix/internal/config"
 	"github.com/codetrek/syntrix/internal/puller/events"
+	"github.com/codetrek/syntrix/internal/puller/internal/cursor"
 	"github.com/codetrek/syntrix/internal/puller/internal/recovery"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,7 +45,7 @@ func TestPuller_SetEventHandler(t *testing.T) {
 	p := New(config.PullerConfig{}, nil)
 
 	called := false
-	handler := func(ctx context.Context, backendName string, event *events.NormalizedEvent) error {
+	handler := func(ctx context.Context, backendName string, event *events.ChangeEvent) error {
 		called = true
 		return nil
 	}
@@ -56,7 +57,7 @@ func TestPuller_SetEventHandler(t *testing.T) {
 	}
 
 	// Verify handler can be called
-	_ = p.eventHandler(context.Background(), "test", &events.NormalizedEvent{})
+	_ = p.eventHandler(context.Background(), "test", &events.ChangeEvent{})
 	if !called {
 		t.Error("eventHandler should have been called")
 	}
@@ -111,11 +112,6 @@ func TestPuller_Subscribe(t *testing.T) {
 	if ch == nil {
 		t.Error("Subscribe() returned nil channel")
 	}
-
-	// Verify the event handler was set
-	if p.eventHandler == nil {
-		t.Error("Subscribe should set event handler")
-	}
 }
 
 func TestPuller_Subscribe_SendsEvents(t *testing.T) {
@@ -131,21 +127,18 @@ func TestPuller_Subscribe_SendsEvents(t *testing.T) {
 	}
 
 	// Send an event through the handler
-	evt := &events.NormalizedEvent{
-		EventID:    "test-event-1",
-		Collection: "test",
+	evt := &events.ChangeEvent{
+		EventID: "test-event-1",
+		MgoColl: "test",
 	}
 
-	err = p.eventHandler(ctx, "backend-1", evt)
-	if err != nil {
-		t.Errorf("eventHandler() error = %v", err)
-	}
+	p.subs.Broadcast(evt)
 
 	// Verify event was received
 	select {
 	case received := <-ch:
-		if received.EventID != evt.EventID {
-			t.Errorf("received event ID = %v, want %v", received.EventID, evt.EventID)
+		if received.Change.EventID != evt.EventID {
+			t.Errorf("received event ID = %v, want %v", received.Change.EventID, evt.EventID)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Error("timeout waiting for event")
@@ -163,11 +156,8 @@ func TestPuller_Subscribe_NonBlocking(t *testing.T) {
 	}
 
 	// When channel is not full, handler should return nil (event sent)
-	evt := &events.NormalizedEvent{EventID: "test"}
-	err = p.eventHandler(ctx, "backend-1", evt)
-	if err != nil {
-		t.Errorf("eventHandler() error = %v, want nil", err)
-	}
+	evt := &events.ChangeEvent{EventID: "test"}
+	p.subs.Broadcast(evt)
 }
 
 func TestPuller_Subscribe_ChannelFull(t *testing.T) {
@@ -179,17 +169,13 @@ func TestPuller_Subscribe_ChannelFull(t *testing.T) {
 
 	// Fill the channel (buffer size is 1000)
 	for i := 0; i < 1000; i++ {
-		evt := &events.NormalizedEvent{EventID: "test"}
-		_ = p.eventHandler(ctx, "backend", evt)
+		evt := &events.ChangeEvent{EventID: "test"}
+		p.subs.Broadcast(evt)
 	}
 
 	// The channel should be full now, sending more should not block
-	evt := &events.NormalizedEvent{EventID: "overflow"}
-	err := p.eventHandler(ctx, "backend", evt)
-	// Should return nil (drops the event silently)
-	if err != nil {
-		t.Errorf("eventHandler() error = %v, want nil when channel full", err)
-	}
+	evt := &events.ChangeEvent{EventID: "overflow"}
+	p.subs.Broadcast(evt)
 
 	// Drain channel to avoid leaks
 	for len(ch) > 0 {
@@ -321,12 +307,12 @@ func TestPuller_watchChangeStream_ProcessesEvent(t *testing.T) {
 	cfg := newTestConfig(t)
 	p := New(cfg, nil)
 
-	backendCfg := config.PullerBackendConfig{Name: "backend1"}
+	backendCfg := config.PullerBackendConfig{Name: "backend1", Collections: []string{"users"}}
 	require.NoError(t, p.AddBackend("backend1", env.Client, env.DBName, backendCfg))
 	backend := p.backends["backend1"]
 
 	var handled atomic.Int32
-	p.SetEventHandler(func(ctx context.Context, backendName string, evt *events.NormalizedEvent) error {
+	p.SetEventHandler(func(ctx context.Context, backendName string, evt *events.ChangeEvent) error {
 		handled.Add(1)
 		return nil
 	})
@@ -432,12 +418,12 @@ func TestBuildWatchPipeline_NoFilter(t *testing.T) {
 	}
 }
 
-func TestBuildWatchPipeline_IncludeCollections(t *testing.T) {
+func TestBuildWatchPipeline_Collections(t *testing.T) {
 	t.Parallel()
 	p := New(config.PullerConfig{}, nil)
 
 	cfg := config.PullerBackendConfig{
-		IncludeCollections: []string{"users", "orders"},
+		Collections: []string{"users", "orders"},
 	}
 	pipeline := p.buildWatchPipeline(cfg)
 
@@ -449,47 +435,13 @@ func TestBuildWatchPipeline_IncludeCollections(t *testing.T) {
 	}
 }
 
-func TestBuildWatchPipeline_ExcludeCollections(t *testing.T) {
-	t.Parallel()
-	p := New(config.PullerConfig{}, nil)
-
-	cfg := config.PullerBackendConfig{
-		ExcludeCollections: []string{"logs", "temp"},
-	}
-	pipeline := p.buildWatchPipeline(cfg)
-
-	if pipeline == nil {
-		t.Fatal("buildWatchPipeline() returned nil for exclude filter")
-	}
-	if len(pipeline) != 1 {
-		t.Errorf("pipeline length = %d, want 1", len(pipeline))
-	}
-}
-
-func TestBuildWatchPipeline_IncludeTakesPrecedence(t *testing.T) {
-	t.Parallel()
-	p := New(config.PullerConfig{}, nil)
-
-	// If both include and exclude are set, include takes precedence
-	cfg := config.PullerBackendConfig{
-		IncludeCollections: []string{"users"},
-		ExcludeCollections: []string{"logs"},
-	}
-	pipeline := p.buildWatchPipeline(cfg)
-
-	if pipeline == nil {
-		t.Fatal("buildWatchPipeline() returned nil")
-	}
-	// The pipeline should match include (not exclude) since include is checked first
-}
-
 func TestPuller_AddBackend(t *testing.T) {
 	env := setupTestEnv(t)
 	cfg := newTestConfig(t)
 	p := New(cfg, nil)
 
 	backendCfg := config.PullerBackendConfig{
-		IncludeCollections: []string{"users"},
+		Collections: []string{"users"},
 	}
 
 	// Test AddBackend
@@ -515,7 +467,7 @@ func TestPuller_AddBackend_InvalidMaxSizeIsGraceful(t *testing.T) {
 	cfg.Buffer.MaxSize = "not-a-size"
 	p := New(cfg, nil)
 
-	err := p.AddBackend("backend1", env.Client, env.DBName, config.PullerBackendConfig{})
+	err := p.AddBackend("backend1", env.Client, env.DBName, config.PullerBackendConfig{Collections: []string{"users"}})
 	require.NoError(t, err)
 }
 
@@ -525,7 +477,7 @@ func TestPuller_StartStop(t *testing.T) {
 	p := New(cfg, nil)
 
 	backendCfg := config.PullerBackendConfig{
-		IncludeCollections: []string{"users"},
+		Collections: []string{"users"},
 	}
 
 	err := p.AddBackend("backend1", env.Client, env.DBName, backendCfg)
@@ -574,8 +526,8 @@ func TestPuller_Replay_IteratorErrorClosesExisting(t *testing.T) {
 	cfg := newTestConfig(t)
 	p := New(cfg, nil)
 
-	require.NoError(t, p.AddBackend("backend1", env.Client, env.DBName, config.PullerBackendConfig{}))
-	require.NoError(t, p.AddBackend("backend2", env.Client, env.DBName, config.PullerBackendConfig{}))
+	require.NoError(t, p.AddBackend("backend1", env.Client, env.DBName, config.PullerBackendConfig{Collections: []string{"users"}}))
+	require.NoError(t, p.AddBackend("backend2", env.Client, env.DBName, config.PullerBackendConfig{Collections: []string{"users"}}))
 
 	backend2 := p.backends["backend2"]
 	require.NoError(t, backend2.buffer.Close())
@@ -620,4 +572,29 @@ func (d *decodeErrorStream) Err() error { return nil }
 func (d *decodeErrorStream) Close(context.Context) error {
 	d.closed.Store(true)
 	return nil
+}
+
+func TestPuller_Subscribe_WithAfter(t *testing.T) {
+	t.Parallel()
+	p := New(config.PullerConfig{}, nil)
+
+	pm := cursor.NewProgressMarker()
+	pm.SetPosition("backend1", "pos1")
+	after := pm.Encode()
+
+	ctx := context.Background()
+	ch, err := p.Subscribe(ctx, "consumer-1", after)
+	require.NoError(t, err)
+	require.NotNil(t, ch)
+}
+
+func TestPuller_Subscribe_WithInvalidAfter(t *testing.T) {
+	t.Parallel()
+	p := New(config.PullerConfig{}, nil)
+
+	ctx := context.Background()
+	// Should not fail, just ignore invalid token
+	ch, err := p.Subscribe(ctx, "consumer-1", "invalid-token")
+	require.NoError(t, err)
+	require.NotNil(t, ch)
 }

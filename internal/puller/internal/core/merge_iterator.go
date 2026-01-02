@@ -12,7 +12,7 @@ type MergeIterator struct {
 	iterators []events.Iterator
 	pq        priorityQueue
 	err       error
-	current   *events.NormalizedEvent
+	current   *events.ChangeEvent
 }
 
 // NewMergeIterator creates a new MergeIterator.
@@ -74,7 +74,7 @@ func (mi *MergeIterator) Next() bool {
 }
 
 // Event returns the current event.
-func (mi *MergeIterator) Event() *events.NormalizedEvent {
+func (mi *MergeIterator) Event() *events.ChangeEvent {
 	return mi.current
 }
 
@@ -96,7 +96,7 @@ func (mi *MergeIterator) Close() error {
 
 // priorityQueue implements heap.Interface
 type item struct {
-	event  *events.NormalizedEvent
+	event  *events.ChangeEvent
 	iterID int
 }
 

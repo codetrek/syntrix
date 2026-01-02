@@ -9,13 +9,13 @@ import (
 // Coalescer merges events for the same document during catch-up.
 type Coalescer struct {
 	// pending maps document key to pending event
-	pending map[string]*events.NormalizedEvent
+	pending map[string]*events.ChangeEvent
 }
 
 // NewCoalescer creates a new coalescer.
 func NewCoalescer() *Coalescer {
 	return &Coalescer{
-		pending: make(map[string]*events.NormalizedEvent),
+		pending: make(map[string]*events.ChangeEvent),
 	}
 }
 
@@ -26,8 +26,8 @@ func docKey(collection, documentID string) string {
 
 // Add adds an event to be coalesced.
 // Returns the coalesced event if it should be emitted immediately, or nil if pending.
-func (c *Coalescer) Add(evt *events.NormalizedEvent) *events.NormalizedEvent {
-	key := docKey(evt.Collection, evt.DocumentID)
+func (c *Coalescer) Add(evt *events.ChangeEvent) *events.ChangeEvent {
+	key := docKey(evt.MgoColl, evt.MgoDocID)
 
 	existing, ok := c.pending[key]
 	if !ok {
@@ -49,12 +49,12 @@ func (c *Coalescer) Add(evt *events.NormalizedEvent) *events.NormalizedEvent {
 }
 
 // Flush returns all pending events and clears the coalescer.
-func (c *Coalescer) Flush() []*events.NormalizedEvent {
+func (c *Coalescer) Flush() []*events.ChangeEvent {
 	if len(c.pending) == 0 {
 		return nil
 	}
 
-	result := make([]*events.NormalizedEvent, 0, len(c.pending))
+	result := make([]*events.ChangeEvent, 0, len(c.pending))
 	for _, evt := range c.pending {
 		result = append(result, evt)
 	}
@@ -63,13 +63,13 @@ func (c *Coalescer) Flush() []*events.NormalizedEvent {
 		return result[i].BufferKey() < result[j].BufferKey()
 	})
 
-	c.pending = make(map[string]*events.NormalizedEvent)
+	c.pending = make(map[string]*events.ChangeEvent)
 	return result
 }
 
 // FlushOne removes and returns a single pending event.
 // Returns the document key and event, or empty values if no events pending.
-func (c *Coalescer) FlushOne(collection, documentID string) *events.NormalizedEvent {
+func (c *Coalescer) FlushOne(collection, documentID string) *events.ChangeEvent {
 	key := docKey(collection, documentID)
 	evt, ok := c.pending[key]
 	if !ok {
@@ -86,7 +86,7 @@ func (c *Coalescer) Count() int {
 
 // Clear removes all pending events.
 func (c *Coalescer) Clear() {
-	c.pending = make(map[string]*events.NormalizedEvent)
+	c.pending = make(map[string]*events.ChangeEvent)
 }
 
 // merge merges two events according to coalescing rules:
@@ -96,11 +96,11 @@ func (c *Coalescer) Clear() {
 // - update + delete → keep delete
 // - replace + any → treat replace like update
 // - delete always wins
-func (c *Coalescer) merge(existing, incoming *events.NormalizedEvent) *events.NormalizedEvent {
+func (c *Coalescer) merge(existing, incoming *events.ChangeEvent) *events.ChangeEvent {
 	// Delete always wins
-	if incoming.Type == events.OperationDelete {
+	if incoming.OpType == events.OperationDelete {
 		// If previous was insert, they cancel out
-		if existing.Type == events.OperationInsert {
+		if existing.OpType == events.OperationInsert {
 			return nil
 		}
 		// Otherwise, keep the delete
@@ -108,20 +108,20 @@ func (c *Coalescer) merge(existing, incoming *events.NormalizedEvent) *events.No
 	}
 
 	// If existing is delete, new event wins (shouldn't happen in practice)
-	if existing.Type == events.OperationDelete {
+	if existing.OpType == events.OperationDelete {
 		return incoming
 	}
 
 	// insert + update = insert with updated data
-	if existing.Type == events.OperationInsert {
-		if incoming.Type == events.OperationUpdate || incoming.Type == events.OperationReplace {
+	if existing.OpType == events.OperationInsert {
+		if incoming.OpType == events.OperationUpdate || incoming.OpType == events.OperationReplace {
 			// Create insert with the full document from update
-			merged := &events.NormalizedEvent{
+			merged := &events.ChangeEvent{
 				EventID:      incoming.EventID, // Use latest event ID
 				TenantID:     incoming.TenantID,
-				Collection:   incoming.Collection,
-				DocumentID:   incoming.DocumentID,
-				Type:         events.OperationInsert, // Keep as insert
+				MgoColl:      incoming.MgoColl,
+				MgoDocID:     incoming.MgoDocID,
+				OpType:       events.OperationInsert, // Keep as insert
 				ClusterTime:  incoming.ClusterTime,
 				Timestamp:    incoming.Timestamp,
 				FullDocument: incoming.FullDocument,
@@ -135,8 +135,8 @@ func (c *Coalescer) merge(existing, incoming *events.NormalizedEvent) *events.No
 	}
 
 	// update/replace + update/replace = keep latest
-	if (existing.Type == events.OperationUpdate || existing.Type == events.OperationReplace) &&
-		(incoming.Type == events.OperationUpdate || incoming.Type == events.OperationReplace) {
+	if (existing.OpType == events.OperationUpdate || existing.OpType == events.OperationReplace) &&
+		(incoming.OpType == events.OperationUpdate || incoming.OpType == events.OperationReplace) {
 		return incoming
 	}
 
@@ -146,7 +146,7 @@ func (c *Coalescer) merge(existing, incoming *events.NormalizedEvent) *events.No
 
 // CoalesceEvents coalesces a batch of events for the same document.
 // Returns the coalesced events.
-func CoalesceEvents(evts []*events.NormalizedEvent) []*events.NormalizedEvent {
+func CoalesceEvents(evts []*events.ChangeEvent) []*events.ChangeEvent {
 	if len(evts) == 0 {
 		return nil
 	}

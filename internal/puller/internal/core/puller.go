@@ -12,6 +12,7 @@ import (
 	"github.com/codetrek/syntrix/internal/config"
 	"github.com/codetrek/syntrix/internal/puller/events"
 	"github.com/codetrek/syntrix/internal/puller/internal/buffer"
+	"github.com/codetrek/syntrix/internal/puller/internal/cursor"
 	"github.com/codetrek/syntrix/internal/puller/internal/flowcontrol"
 	"github.com/codetrek/syntrix/internal/puller/internal/metrics"
 	"github.com/codetrek/syntrix/internal/puller/internal/normalizer"
@@ -24,7 +25,7 @@ import (
 
 // EventHandler is a function that handles events from the change stream.
 // Note: This type must match the signature in grpc.EventSource interface.
-type EventHandler = func(ctx context.Context, backendName string, event *events.NormalizedEvent) error
+type EventHandler = func(ctx context.Context, backendName string, event *events.ChangeEvent) error
 
 // Backend represents a single MongoDB backend being watched.
 type Backend struct {
@@ -40,7 +41,7 @@ type Backend struct {
 	cleaner         *buffer.Cleaner
 
 	// eventChan receives normalized events from the change stream
-	eventChan chan *events.NormalizedEvent
+	eventChan chan *events.ChangeEvent
 }
 
 // Puller is the main puller service that watches MongoDB change streams
@@ -52,6 +53,9 @@ type Puller struct {
 
 	// eventHandler is called for each normalized event
 	eventHandler EventHandler
+
+	// subs manages active subscribers
+	subs *SubscriberManager
 
 	// wg tracks running goroutines
 	wg sync.WaitGroup
@@ -89,6 +93,7 @@ func New(cfg config.PullerConfig, logger *slog.Logger) *Puller {
 		backpressureSlowDownDelay: 100 * time.Millisecond,
 		backpressurePauseDelay:    1 * time.Second,
 	}
+	p.subs = NewSubscriberManager(p.logger)
 	p.watchFunc = p.watchChangeStream
 	p.openStream = openMongoChangeStream
 	return p
@@ -179,13 +184,13 @@ func (p *Puller) AddBackend(name string, client *mongo.Client, dbName string, cf
 		client:          client,
 		db:              db,
 		config:          cfg,
-		normalizer:      normalizer.New(nil),
+		normalizer:      normalizer.New(),
 		buffer:          buf,
 		gapDetector:     gapDetector,
 		recoveryHandler: recoveryHandler,
 		backpressure:    bpMonitor,
 		cleaner:         cleaner,
-		eventChan:       make(chan *events.NormalizedEvent, 1000),
+		eventChan:       make(chan *events.ChangeEvent, 1000),
 	}
 
 	p.logger.Info("added backend", "name", name, "database", dbName)
@@ -358,7 +363,10 @@ func (p *Puller) watchChangeStream(ctx context.Context, backend *Backend, logger
 	return nil
 }
 
-func (p *Puller) invokeHandlerWithBackpressure(ctx context.Context, backend *Backend, evt *events.NormalizedEvent) {
+func (p *Puller) invokeHandlerWithBackpressure(ctx context.Context, backend *Backend, evt *events.ChangeEvent) {
+	// Broadcast to subscribers
+	p.subs.Broadcast(evt)
+
 	if p.eventHandler != nil {
 		start := time.Now()
 		if err := p.eventHandler(ctx, backend.name, evt); err != nil {
@@ -382,21 +390,15 @@ func (p *Puller) invokeHandlerWithBackpressure(ctx context.Context, backend *Bac
 
 // buildWatchPipeline builds the MongoDB aggregation pipeline for collection filtering.
 func (p *Puller) buildWatchPipeline(cfg config.PullerBackendConfig) mongo.Pipeline {
-	if len(cfg.IncludeCollections) > 0 {
-		return mongo.Pipeline{
-			{{Key: "$match", Value: bson.M{
-				"ns.coll": bson.M{"$in": cfg.IncludeCollections},
-			}}},
-		}
+	if len(cfg.Collections) == 0 {
+		return nil
 	}
-	if len(cfg.ExcludeCollections) > 0 {
-		return mongo.Pipeline{
-			{{Key: "$match", Value: bson.M{
-				"ns.coll": bson.M{"$nin": cfg.ExcludeCollections},
-			}}},
-		}
+
+	return mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{
+			"ns.coll": bson.M{"$in": cfg.Collections},
+		}}},
 	}
-	return nil // No filter, watch all collections
 }
 
 // BackendNames returns the names of all configured backends.
@@ -456,7 +458,7 @@ type backendInjectingIterator struct {
 	backendName string
 }
 
-func (i *backendInjectingIterator) Event() *events.NormalizedEvent {
+func (i *backendInjectingIterator) Event() *events.ChangeEvent {
 	evt := i.Iterator.Event()
 	if evt != nil && evt.Backend == "" {
 		evt.Backend = i.backendName
@@ -466,23 +468,52 @@ func (i *backendInjectingIterator) Event() *events.NormalizedEvent {
 
 // Subscribe subscribes to events from the puller with the given progress marker.
 // Returns a channel of events.
-func (p *Puller) Subscribe(ctx context.Context, consumerID string, after string) (<-chan *events.NormalizedEvent, error) {
-	ch := make(chan *events.NormalizedEvent, 1000)
+func (p *Puller) Subscribe(ctx context.Context, consumerID string, after string) (<-chan *events.PullerEvent, error) {
+	pm := cursor.NewProgressMarker()
 
-	// Set up event handler to send to channel
-	p.SetEventHandler(func(ctx context.Context, backendName string, event *events.NormalizedEvent) error {
-		select {
-		case ch <- event:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			// Channel full
-			return nil
+	// Initialize progress marker from 'after' if provided
+	if after != "" {
+		decoded, err := cursor.DecodeProgressMarker(after)
+		if err == nil {
+			pm = decoded
 		}
-	})
+	}
 
-	return ch, nil
+	// Create subscriber
+	sub := NewSubscriber(consumerID, pm, false, 1000)
+	p.subs.Add(sub)
+
+	outCh := make(chan *events.PullerEvent, 1000)
+
+	go func() {
+		defer close(outCh)
+		defer p.subs.Remove(consumerID)
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-sub.Done():
+				return
+			case evt := <-sub.Events():
+				// Update subscriber's progress
+				sub.UpdatePosition(evt.Backend, evt.EventID, evt.ClusterTime)
+
+				wrapper := &events.PullerEvent{
+					Change:   evt,
+					Progress: sub.CurrentProgress().Encode(),
+				}
+
+				select {
+				case outCh <- wrapper:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+
+	return outCh, nil
 }
 
 func parseSize(s string) (int64, error) {

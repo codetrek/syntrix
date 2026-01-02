@@ -69,19 +69,19 @@ func TestPuller_Replay(t *testing.T) {
 	defer buf.Close()
 
 	// Write some events to buffer
-	evt1 := &events.NormalizedEvent{
+	evt1 := &events.ChangeEvent{
 		EventID:     "1-1-hash1",
 		Timestamp:   1000,
 		ClusterTime: events.ClusterTime{T: 1, I: 1},
-		Collection:  "coll1",
-		DocumentID:  "doc1",
+		MgoColl:     "coll1",
+		MgoDocID:    "doc1",
 	}
-	evt2 := &events.NormalizedEvent{
+	evt2 := &events.ChangeEvent{
 		EventID:     "2-2-hash2",
 		Timestamp:   2000,
 		ClusterTime: events.ClusterTime{T: 2, I: 2},
-		Collection:  "coll1",
-		DocumentID:  "doc2",
+		MgoColl:     "coll1",
+		MgoDocID:    "doc2",
 	}
 
 	err = buf.Write(evt1, []byte("token1"))

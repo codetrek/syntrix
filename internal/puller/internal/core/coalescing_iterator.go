@@ -9,7 +9,7 @@ import (
 type CoalescingIterator struct {
 	source    events.Iterator
 	coalescer *buffer.Coalescer
-	buffer    []*events.NormalizedEvent
+	buffer    []*events.ChangeEvent
 	index     int
 	err       error
 	batchSize int
@@ -71,7 +71,7 @@ func (i *CoalescingIterator) Next() bool {
 }
 
 // Event returns the current event.
-func (i *CoalescingIterator) Event() *events.NormalizedEvent {
+func (i *CoalescingIterator) Event() *events.ChangeEvent {
 	if i.buffer != nil && i.index >= 0 && i.index < len(i.buffer) {
 		return i.buffer[i.index]
 	}

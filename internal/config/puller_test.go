@@ -99,16 +99,15 @@ func TestPullerConfig_Validate(t *testing.T) {
 			errMsg:  "name is required",
 		},
 		{
-			name: "backend with both include and exclude",
+			name: "backend missing collections",
 			modify: func(c *PullerConfig) {
 				c.Backends = []PullerBackendConfig{{
-					Name:               "test",
-					IncludeCollections: []string{"a"},
-					ExcludeCollections: []string{"b"},
+					Name:        "test",
+					Collections: nil,
 				}}
 			},
 			wantErr: true,
-			errMsg:  "either include_collections or exclude_collections",
+			errMsg:  "collections must specify",
 		},
 		{
 			name:    "empty buffer path",

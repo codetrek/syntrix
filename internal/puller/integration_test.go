@@ -72,8 +72,8 @@ func TestPuller_GRPC_Integration(t *testing.T) {
 
 	// Add backend
 	backendCfg := config.PullerBackendConfig{
-		Name:               "backend1",
-		IncludeCollections: []string{collName},
+		Name:        "backend1",
+		Collections: []string{collName},
 	}
 	err = pullerCore.AddBackend("backend1", client, dbName, backendCfg)
 	require.NoError(t, err)
@@ -115,8 +115,8 @@ func TestPuller_GRPC_Integration(t *testing.T) {
 		// Receive event
 		evt, err := stream.Recv()
 		require.NoError(t, err)
-		assert.Equal(t, "insert", evt.OperationType)
-		assert.Equal(t, "doc1", evt.DocumentId)
+		assert.Equal(t, "insert", evt.ChangeEvent.OpType)
+		assert.Equal(t, "doc1", evt.ChangeEvent.MgoDocId)
 
 		// Verify progress marker
 		assert.NotEmpty(t, evt.Progress)
@@ -141,12 +141,12 @@ func TestPuller_GRPC_Integration(t *testing.T) {
 		// Should receive doc1
 		evt1, err := stream.Recv()
 		require.NoError(t, err)
-		assert.Equal(t, "doc1", evt1.DocumentId)
+		assert.Equal(t, "doc1", evt1.ChangeEvent.MgoDocId)
 
 		// Should receive doc2
 		evt2, err := stream.Recv()
 		require.NoError(t, err)
-		assert.Equal(t, "doc2", evt2.DocumentId)
+		assert.Equal(t, "doc2", evt2.ChangeEvent.MgoDocId)
 	})
 }
 

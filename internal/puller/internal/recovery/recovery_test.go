@@ -12,7 +12,7 @@ import (
 func TestGapDetector_FirstEvent(t *testing.T) {
 	g := NewGapDetector(GapDetectorOptions{})
 
-	evt := &events.NormalizedEvent{
+	evt := &events.ChangeEvent{
 		EventID: "evt-1",
 		ClusterTime: events.ClusterTime{
 			T: uint32(time.Now().Unix()),
@@ -35,14 +35,14 @@ func TestGapDetector_NoGap(t *testing.T) {
 
 	now := time.Now()
 
-	evt1 := &events.NormalizedEvent{
+	evt1 := &events.ChangeEvent{
 		EventID:     "evt-1",
 		ClusterTime: events.ClusterTime{T: uint32(now.Unix()), I: 1},
 	}
 	g.RecordEvent(evt1)
 
 	// 1 minute later - no gap
-	evt2 := &events.NormalizedEvent{
+	evt2 := &events.ChangeEvent{
 		EventID:     "evt-2",
 		ClusterTime: events.ClusterTime{T: uint32(now.Add(time.Minute).Unix()), I: 1},
 	}
@@ -59,14 +59,14 @@ func TestGapDetector_GapDetected(t *testing.T) {
 
 	now := time.Now()
 
-	evt1 := &events.NormalizedEvent{
+	evt1 := &events.ChangeEvent{
 		EventID:     "evt-1",
 		ClusterTime: events.ClusterTime{T: uint32(now.Unix()), I: 1},
 	}
 	g.RecordEvent(evt1)
 
 	// 10 minutes later - gap!
-	evt2 := &events.NormalizedEvent{
+	evt2 := &events.ChangeEvent{
 		EventID:     "evt-2",
 		ClusterTime: events.ClusterTime{T: uint32(now.Add(10 * time.Minute).Unix()), I: 1},
 	}
@@ -84,13 +84,13 @@ func TestGapDetector_Reset(t *testing.T) {
 
 	now := time.Now()
 
-	evt1 := &events.NormalizedEvent{
+	evt1 := &events.ChangeEvent{
 		EventID:     "evt-1",
 		ClusterTime: events.ClusterTime{T: uint32(now.Unix()), I: 1},
 	}
 	g.RecordEvent(evt1)
 
-	evt2 := &events.NormalizedEvent{
+	evt2 := &events.ChangeEvent{
 		EventID:     "evt-2",
 		ClusterTime: events.ClusterTime{T: uint32(now.Add(10 * time.Minute).Unix()), I: 1},
 	}

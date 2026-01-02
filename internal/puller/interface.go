@@ -55,7 +55,7 @@ type Service interface {
 	// Subscribe subscribes to events from the puller.
 	// The after parameter is the progress marker to resume from (empty for beginning).
 	// Returns a channel of events that will be closed when the subscription ends.
-	Subscribe(ctx context.Context, consumerID string, after string) (<-chan *events.NormalizedEvent, error)
+	Subscribe(ctx context.Context, consumerID string, after string) (<-chan *Event, error)
 }
 
 // LocalService extends Service with methods only available for local (in-process) pullers.
@@ -75,10 +75,10 @@ type LocalService interface {
 	BackendNames() []string
 
 	// SetEventHandler sets the event handler for processing events.
-	SetEventHandler(handler func(ctx context.Context, backendName string, event *events.NormalizedEvent) error)
+	SetEventHandler(handler func(ctx context.Context, backendName string, event *ChangeEvent) error)
 
 	// Replay returns an iterator that replays events from the given progress marker.
-	Replay(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error)
+	Replay(ctx context.Context, after map[string]string, coalesce bool) (Iterator, error)
 }
 
 // NewService creates a new local Puller service (in-process).
@@ -146,11 +146,13 @@ func NewGRPCServer(cfg config.PullerGRPCConfig, svc LocalService, logger *slog.L
 // ============================================================================
 // Types
 
-type Event = events.NormalizedEvent
+type Event = events.PullerEvent
+type ChangeEvent = events.ChangeEvent
 type UpdateDescription = events.UpdateDescription
 type TruncatedArray = events.TruncatedArray
 type ClusterTime = events.ClusterTime
 type OperationType = events.OperationType
+type Iterator = events.Iterator
 
 const (
 	OperationInsert  = events.OperationInsert
