@@ -8,11 +8,13 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/codetrek/syntrix/internal/server"
 	"gopkg.in/yaml.v3"
 )
 
 // Config holds the application configuration
 type Config struct {
+	Server     server.Config    `yaml:"server"`
 	Storage    StorageConfig    `yaml:"storage"`
 	Identity   IdentityConfig   `yaml:"identity"`
 	Deployment DeploymentConfig `yaml:"deployment"`
@@ -189,6 +191,7 @@ func LoadConfig() *Config {
 				RulesFile: "security.yaml",
 			},
 		},
+		Server: server.DefaultConfig(),
 		Gateway: GatewayConfig{
 			Port:            8080,
 			QueryServiceURL: "http://localhost:8082",

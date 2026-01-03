@@ -15,6 +15,7 @@ import (
 	"github.com/codetrek/syntrix/internal/engine"
 	"github.com/codetrek/syntrix/internal/identity"
 	"github.com/codetrek/syntrix/internal/puller"
+	"github.com/codetrek/syntrix/internal/server"
 	"github.com/codetrek/syntrix/internal/storage"
 	"github.com/codetrek/syntrix/internal/trigger"
 	triggerengine "github.com/codetrek/syntrix/internal/trigger/engine"
@@ -39,6 +40,11 @@ func (m *Manager) Init(ctx context.Context) error {
 	if err := m.initAuthService(ctx); err != nil {
 		return err
 	}
+
+	// Initialize Unified Server Service
+	// Note: We ignore port conflicts for now as we are transitioning.
+	// Existing services will continue to run on their own ports.
+	server.InitDefault(m.cfg.Server, nil)
 
 	if m.opts.RunPuller {
 		if err := m.initPullerService(ctx); err != nil {

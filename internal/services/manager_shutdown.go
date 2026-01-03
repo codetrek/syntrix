@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"log"
+
+	"github.com/codetrek/syntrix/internal/server"
 )
 
 func (m *Manager) Shutdown(ctx context.Context) {
@@ -19,6 +21,14 @@ func (m *Manager) Shutdown(ctx context.Context) {
 		log.Printf("Stopping %s...", m.serverNames[i])
 		if err := srv.Shutdown(ctx); err != nil {
 			log.Printf("Error shutting down %s: %v", m.serverNames[i], err)
+		}
+	}
+
+	// Stop Unified Server Service
+	if s := server.Default(); s != nil {
+		log.Println("Stopping Unified Server Service...")
+		if err := s.Stop(ctx); err != nil {
+			log.Printf("Error stopping Unified Server Service: %v", err)
 		}
 	}
 

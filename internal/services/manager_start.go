@@ -5,6 +5,8 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/codetrek/syntrix/internal/server"
 )
 
 func (m *Manager) Start(bgCtx context.Context) {
@@ -17,6 +19,18 @@ func (m *Manager) Start(bgCtx context.Context) {
 				log.Printf("%s error: %v", name, err)
 			}
 		}(srv, m.serverNames[i])
+	}
+
+	// Start Unified Server Service
+	if s := server.Default(); s != nil {
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			log.Println("Starting Unified Server Service...")
+			if err := s.Start(bgCtx); err != nil {
+				log.Printf("Unified Server Service error: %v", err)
+			}
+		}()
 	}
 
 	// Start Realtime Background Tasks with retry
