@@ -1,3 +1,14 @@
+server:
+  http_port: 8000
+  http_read_timeout: 10s
+  http_write_timeout: 10s
+  http_idle_timeout: 60s
+  enable_cors: true
+
+  grpc_port: 9000
+  GRPCMaxConcurrent: 100
+
+  ShutdownTimeout: 15s
 
 storage:
   backends:
