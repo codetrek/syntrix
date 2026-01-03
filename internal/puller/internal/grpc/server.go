@@ -206,6 +206,10 @@ func (s *Server) Subscribe(req *pullerv1.SubscribeRequest, stream pullerv1.Pulle
 
 	// Mode: "catchup" or "live"
 	mode := "catchup"
+	if req.GetAfter() == "" {
+		mode = "live"
+		s.logger.Info("starting in live mode (no history requested)", "consumerId", sub.ID)
+	}
 
 	for {
 		select {

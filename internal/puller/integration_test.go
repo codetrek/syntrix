@@ -53,8 +53,8 @@ func TestPuller_GRPC_Integration(t *testing.T) {
 	cfg := config.PullerConfig{
 		Buffer: config.BufferConfig{
 			Path:          filepath.Join(tmpDir, "buffer"),
-			BatchSize:     10,
-			BatchInterval: 10 * time.Millisecond,
+			BatchSize:     1, // Ensure immediate flush for testing
+			BatchInterval: 1 * time.Millisecond,
 			QueueSize:     100,
 			MaxSize:       "10MB",
 		},
@@ -103,7 +103,10 @@ func TestPuller_GRPC_Integration(t *testing.T) {
 
 	// 5. Test Live Streaming
 	t.Run("LiveStreaming", func(t *testing.T) {
-		stream, err := grpcClient.Subscribe(context.Background(), &pullerv1.SubscribeRequest{
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		stream, err := grpcClient.Subscribe(ctx, &pullerv1.SubscribeRequest{
 			ConsumerId: "consumer-1",
 		})
 		require.NoError(t, err)
@@ -128,13 +131,13 @@ func TestPuller_GRPC_Integration(t *testing.T) {
 		_, err = coll.InsertOne(ctx, bson.M{"_id": "doc2", "val": 2})
 		require.NoError(t, err)
 
-		// Wait a bit for it to be buffered
-		time.Sleep(100 * time.Millisecond)
+		replayCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
 
 		// Subscribe from beginning (empty after)
-		stream, err := grpcClient.Subscribe(context.Background(), &pullerv1.SubscribeRequest{
+		stream, err := grpcClient.Subscribe(replayCtx, &pullerv1.SubscribeRequest{
 			ConsumerId: "consumer-2",
-			After:      "", // From beginning of buffer
+			After:      "e30", // From beginning of buffer (empty JSON object)
 		})
 		require.NoError(t, err)
 

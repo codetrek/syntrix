@@ -62,7 +62,7 @@ func TestPuller_WatchAndCheckpoint(t *testing.T) {
 		if evt.Change.MgoColl != "users" {
 			t.Errorf("Expected collection 'users', got '%s'", evt.Change.MgoColl)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout waiting for event")
 	}
 
@@ -71,7 +71,7 @@ func TestPuller_WatchAndCheckpoint(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Stop puller to force final checkpoint
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer stopCancel()
 	err = p.Stop(stopCtx)
 	if err != nil {

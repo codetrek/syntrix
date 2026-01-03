@@ -72,7 +72,7 @@ func TestClient_Subscribe(t *testing.T) {
 		logger: slog.Default(),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	ch, err := c.Subscribe(ctx, "consumer-1", "")

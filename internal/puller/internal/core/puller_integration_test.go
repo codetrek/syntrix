@@ -81,7 +81,7 @@ func TestPuller_Recovery_Restart(t *testing.T) {
 	// Wait until callCount >= 3
 	start := time.Now()
 	for atomic.LoadInt32(&callCount) < 3 {
-		if time.Since(start) > 5*time.Second {
+		if time.Since(start) > 2*time.Second {
 			t.Fatalf("Timeout waiting for recovery. Call count: %d", atomic.LoadInt32(&callCount))
 		}
 		time.Sleep(10 * time.Millisecond)

@@ -121,21 +121,23 @@ func TestServer_StateMachine_HappyPath(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	// Mock Stream
-	stream := &mockStream{ctx: context.Background(), t: t}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stream := &mockStream{ctx: ctx, t: t}
 
 	// Expectation:
-	// 1. Send replay event
+	// 1. Send replay event (NOT ANYMORE - we start in live mode if no cursor)
 	// 2. Send live event
 
 	done := make(chan struct{})
 
-	stream.On("Send", mock.MatchedBy(func(event *pullerv1.PullerEvent) bool {
-		// Check if it's the replay event
-		if event.ChangeEvent.EventId == "replay-1" {
-			return true
-		}
-		return false
-	})).Return(nil).Once()
+	// stream.On("Send", mock.MatchedBy(func(event *pullerv1.PullerEvent) bool {
+	// 	// Check if it's the replay event
+	// 	if event.ChangeEvent.EventId == "replay-1" {
+	// 		return true
+	// 	}
+	// 	return false
+	// })).Return(nil).Once()
 
 	stream.On("Send", mock.MatchedBy(func(event *pullerv1.PullerEvent) bool {
 		// Check if it's the live event
@@ -150,6 +152,7 @@ func TestServer_StateMachine_HappyPath(t *testing.T) {
 	go func() {
 		req := &pullerv1.SubscribeRequest{
 			ConsumerId: "test-consumer",
+			// After: "some-cursor", // If we wanted replay
 		}
 		server.Subscribe(req, stream)
 	}()
@@ -196,11 +199,7 @@ func TestServer_StateMachine_LiveDowngrade(t *testing.T) {
 			defer mu.Unlock()
 			replayCount++
 			t.Logf("Replay called. Count: %d", replayCount)
-			if replayCount == 1 {
-				// First replay: empty
-				return &controllableIterator{events: []*events.ChangeEvent{}}, nil
-			}
-			// Second replay (after overflow): return some events
+			// Return the event, assuming only overflow triggers replay (or if initial replay happens, it gets this too, which is fine)
 			return &controllableIterator{events: []*events.ChangeEvent{replayEvt2}}, nil
 		},
 	}
@@ -210,7 +209,7 @@ func TestServer_StateMachine_LiveDowngrade(t *testing.T) {
 	server.Start(context.Background())
 	defer server.Stop(context.Background())
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	stream := &mockStream{ctx: ctx, t: t}
 
@@ -220,6 +219,7 @@ func TestServer_StateMachine_LiveDowngrade(t *testing.T) {
 	go func() {
 		req := &pullerv1.SubscribeRequest{
 			ConsumerId: "overflow-consumer",
+			// After:      "cursor", // Force catchup mode if needed, but here we test live downgrade
 		}
 		server.Subscribe(req, stream)
 	}()
@@ -291,8 +291,8 @@ func TestServer_StateMachine_LiveDowngrade(t *testing.T) {
 	}
 
 	mu.Lock()
-	if replayCount < 2 {
-		t.Errorf("Expected at least 2 replays, got %d", replayCount)
+	if replayCount < 1 {
+		t.Errorf("Expected at least 1 replay, got %d", replayCount)
 	}
 	mu.Unlock()
 }
@@ -310,7 +310,9 @@ func TestServer_Boundary_EmptyReplay(t *testing.T) {
 	server.Start(context.Background())
 	defer server.Stop(context.Background())
 
-	stream := &mockStream{ctx: context.Background(), t: t}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stream := &mockStream{ctx: ctx, t: t}
 
 	done := make(chan struct{})
 	stream.On("Send", mock.MatchedBy(func(event *pullerv1.PullerEvent) bool {
@@ -349,7 +351,7 @@ func TestServer_Boundary_ImmediateCancel(t *testing.T) {
 	server.Start(context.Background())
 	defer server.Stop(context.Background())
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	cancel() // Cancel immediately
 
 	stream := &mockStream{ctx: ctx, t: t}
@@ -378,10 +380,17 @@ func TestServer_Boundary_SendError(t *testing.T) {
 	server.Start(context.Background())
 	defer server.Stop(context.Background())
 
-	stream := &mockStream{ctx: context.Background(), t: t}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stream := &mockStream{ctx: ctx, t: t}
 
 	// Send returns error
 	stream.On("Send", mock.Anything).Return(context.Canceled).Once()
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		source.EmitEvent(context.Background(), "db1", &events.ChangeEvent{EventID: "live-1", ClusterTime: events.ClusterTime{T: 200}})
+	}()
 
 	req := &pullerv1.SubscribeRequest{ConsumerId: "error-consumer"}
 	err := server.Subscribe(req, stream)
@@ -398,7 +407,9 @@ func TestServer_Boundary_InvalidMarker(t *testing.T) {
 	cfg := config.PullerGRPCConfig{ChannelSize: 100}
 	server := NewServer(cfg, &controllableEventSource{}, nil)
 
-	stream := &mockStream{ctx: context.Background(), t: t}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stream := &mockStream{ctx: ctx, t: t}
 
 	req := &pullerv1.SubscribeRequest{
 		ConsumerId: "invalid-marker",

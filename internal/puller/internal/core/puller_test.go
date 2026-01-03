@@ -90,7 +90,7 @@ func TestPuller_Stop_NotStarted(t *testing.T) {
 	t.Parallel()
 	p := New(config.PullerConfig{}, nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	// Should not panic or error when stopping without starting

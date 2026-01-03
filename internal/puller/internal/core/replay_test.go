@@ -93,7 +93,7 @@ func TestPuller_Replay(t *testing.T) {
 	require.Eventually(t, func() bool {
 		e, err := buf.Read(evt2.BufferKey())
 		return err == nil && e != nil
-	}, 1*time.Second, 10*time.Millisecond, "failed to wait for event flush")
+	}, 2*time.Second, 10*time.Millisecond, "failed to wait for event flush")
 
 	p.backends[backendName] = &Backend{
 		name:   backendName,

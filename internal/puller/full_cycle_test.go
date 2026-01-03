@@ -33,7 +33,7 @@ func setupIntegrationEnv(t *testing.T) (*mongo.Collection, *core.Puller, *puller
 	}
 	dbName := strings.ReplaceAll(t.Name(), "/", "_") + "_" + fmt.Sprintf("%d", time.Now().UnixNano())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
@@ -113,7 +113,8 @@ func TestPuller_FullCycle_DataIntegrity(t *testing.T) {
 	coll, _, _, client, cleanup := setupIntegrationEnv(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 
 	// Subscribe first
 	stream, err := client.Subscribe(ctx, &pullerv1.SubscribeRequest{
@@ -148,7 +149,9 @@ func TestPuller_FullCycle_Resilience(t *testing.T) {
 	tmpDir := t.TempDir()
 	bufferPath := filepath.Join(tmpDir, "buffer")
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	mongoClient, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
 	require.NoError(t, err)
 	defer func() {
@@ -260,7 +263,8 @@ func TestPuller_FullCycle_SlowConsumer(t *testing.T) {
 	coll, _, _, client, cleanup := setupIntegrationEnv(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 
 	// Subscribe
 	stream, err := client.Subscribe(ctx, &pullerv1.SubscribeRequest{

@@ -84,7 +84,7 @@ func TestCleaner_StartAndStop(t *testing.T) {
 	select {
 	case <-done:
 		// Expected
-	case <-time.After(time.Second):
+	case <-time.After(2 * time.Second):
 		t.Error("Stop() took too long")
 	}
 }

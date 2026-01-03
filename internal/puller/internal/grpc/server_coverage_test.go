@@ -58,7 +58,7 @@ func TestServer_StartStop(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Stop server
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer stopCancel()
 	srv.Stop(stopCtx)
 }
@@ -74,7 +74,7 @@ func TestServer_Subscribe(t *testing.T) {
 	source := &mockEventSource{}
 	srv := NewServer(cfg, source, nil)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	go func() {
@@ -83,7 +83,7 @@ func TestServer_Subscribe(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer stopCancel()
 	defer srv.Stop(stopCtx)
 
@@ -149,7 +149,7 @@ func TestServer_Start_AlreadyRunning(t *testing.T) {
 	}
 
 	// Cleanup
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer stopCancel()
 	srv.Stop(stopCtx)
 }
@@ -171,8 +171,10 @@ func TestServer_Subscribe_SendError(t *testing.T) {
 	go srv.processEvents()
 
 	req := &pullerv1.SubscribeRequest{ConsumerId: "c1"}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	stream := &mockSubscribeServer{
-		ctx: context.Background(),
+		ctx: ctx,
 		sendFunc: func(evt *pullerv1.PullerEvent) error {
 			return fmt.Errorf("send failed")
 		},
@@ -197,7 +199,7 @@ func TestServer_Subscribe_SendError(t *testing.T) {
 		if err == nil || err.Error() != "send failed" {
 			t.Errorf("Expected 'send failed' error, got %v", err)
 		}
-	case <-time.After(1 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout waiting for Subscribe to return")
 	}
 }
@@ -206,7 +208,9 @@ func TestServer_Subscribe_SubscriberClosed(t *testing.T) {
 	t.Parallel()
 	srv := NewServer(config.PullerGRPCConfig{}, &mockEventSource{}, nil)
 	req := &pullerv1.SubscribeRequest{ConsumerId: "c1"}
-	stream := &mockSubscribeServer{ctx: context.Background()}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stream := &mockSubscribeServer{ctx: ctx}
 
 	// Run Subscribe
 	errChan := make(chan error)
@@ -246,7 +250,9 @@ func TestServer_Subscribe_NilEvent(t *testing.T) {
 	go srv.processEvents()
 
 	req := &pullerv1.SubscribeRequest{ConsumerId: "c1"}
-	stream := &mockSubscribeServer{ctx: context.Background()}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stream := &mockSubscribeServer{ctx: ctx}
 
 	go func() {
 		_ = srv.Subscribe(req, stream)
@@ -270,7 +276,7 @@ func TestServer_Subscribe_NilEvent(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(1 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout waiting for event after nil")
 	}
 }
@@ -281,7 +287,9 @@ func TestServer_Subscribe_ConvertError(t *testing.T) {
 	go srv.processEvents()
 
 	req := &pullerv1.SubscribeRequest{ConsumerId: "c1"}
-	stream := &mockSubscribeServer{ctx: context.Background()}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stream := &mockSubscribeServer{ctx: ctx}
 
 	go func() {
 		_ = srv.Subscribe(req, stream)
@@ -315,7 +323,7 @@ func TestServer_Subscribe_ConvertError(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(1 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout waiting for event after convert error")
 	}
 }

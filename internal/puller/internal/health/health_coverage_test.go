@@ -9,7 +9,8 @@ import (
 
 func TestStartServer(t *testing.T) {
 	checker := NewChecker(nil)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 
 	// Start server in goroutine
 	go func() {
@@ -20,7 +21,8 @@ func TestStartServer(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Make a request
-	resp, err := http.Get("http://localhost:8099/health")
+	client := &http.Client{Timeout: 1 * time.Second}
+	resp, err := client.Get("http://localhost:8099/health")
 	if err != nil {
 		t.Fatalf("Failed to make request: %v", err)
 	}
@@ -30,7 +32,7 @@ func TestStartServer(t *testing.T) {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
 	}
 
-	// Stop server
+	// Stop server (via defer cancel or explicit cancel if we want to test shutdown)
 	cancel()
 	time.Sleep(100 * time.Millisecond)
 }

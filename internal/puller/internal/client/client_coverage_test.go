@@ -100,7 +100,7 @@ func TestClient_Subscribe_StreamError(t *testing.T) {
 		if ok {
 			t.Error("Channel should be closed without events")
 		}
-	case <-time.After(time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout waiting for channel close")
 	}
 }
