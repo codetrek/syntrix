@@ -14,7 +14,9 @@ import (
 	pb "github.com/syntrixbase/syntrix/api/gen/streamer/v1"
 	"github.com/syntrixbase/syntrix/pkg/model"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 func TestRemoteStream_Unsubscribe_SendError(t *testing.T) {
@@ -1327,4 +1329,76 @@ func TestRemoteStream_Reconnect_ResubscribeFails(t *testing.T) {
 	finalCount := attemptCount
 	mu.Unlock()
 	assert.Equal(t, 2, finalCount) // Should have tried twice
+}
+
+func TestRemoteStream_TerminalIngestionFailureDoesNotReconnect(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	failure := status.Error(codes.FailedPrecondition, "Puller history expired")
+	transport := &mockGRPCStreamClient{recvErr: failure}
+	endpoint := &mockStreamerServiceClient{streamClient: transport}
+	client := &streamerClient{
+		config: DefaultClientConfig(),
+		client: endpoint,
+		logger: slog.Default(),
+	}
+	stream, err := client.Stream(ctx)
+	require.NoError(t, err)
+	_, err = stream.Recv()
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.ErrorContains(t, err, "Puller history expired")
+	assert.Equal(t, 1, endpoint.streamCalls)
+	transport.mu.Lock()
+	assert.True(t, transport.closedSend)
+	transport.mu.Unlock()
+	_, err = stream.Subscribe("database1", "users", nil)
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	rs := stream.(*remoteStream)
+	waitSignal(t, rs.heartbeatStop)
+	assert.Equal(t, StateDisconnected, rs.State())
+}
+
+type terminalMockGRPCStreamClient struct {
+	mockGRPCStreamClient
+	ctx     context.Context
+	failure chan error
+}
+
+func (m *terminalMockGRPCStreamClient) Recv() (*pb.StreamerMessage, error) {
+	select {
+	case err := <-m.failure:
+		return nil, err
+	case <-m.ctx.Done():
+		return nil, m.ctx.Err()
+	}
+}
+
+func TestRemoteStream_TerminalFailureUnblocksPendingSubscribe(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	transport := &terminalMockGRPCStreamClient{ctx: ctx, failure: make(chan error, 1)}
+	endpoint := &mockStreamerServiceClient{streamClient: transport}
+	client := &streamerClient{config: DefaultClientConfig(), client: endpoint, logger: slog.Default()}
+	stream, err := client.Stream(ctx)
+	require.NoError(t, err)
+	result := make(chan error, 1)
+	go func() {
+		_, err := stream.Subscribe("database1", "users", nil)
+		result <- err
+	}()
+	require.Eventually(t, func() bool {
+		transport.mu.Lock()
+		defer transport.mu.Unlock()
+		return len(transport.sentMsgs) == 1
+	}, time.Second, time.Millisecond)
+	transport.failure <- status.Error(codes.FailedPrecondition, "ingestion failed")
+	select {
+	case err := <-result:
+		require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	case <-ctx.Done():
+		t.Fatal("subscription request remained blocked after ingestion failure")
+	}
+	_, err = stream.Recv()
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Equal(t, 1, endpoint.streamCalls)
 }

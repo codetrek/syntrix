@@ -4,13 +4,17 @@ Status: proposed
 
 ## Problem
 
-[The evaluator loop](../../../../internal/trigger/evaluator/service.go) logs a
-publish failure, continues processing, and then assigns
-`s.latestProgress = evt.Progress`. Its asynchronous saver can persist that
-position even though a matching delivery task was never accepted. A restart can
-therefore resume after undelivered work. Evaluation failures follow a similar
-continue path. Static inspection establishes the ordering hazard; no crash
-reproduction is claimed here.
+[The evaluator](../../../../internal/trigger/evaluator/service.go) now stops on
+evaluation or publication failure and exposes only completed progress to its
+asynchronous saver. Checkpoint-save failure stops ingestion, and source shutdown
+cancels the saver before joining it. This closes the earlier continue-after-error
+ordering hazard.
+
+The current boundary is still publisher success. Partial fan-out followed by a
+crash can replay tasks and evaluate against a changed rule set. Standalone memory
+publication is not durable scheduling. Without persisted selection, outcomes,
+and outbox records, a checkpoint cannot prove that every intended task remains
+recoverable independently of broker or process lifetime.
 
 ## Proposal
 
@@ -77,6 +81,6 @@ admission bounds must propagate backpressure before storage is exhausted.
 
 [Delivery idempotency](../architecture/2026-09-07-trigger-delivery-idempotency.md)
 owns durable rule selection, evaluation outcomes, task records, and dispatch.
-[Local Puller replay](../architecture/2026-09-07-local-puller-subscription-replay.md)
-and [history-gap recovery](../architecture/2026-09-07-puller-history-gap-recovery.md)
+[Local Puller replay](../../implemented/architecture/2026-09-07-local-puller-subscription-replay.md)
+and [history-gap recovery](../../implemented/architecture/2026-09-07-puller-history-gap-recovery.md)
 own the availability of recoverable source events.

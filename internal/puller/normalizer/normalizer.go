@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/syntrixbase/syntrix/internal/core/storage"
@@ -38,7 +39,9 @@ func New() *Normalizer {
 
 // Normalize converts a RawEvent to a ChangeEvent.
 func (n *Normalizer) Normalize(raw *RawEvent) (*events.StoreChangeEvent, error) {
-	// Extract operation type
+	if raw == nil {
+		return nil, fmt.Errorf("raw event is required")
+	}
 	opType := events.StoreOperationType(raw.OperationType)
 	if !opType.IsValid() {
 		return nil, fmt.Errorf("unknown operation type: %s", raw.OperationType)
@@ -54,10 +57,11 @@ func (n *Normalizer) Normalize(raw *RawEvent) (*events.StoreChangeEvent, error) 
 	var fullDoc *storage.StoredDoc
 	if raw.FullDocument != nil {
 		// Pre-process raw.FullDocument to convert Dates to int64
-		fixTimestamps(raw.FullDocument)
+		document := maps.Clone(raw.FullDocument)
+		fixTimestamps(document)
 
 		// Marshal/Unmarshal to convert bson.M to storage.StoredDoc
-		data, err := bson.Marshal(raw.FullDocument)
+		data, err := bson.Marshal(document)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal fullDocument: %w", err)
 		}
@@ -78,12 +82,8 @@ func (n *Normalizer) Normalize(raw *RawEvent) (*events.StoreChangeEvent, error) 
 		database = fullDoc.Database
 	}
 
-	// Generate event ID
-	eventID := generateEventID(raw.ClusterTime, raw.Namespace.Coll, docID)
-
 	// Create change event
 	evt := &events.StoreChangeEvent{
-		EventID:      eventID,
 		Database:     database,
 		MgoColl:      raw.Namespace.Coll,
 		MgoDocID:     docID,
@@ -100,7 +100,8 @@ func (n *Normalizer) Normalize(raw *RawEvent) (*events.StoreChangeEvent, error) 
 
 	// Set transaction number
 	if raw.TxnNumber != nil {
-		evt.TxnNumber = raw.TxnNumber
+		txn := *raw.TxnNumber
+		evt.TxnNumber = &txn
 	}
 
 	return evt, nil
@@ -143,31 +144,6 @@ func formatCompoundKey(docKey bson.M) string {
 	data, _ := bson.Marshal(docKey)
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:16]) // Use first 16 bytes
-}
-
-// generateEventID generates a unique event ID.
-func generateEventID(ct primitive.Timestamp, collection, docID string) string {
-	// Format: {clusterTime.T}-{clusterTime.I}-{hash(collection+docID)}
-	data := fmt.Sprintf("%s/%s", collection, docID)
-	hash := sha256.Sum256([]byte(data))
-	hashStr := hex.EncodeToString(hash[:8]) // Use first 8 bytes
-	return fmt.Sprintf("%d-%d-%s", ct.T, ct.I, hashStr)
-}
-
-// ParseEventID parses the cluster time from an event ID.
-func ParseEventID(id string) (events.ClusterTime, error) {
-	var t, i uint32
-	var hash string
-	// Sscanf might not work well if hash contains dashes, but hex string doesn't.
-	// Format is %d-%d-%s.
-	n, err := fmt.Sscanf(id, "%d-%d-%s", &t, &i, &hash)
-	if err != nil {
-		return events.ClusterTime{}, err
-	}
-	if n < 3 {
-		return events.ClusterTime{}, fmt.Errorf("invalid event ID format")
-	}
-	return events.ClusterTime{T: t, I: i}, nil
 }
 
 // convertBsonM converts a bson.M to map[string]any.

@@ -2,6 +2,7 @@ package indexer_test
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"testing"
@@ -24,9 +25,31 @@ func newMockPuller(bufferSize int) *mockPuller {
 	}
 }
 
-func (m *mockPuller) Subscribe(ctx context.Context, consumerID string, after string) <-chan *puller.Event {
-	return m.events
+func (m *mockPuller) Subscribe(ctx context.Context, opts puller.SubscribeOptions) (puller.Subscription, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	return &integrationSubscription{ctx: ctx, cancel: cancel, events: m.events}, nil
 }
+
+type integrationSubscription struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	events <-chan *puller.Event
+}
+
+func (s *integrationSubscription) Next(ctx context.Context) (*puller.Event, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	case evt, ok := <-s.events:
+		if !ok {
+			return nil, io.EOF
+		}
+		return evt, nil
+	}
+}
+func (s *integrationSubscription) Close() error { s.cancel(); return nil }
 
 func (m *mockPuller) pushEvent(evt *puller.ChangeEvent, progress string) {
 	m.events <- &puller.Event{

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"gopkg.in/yaml.v3"
 	"testing"
 	"time"
 
@@ -95,6 +96,7 @@ func TestPullerConfig_Validate(t *testing.T) {
 			modify: func(c *Config) {
 				c.Backends = []PullerBackendConfig{{
 					Name:        "test",
+					SourceID:    "test-source",
 					Collections: nil,
 				}}
 			},
@@ -511,5 +513,60 @@ func TestConfig_ResolvePaths(t *testing.T) {
 				t.Errorf("Buffer.Path = %q, want %q", cfg.Buffer.Path, tt.expectedPath)
 			}
 		})
+	}
+}
+
+func TestDeliveryConfigurationOverridesAndBudgets(t *testing.T) {
+	cfg := DefaultConfig()
+	err := yaml.Unmarshal([]byte("buffer:\n  batch_size: 7\n  batch_interval: 5ms\n  batch_bytes: 1024\n  queue_bytes: 4096\nconsumer:\n  queue_bytes: 512\n  page_size: 3\n  page_bytes: 2048\n"), &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(services.ModeStandalone); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Buffer.BatchSize != 7 || cfg.Buffer.BatchInterval != 5*time.Millisecond {
+		t.Fatalf("configured batch settings lost: %+v", cfg.Buffer)
+	}
+	if cfg.Buffer.QueueBytes != 4096 || cfg.Consumer.PageSize != 3 {
+		t.Fatal("configured capacity lost")
+	}
+
+	cases := map[string]func(*Config){
+		"missing source": func(c *Config) { c.Backends[0].SourceID = "" },
+		"duplicate source": func(c *Config) {
+			c.Backends = append(c.Backends, PullerBackendConfig{Name: "other", SourceID: c.Backends[0].SourceID, Collections: []string{"documents"}})
+		},
+		"duplicate backend": func(c *Config) {
+			c.Backends = append(c.Backends, PullerBackendConfig{Name: c.Backends[0].Name, SourceID: "other", Collections: []string{"documents"}})
+		},
+		"channel capacity":     func(c *Config) { c.GRPC.ChannelSize = -1 },
+		"heartbeat":            func(c *Config) { c.GRPC.HeartbeatInterval = -time.Second },
+		"queue bytes":          func(c *Config) { c.Buffer.QueueBytes = -1 },
+		"batch bytes":          func(c *Config) { c.Buffer.BatchBytes = -1 },
+		"batch exceeds queue":  func(c *Config) { c.Buffer.BatchBytes = c.Buffer.QueueBytes + 1 },
+		"subscriber bytes":     func(c *Config) { c.Consumer.QueueBytes = -1 },
+		"page size":            func(c *Config) { c.Consumer.PageSize = -1 },
+		"page bytes":           func(c *Config) { c.Consumer.PageBytes = -1 },
+		"page too small":       func(c *Config) { c.Consumer.PageBytes = c.Buffer.BatchBytes - 1 },
+		"size parse":           func(c *Config) { c.Buffer.MaxSize = "bad" },
+		"negative batch count": func(c *Config) { c.Buffer.BatchSize = -1 },
+		"negative batch time":  func(c *Config) { c.Buffer.BatchInterval = -time.Second },
+	}
+	for name, modify := range cases {
+		t.Run(name, func(t *testing.T) {
+			invalid := DefaultConfig()
+			modify(&invalid)
+			invalid.ApplyDefaults()
+			if err := invalid.Validate(services.ModeStandalone); err == nil {
+				t.Fatal("invalid explicit setting accepted")
+			}
+		})
+	}
+	for _, value := range []string{"9223372036854775808", "9223372036854775807GiB"} {
+		if _, err := ParseByteSize(value); err == nil {
+			t.Fatalf("accepted overflowing size %s", value)
+		}
 	}
 }

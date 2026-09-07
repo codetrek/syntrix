@@ -3,230 +3,57 @@ package recovery
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net"
+	"syscall"
 	"testing"
-	"time"
 
-	"github.com/syntrixbase/syntrix/internal/puller/events"
+	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
-func TestGapDetector_FirstEvent(t *testing.T) {
-	g := NewGapDetector(GapDetectorOptions{})
-
-	evt := &events.StoreChangeEvent{
-		EventID: "evt-1",
-		ClusterTime: events.ClusterTime{
-			T: uint32(time.Now().Unix()),
-			I: 1,
-		},
-	}
-
-	if g.RecordEvent(evt) {
-		t.Error("RecordEvent should return false for first event")
-	}
-	if g.GapsDetected() != 0 {
-		t.Errorf("GapsDetected() = %d, want 0", g.GapsDetected())
-	}
-}
-
-func TestGapDetector_NoGap(t *testing.T) {
-	g := NewGapDetector(GapDetectorOptions{
-		Threshold: 5 * time.Minute,
-	})
-
-	now := time.Now()
-
-	evt1 := &events.StoreChangeEvent{
-		EventID:     "evt-1",
-		ClusterTime: events.ClusterTime{T: uint32(now.Unix()), I: 1},
-	}
-	g.RecordEvent(evt1)
-
-	// 1 minute later - no gap
-	evt2 := &events.StoreChangeEvent{
-		EventID:     "evt-2",
-		ClusterTime: events.ClusterTime{T: uint32(now.Add(time.Minute).Unix()), I: 1},
-	}
-
-	if g.RecordEvent(evt2) {
-		t.Error("RecordEvent should return false for no gap")
-	}
-}
-
-func TestGapDetector_GapDetected(t *testing.T) {
-	g := NewGapDetector(GapDetectorOptions{
-		Threshold: 5 * time.Minute,
-	})
-
-	now := time.Now()
-
-	evt1 := &events.StoreChangeEvent{
-		EventID:     "evt-1",
-		ClusterTime: events.ClusterTime{T: uint32(now.Unix()), I: 1},
-	}
-	g.RecordEvent(evt1)
-
-	// 10 minutes later - gap!
-	evt2 := &events.StoreChangeEvent{
-		EventID:     "evt-2",
-		ClusterTime: events.ClusterTime{T: uint32(now.Add(10 * time.Minute).Unix()), I: 1},
-	}
-
-	if !g.RecordEvent(evt2) {
-		t.Error("RecordEvent should return true for gap")
-	}
-	if g.GapsDetected() != 1 {
-		t.Errorf("GapsDetected() = %d, want 1", g.GapsDetected())
-	}
-}
-
-func TestGapDetector_Reset(t *testing.T) {
-	g := NewGapDetector(GapDetectorOptions{})
-
-	now := time.Now()
-
-	evt1 := &events.StoreChangeEvent{
-		EventID:     "evt-1",
-		ClusterTime: events.ClusterTime{T: uint32(now.Unix()), I: 1},
-	}
-	g.RecordEvent(evt1)
-
-	evt2 := &events.StoreChangeEvent{
-		EventID:     "evt-2",
-		ClusterTime: events.ClusterTime{T: uint32(now.Add(10 * time.Minute).Unix()), I: 1},
-	}
-	g.RecordEvent(evt2)
-
-	g.Reset()
-	if g.GapsDetected() != 0 {
-		t.Errorf("GapsDetected() = %d, want 0 after reset", g.GapsDetected())
-	}
-}
-
-func TestRecoveryAction_String(t *testing.T) {
+func TestSourceFailureClassification(t *testing.T) {
 	tests := []struct {
-		action Action
-		want   string
+		name        string
+		err         error
+		historyLost bool
+		retryable   bool
 	}{
-		{ActionNone, "none"},
-		{ActionReconnect, "reconnect"},
-		{ActionRestart, "restart"},
-		{ActionFatal, "fatal"},
-		{Action(99), "unknown"},
+		{name: "no error"},
+		{name: "invalid resume token", err: mongo.CommandError{Code: 260}, historyLost: true},
+		{name: "fatal change stream", err: mongo.CommandError{Code: 280}, historyLost: true},
+		{name: "expired history", err: mongo.CommandError{Code: 286}, historyLost: true},
+		{name: "nonresumable label", err: mongo.CommandError{Code: 999, Labels: []string{"NonResumableChangeStreamError"}}, historyLost: true},
+		{name: "history loss overrides network label", err: mongo.CommandError{Code: 286, Labels: []string{"NetworkError", "ResumableChangeStreamError"}}, historyLost: true},
+		{name: "server interface", err: mongo.WriteException{WriteErrors: mongo.WriteErrors{{Code: 286}}}, historyLost: true},
+		{name: "missing cursor", err: mongo.CommandError{Code: 43}, retryable: true},
+		{name: "resumable label", err: mongo.CommandError{Code: 999, Labels: []string{"ResumableChangeStreamError"}}, retryable: true},
+		{name: "driver network error", err: mongo.CommandError{Labels: []string{"NetworkError"}}, retryable: true},
+		{name: "driver timeout", err: mongo.CommandError{Code: 50}, retryable: true},
+		{name: "connection reset", err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}, retryable: true},
+		{name: "timeout", err: &net.DNSError{IsTimeout: true}, retryable: true},
+		{name: "end of stream", err: io.EOF, retryable: true},
+		{name: "truncated stream", err: io.ErrUnexpectedEOF, retryable: true},
+		{name: "operation deadline", err: context.DeadlineExceeded, retryable: true},
+		{name: "cancellation", err: context.Canceled},
+		{name: "network cancellation", err: &net.OpError{Op: "read", Err: context.Canceled}},
+		{name: "unknown failure", err: errors.New("unexpected storage state")},
+		{name: "authentication", err: mongo.CommandError{Code: 18}},
+		{name: "unlabeled server failure", err: mongo.CommandError{Code: 91}},
+		{name: "network words", err: errors.New("network timeout, connection reset, EOF")},
+		{name: "history words", err: errors.New("ChangeStreamHistoryLost: resume token was not found")},
+		{name: "server message is not a code", err: mongo.CommandError{Code: 18, Message: "ChangeStreamHistoryLost timeout"}},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.want, func(t *testing.T) {
-			if got := tt.action.String(); got != tt.want {
-				t.Errorf("String() = %s, want %s", got, tt.want)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.historyLost, IsHistoryLost(test.err))
+			require.Equal(t, test.retryable, IsRetryable(test.err))
+			if test.err != nil {
+				wrapped := fmt.Errorf("read source: %w", test.err)
+				require.Equal(t, test.historyLost, IsHistoryLost(wrapped), "wrapped history classification")
+				require.Equal(t, test.retryable, IsRetryable(wrapped), "wrapped retry classification")
 			}
 		})
-	}
-}
-
-func TestHandler_HandleError_Nil(t *testing.T) {
-	h := NewHandler(HandlerOptions{})
-
-	action := h.HandleError(nil)
-	if action != ActionNone {
-		t.Errorf("HandleError(nil) = %s, want none", action)
-	}
-}
-
-func TestHandler_HandleError_ResumeToken(t *testing.T) {
-	h := NewHandler(HandlerOptions{})
-
-	err := errors.New("resume token was not found")
-	action := h.HandleError(err)
-	if action != ActionRestart {
-		t.Errorf("HandleError() = %s, want restart", action)
-	}
-	if h.ResumeTokenErrors() != 1 {
-		t.Errorf("ResumeTokenErrors() = %d, want 1", h.ResumeTokenErrors())
-	}
-}
-
-func TestHandler_HandleError_Transient(t *testing.T) {
-	h := NewHandler(HandlerOptions{})
-
-	err := errors.New("connection reset by peer")
-	action := h.HandleError(err)
-	if action != ActionReconnect {
-		t.Errorf("HandleError() = %s, want reconnect", action)
-	}
-}
-
-func TestHandler_HandleError_MaxConsecutive(t *testing.T) {
-	h := NewHandler(HandlerOptions{
-		MaxConsecutiveErrors: 3,
-	})
-
-	err := errors.New("some unknown error")
-
-	// First 2 should reconnect
-	for i := 0; i < 2; i++ {
-		action := h.HandleError(err)
-		if action != ActionReconnect {
-			t.Errorf("HandleError() = %s, want reconnect", action)
-		}
-	}
-
-	// 3rd should be fatal
-	action := h.HandleError(err)
-	if action != ActionFatal {
-		t.Errorf("HandleError() = %s, want fatal", action)
-	}
-}
-
-func TestHandler_ResetErrorCount(t *testing.T) {
-	h := NewHandler(HandlerOptions{
-		MaxConsecutiveErrors: 3,
-	})
-
-	err := errors.New("some error")
-	h.HandleError(err)
-	h.HandleError(err)
-
-	h.ResetErrorCount()
-
-	// After reset, should start counting again
-	action := h.HandleError(err)
-	if action != ActionReconnect {
-		t.Errorf("HandleError() = %s after reset, want reconnect", action)
-	}
-}
-
-type mockCheckpoint struct {
-	deleted   bool
-	deleteErr error
-}
-
-func (m *mockCheckpoint) DeleteCheckpoint() error {
-	m.deleted = true
-	return m.deleteErr
-}
-
-func TestHandler_RecoverFromResumeTokenError(t *testing.T) {
-	mock := &mockCheckpoint{}
-	h := NewHandler(HandlerOptions{
-		Checkpoint: mock,
-	})
-
-	err := h.RecoverFromResumeTokenError(context.Background())
-	if err != nil {
-		t.Errorf("RecoverFromResumeTokenError() error = %v", err)
-	}
-	if !mock.deleted {
-		t.Error("checkpoint.Delete() should have been called")
-	}
-}
-
-func TestHandler_RecoverFromResumeTokenError_NilCheckpoint(t *testing.T) {
-	h := NewHandler(HandlerOptions{
-		Checkpoint: nil,
-	})
-
-	err := h.RecoverFromResumeTokenError(context.Background())
-	if err != nil {
-		t.Errorf("RecoverFromResumeTokenError() error = %v", err)
 	}
 }

@@ -4,21 +4,22 @@ Status: proposed
 
 ## Problem
 
-Puller health types and an HTTP handler exist but are not connected to the
-running service. [The public constructor](../../../../internal/puller/interface.go#L139)
-returns `health.NewChecker(logger)`, while
-[service assembly](../../../../internal/services/manager_init.go#L466) creates the
-Puller and its backends without creating or registering a checker. Production
-callers do not invoke StartHealthServer or update Checker state.
-The helper also hardcodes `mux.Handle("/health", checker)` despite the
-[Health.Path configuration](../../../../internal/puller/config/puller.go).
+The [running Puller](../../../../internal/puller/core/puller.go) now owns a
+checker, records backend connection/failure and committed-event transitions,
+updates subscription counts, and exposes `HealthReport`. This supports lifecycle
+failure propagation, but [service assembly](../../../../internal/services/manager_init.go)
+does not register the configured dedicated health endpoint. The existing helper
+still hardcodes `/health` while [configuration](../../../../internal/puller/config/puller.go)
+contains a path and port.
 
-This is a static integration finding. Bootstrap behavior is separate and already
-applies `Bootstrap.Mode` in watchChangeStream; health work must preserve it.
+A complete operational readiness contract still needs endpoint ownership,
+startup/reconnection states, documented liveness separation, and buffer units.
+Source bootstrap and continuity failure are implemented separately and must
+remain intact while health integration is completed.
 
 ## Proposal
 
-Make Puller own a health snapshot derived from backend and buffer lifecycle:
+Complete the owned Puller health snapshot with backend and buffer lifecycle:
 starting, connected, reconnecting, history unavailable, failed, and stopped.
 Report readiness only when required backends can deliver a continuous stream;
 report process liveness separately so transient dependency failure does not
@@ -60,7 +61,7 @@ logs must omit resume tokens, credentials, and document payloads.
 
 ## Dependencies
 
-[History-gap recovery](../architecture/2026-09-07-puller-history-gap-recovery.md)
+[History-gap recovery](../../implemented/architecture/2026-09-07-puller-history-gap-recovery.md)
 owns continuity state;
 [application observability](../architecture/2026-09-07-application-observability.md)
 owns generic telemetry and deployment probe conventions.

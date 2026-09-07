@@ -10,6 +10,8 @@ import (
 	"github.com/syntrixbase/syntrix/internal/puller/events"
 	"github.com/syntrixbase/syntrix/pkg/model"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Service is the Streamer service interface.
@@ -45,7 +47,7 @@ type Stream interface {
 
 	// Recv receives an EventDelivery from the Streamer.
 	// Blocks until an event is available or an error occurs.
-	// Returns io.EOF when the stream is closed.
+	// Returns the terminal service error, context cause, or io.EOF on explicit close.
 	Recv() (*EventDelivery, error)
 
 	// Close closes the stream and releases resources.
@@ -95,7 +97,14 @@ type grpcServerAdapter struct {
 
 // Stream implements pb.StreamerServiceServer.Stream by delegating to GRPCStream.
 func (a *grpcServerAdapter) Stream(stream grpc.BidiStreamingServer[pb.GatewayMessage, pb.StreamerMessage]) error {
-	return a.service.GRPCStream(stream)
+	err := a.service.GRPCStream(stream)
+	// A terminal ingestion failure requires recovery before another stream can
+	// serve events; transport reconnects cannot restore its continuity.
+	if failure := a.service.Err(); failure != nil &&
+		failure != context.Canceled && failure != context.DeadlineExceeded {
+		return status.Error(codes.FailedPrecondition, failure.Error())
+	}
+	return err
 }
 
 // NewGRPCServer creates a gRPC server for the Streamer service.

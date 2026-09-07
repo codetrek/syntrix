@@ -3,396 +3,159 @@ package grpc
 import (
 	"context"
 	"errors"
-	"log/slog"
+	"io"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	pullerv1 "github.com/syntrixbase/syntrix/api/gen/puller/v1"
-	"github.com/syntrixbase/syntrix/internal/core/storage"
 	"github.com/syntrixbase/syntrix/internal/puller/config"
-	"github.com/syntrixbase/syntrix/internal/puller/core"
-	"github.com/syntrixbase/syntrix/internal/puller/cursor"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
+	grpcapi "google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
-// mockEventSource implements the EventSource interface for testing
-type mockEventSource struct {
-	handler func(ctx context.Context, backendName string, event *events.StoreChangeEvent) error
+type sourceFunc func(context.Context, events.SubscribeOptions) (events.Subscription, error)
+
+func (f sourceFunc) Subscribe(ctx context.Context, opts events.SubscribeOptions) (events.Subscription, error) {
+	return f(ctx, opts)
 }
 
-func (m *mockEventSource) SetEventHandler(handler func(ctx context.Context, backendName string, event *events.StoreChangeEvent) error) {
-	m.handler = handler
+type subscriptionFixture struct {
+	initialProgress string
+	initialized     bool
+	next            func(context.Context) (*events.PullerEvent, error)
+	closed          atomic.Int32
 }
 
-func (m *mockEventSource) EmitEvent(ctx context.Context, backendName string, event *events.StoreChangeEvent) error {
-	if m.handler != nil {
-		return m.handler(ctx, backendName, event)
+func (s *subscriptionFixture) Next(ctx context.Context) (*events.PullerEvent, error) {
+	if !s.initialized {
+		s.initialized = true
+		progress := s.initialProgress
+		if progress == "" {
+			progress = "start"
+		}
+		return &events.PullerEvent{Progress: progress}, nil
+	}
+	return s.next(ctx)
+}
+func (s *subscriptionFixture) Close() error { s.closed.Add(1); return nil }
+
+type streamFixture struct {
+	grpcapi.ServerStream
+	ctx    context.Context
+	send   func(*pullerv1.PullerEvent) error
+	header func(metadata.MD) error
+}
+
+func (s *streamFixture) Context() context.Context             { return s.ctx }
+func (s *streamFixture) Send(evt *pullerv1.PullerEvent) error { return s.send(evt) }
+func (s *streamFixture) SendHeader(md metadata.MD) error {
+	if s.header != nil {
+		return s.header(md)
 	}
 	return nil
 }
 
-func (m *mockEventSource) Replay(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error) {
-	return &mockIterator{}, nil
+func TestServerPreservesSharedSubscriptionOrderAndProgress(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	want := []*events.PullerEvent{
+		{Change: &events.StoreChangeEvent{EventID: "replayed", Backend: "mongo"}, Progress: "p1"},
+		{Progress: "coalesced-window-end"},
+		{Change: &events.StoreChangeEvent{EventID: "live", Backend: "mongo"}, Progress: "p3"},
+	}
+	index := 0
+	sub := &subscriptionFixture{initialProgress: "cursor", next: func(context.Context) (*events.PullerEvent, error) {
+		if index == len(want) {
+			return nil, io.EOF
+		}
+		evt := want[index]
+		index++
+		return evt, nil
+	}}
+	registered := false
+	source := sourceFunc(func(_ context.Context, opts events.SubscribeOptions) (events.Subscription, error) {
+		assert.Equal(t, events.SubscribeOptions{ConsumerID: "label", After: "cursor", CoalesceOnCatchUp: true}, opts)
+		registered = true
+		return sub, nil
+	})
+	server := NewServer(config.DefaultConfig().GRPC, source, nil)
+	defer server.Shutdown()
+	var got []*pullerv1.PullerEvent
+	stream := &streamFixture{ctx: ctx, header: func(md metadata.MD) error {
+		assert.True(t, registered)
+		assert.Equal(t, []string{"ready"}, md.Get("syntrix-puller-subscription"))
+		return nil
+	}, send: func(evt *pullerv1.PullerEvent) error { got = append(got, evt); return nil }}
+	require.NoError(t, server.Subscribe(&pullerv1.SubscribeRequest{ConsumerId: "label", After: "cursor", CoalesceOnCatchUp: true}, stream))
+	require.Len(t, got, 4)
+	assert.Nil(t, got[0].ChangeEvent)
+	assert.Equal(t, "cursor", got[0].Progress)
+	got = got[1:]
+	assert.Equal(t, "replayed", got[0].ChangeEvent.EventId)
+	assert.Nil(t, got[1].ChangeEvent)
+	assert.Equal(t, "coalesced-window-end", got[1].Progress)
+	assert.Equal(t, "live", got[2].ChangeEvent.EventId)
+	assert.EqualValues(t, 1, sub.closed.Load())
+	assert.Zero(t, server.SubscriberCount())
 }
 
-type mockIterator struct{}
-
-func (m *mockIterator) Next() bool                      { return false }
-func (m *mockIterator) Event() *events.StoreChangeEvent { return nil }
-func (m *mockIterator) Err() error                      { return nil }
-func (m *mockIterator) Close() error                    { return nil }
-
-func TestNewServer(t *testing.T) {
+func TestServerPropagatesSendFailureAndClosesSubscription(t *testing.T) {
 	t.Parallel()
-	cfg := config.GRPCConfig{
-		MaxConnections: 100,
-	}
-
-	source := &mockEventSource{}
-
-	// Test with nil logger
-	server := NewServer(cfg, source, nil)
-	if server == nil {
-		t.Fatal("NewServer() returned nil")
-	}
-	if server.subs == nil {
-		t.Error("subscriber manager should be initialized")
-	}
-	if server.eventChan == nil {
-		t.Error("event channel should be initialized")
-	}
-
-	// Test with provided logger
-	logger := slog.Default()
-	server2 := NewServer(cfg, source, logger)
-	if server2 == nil {
-		t.Fatal("NewServer() with logger returned nil")
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	sub := &subscriptionFixture{next: func(ctx context.Context) (*events.PullerEvent, error) {
+		return &events.PullerEvent{Progress: "p1"}, nil
+	}}
+	server := NewServer(config.DefaultConfig().GRPC, sourceFunc(func(context.Context, events.SubscribeOptions) (events.Subscription, error) { return sub, nil }), nil)
+	defer server.Shutdown()
+	sendErr := errors.New("write failed")
+	err := server.Subscribe(&pullerv1.SubscribeRequest{}, &streamFixture{ctx: ctx, send: func(*pullerv1.PullerEvent) error { return sendErr }})
+	require.ErrorContains(t, err, sendErr.Error())
+	assert.Equal(t, codes.Internal, status.Code(err))
+	assert.EqualValues(t, 1, sub.closed.Load())
+	assert.Zero(t, server.SubscriberCount())
 }
 
-func TestServer_SubscriberCount_WithAdd(t *testing.T) {
+func TestServerConnectionLimitAndShutdown(t *testing.T) {
 	t.Parallel()
-	cfg := config.GRPCConfig{}
-	source := &mockEventSource{}
-	server := NewServer(cfg, source, nil)
-
-	if server.SubscriberCount() != 0 {
-		t.Errorf("SubscriberCount() = %d, want 0", server.SubscriberCount())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	entered := make(chan struct{})
+	sub := &subscriptionFixture{next: func(ctx context.Context) (*events.PullerEvent, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	cfg := config.DefaultConfig().GRPC
+	cfg.MaxConnections = 1
+	server := NewServer(cfg, sourceFunc(func(context.Context, events.SubscribeOptions) (events.Subscription, error) { return sub, nil }), nil)
+	defer server.Shutdown()
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Subscribe(&pullerv1.SubscribeRequest{}, &streamFixture{ctx: ctx, header: func(metadata.MD) error { close(entered); return nil }, send: func(*pullerv1.PullerEvent) error { return nil }})
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
 	}
-
-	// Add a subscriber
-	sub := core.NewSubscriber("consumer-1", nil, false, 100)
-	server.subs.Add(sub)
-
-	if server.SubscriberCount() != 1 {
-		t.Errorf("SubscriberCount() = %d, want 1", server.SubscriberCount())
-	}
-}
-
-func TestServer_ConvertEvent(t *testing.T) {
-	t.Parallel()
-	cfg := config.GRPCConfig{}
-	source := &mockEventSource{}
-	server := NewServer(cfg, source, nil)
-
-	tests := []struct {
-		name    string
-		backend string
-		event   *events.StoreChangeEvent
-		wantErr bool
-	}{
-		{
-			name:    "basic event",
-			backend: "backend-1",
-			event: &events.StoreChangeEvent{
-				EventID:  "evt-123",
-				Database: "database-1",
-				MgoColl:  "users",
-				MgoDocID: "doc-1",
-				OpType:   events.StoreOperationInsert,
-				ClusterTime: events.ClusterTime{
-					T: 100,
-					I: 1,
-				},
-				Timestamp: 1234567890,
-			},
-			wantErr: false,
-		},
-		{
-			name:    "event with full document",
-			backend: "backend-2",
-			event: &events.StoreChangeEvent{
-				EventID:      "evt-456",
-				OpType:       events.StoreOperationUpdate,
-				FullDocument: &storage.StoredDoc{Data: map[string]any{"name": "test", "value": 123}},
-			},
-			wantErr: false,
-		},
-		{
-			name:    "event with update description",
-			backend: "backend-3",
-			event: &events.StoreChangeEvent{
-				EventID: "evt-789",
-				OpType:  events.StoreOperationUpdate,
-				UpdateDesc: &events.UpdateDescription{
-					UpdatedFields: map[string]any{"name": "new"},
-				},
-			},
-			wantErr: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := server.convertEvent(tt.backend, tt.event)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("convertEvent() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if err != nil {
-				return
-			}
-
-			if result.EventId != tt.event.EventID {
-				t.Errorf("Id = %v, want %v", result.EventId, tt.event.EventID)
-			}
-			if result.Database != tt.event.Database {
-				t.Errorf("Database = %v, want %v", result.Database, tt.event.Database)
-			}
-			if result.MgoColl != tt.event.MgoColl {
-				t.Errorf("Collection = %v, want %v", result.MgoColl, tt.event.MgoColl)
-			}
-			if result.MgoDocId != tt.event.MgoDocID {
-				t.Errorf("DocumentId = %v, want %v", result.MgoDocId, tt.event.MgoDocID)
-			}
-			if result.OpType != string(tt.event.OpType) {
-				t.Errorf("OperationType = %v, want %v", result.OpType, string(tt.event.OpType))
-			}
-			if result.Timestamp != tt.event.Timestamp {
-				t.Errorf("Timestamp = %v, want %v", result.Timestamp, tt.event.Timestamp)
-			}
-			if result.ClusterTime.T != tt.event.ClusterTime.T {
-				t.Errorf("ClusterTime.T = %v, want %v", result.ClusterTime.T, tt.event.ClusterTime.T)
-			}
-			if result.ClusterTime.I != tt.event.ClusterTime.I {
-				t.Errorf("ClusterTime.I = %v, want %v", result.ClusterTime.I, tt.event.ClusterTime.I)
-			}
-		})
-	}
-}
-
-func TestServer_Shutdown_NotInitialized_Noop(t *testing.T) {
-	t.Parallel()
-	cfg := config.GRPCConfig{}
-	source := &mockEventSource{}
-	server := NewServer(cfg, source, nil)
-
-	// Shutdown before Init should be safe (noop)
+	assert.Equal(t, 1, server.SubscriberCount())
+	err := server.Subscribe(&pullerv1.SubscribeRequest{}, &streamFixture{ctx: ctx})
+	assert.Equal(t, codes.ResourceExhausted, status.Code(err))
 	server.Shutdown()
-}
-
-func TestServer_Shutdown_Initialized(t *testing.T) {
-	t.Parallel()
-	cfg := config.GRPCConfig{}
-	source := &mockEventSource{}
-	server := NewServer(cfg, source, nil)
-
-	// Init the server
-	server.Init()
-
-	// Add some subscribers
-	sub1 := core.NewSubscriber("consumer-1", nil, false, 100)
-	sub2 := core.NewSubscriber("consumer-2", nil, false, 100)
-	server.subs.Add(sub1)
-	server.subs.Add(sub2)
-
-	// Shutdown
-	server.Shutdown()
-
-	// Verify subscribers were closed
-	if server.subs.Count() != 0 {
-		t.Errorf("subscriber count = %d, want 0", server.subs.Count())
+	select {
+	case err := <-done:
+		assert.Equal(t, codes.Unavailable, status.Code(err))
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
 	}
-}
-
-func TestProgressMarker_SetPosition_NilPositions(t *testing.T) {
-	t.Parallel()
-	pm := &cursor.ProgressMarker{Positions: nil}
-	pm.SetPosition("backend-1", "evt-123")
-
-	if pm.Positions == nil {
-		t.Error("Positions should be initialized")
-	}
-	if pm.Positions["backend-1"] != "evt-123" {
-		t.Error("Position should be set")
-	}
-}
-
-func TestProgressMarker_GetPosition_NilPositions(t *testing.T) {
-	t.Parallel()
-	pm := &cursor.ProgressMarker{Positions: nil}
-	pos := pm.GetPosition("backend-1")
-
-	if pos != "" {
-		t.Errorf("GetPosition() = %q, want empty string", pos)
-	}
-}
-
-func TestProgressMarker_Clone_Nil(t *testing.T) {
-	t.Parallel()
-	var pm *cursor.ProgressMarker
-	clone := pm.Clone()
-
-	if clone == nil {
-		t.Error("Clone() of nil should return empty marker")
-	}
-	if clone.Positions == nil {
-		t.Error("Cloned marker should have initialized Positions")
-	}
-}
-
-func TestServer_SendHeartbeat(t *testing.T) {
-	t.Parallel()
-	cfg := config.GRPCConfig{
-		HeartbeatInterval: 100 * time.Millisecond,
-	}
-	source := &mockEventSource{}
-	server := NewServer(cfg, source, nil)
-
-	// Create a mock stream
-	sentEvents := make([]*mockSentEvent, 0)
-	mockStream := &mockSubscribeStream{
-		sentEvents: &sentEvents,
-	}
-
-	// Create a subscriber with some progress
-	initialProgress := &cursor.ProgressMarker{
-		Positions: map[string]string{"backend-1": "evt-123"},
-	}
-	sub := core.NewSubscriber("test-consumer", initialProgress, false, 100)
-
-	// Send heartbeat
-	err := server.sendHeartbeat(mockStream, sub)
-	if err != nil {
-		t.Fatalf("sendHeartbeat() error = %v", err)
-	}
-
-	// Verify heartbeat was sent
-	if len(sentEvents) != 1 {
-		t.Fatalf("Expected 1 sent event, got %d", len(sentEvents))
-	}
-
-	// Verify it's a heartbeat (nil ChangeEvent)
-	if sentEvents[0].event.ChangeEvent != nil {
-		t.Error("Heartbeat should have nil ChangeEvent")
-	}
-
-	// Progress should be present since we have positions
-	if sentEvents[0].event.Progress == "" {
-		t.Error("Heartbeat should have Progress marker when subscriber has positions")
-	}
-}
-
-func TestServer_SendHeartbeat_EmptyProgress(t *testing.T) {
-	t.Parallel()
-	cfg := config.GRPCConfig{}
-	source := &mockEventSource{}
-	server := NewServer(cfg, source, nil)
-
-	// Create a mock stream
-	sentEvents := make([]*mockSentEvent, 0)
-	mockStream := &mockSubscribeStream{
-		sentEvents: &sentEvents,
-	}
-
-	// Create a subscriber with no progress (fresh subscriber)
-	sub := core.NewSubscriber("test-consumer", nil, false, 100)
-
-	// Send heartbeat
-	err := server.sendHeartbeat(mockStream, sub)
-	if err != nil {
-		t.Fatalf("sendHeartbeat() error = %v", err)
-	}
-
-	// Verify heartbeat was sent
-	if len(sentEvents) != 1 {
-		t.Fatalf("Expected 1 sent event, got %d", len(sentEvents))
-	}
-
-	// Verify it's a heartbeat (nil ChangeEvent)
-	if sentEvents[0].event.ChangeEvent != nil {
-		t.Error("Heartbeat should have nil ChangeEvent")
-	}
-	// Empty progress is valid for fresh subscribers
-}
-
-func TestServer_HeartbeatIntervalDefault(t *testing.T) {
-	t.Parallel()
-	cfg := config.GRPCConfig{
-		HeartbeatInterval: 0, // Not set, should default to 30s
-	}
-	source := &mockEventSource{}
-	server := NewServer(cfg, source, nil)
-
-	// Verify config is stored
-	if server.cfg.HeartbeatInterval != 0 {
-		t.Error("HeartbeatInterval should be 0 in config (default applied at runtime)")
-	}
-}
-
-func TestServer_SendHeartbeat_Error(t *testing.T) {
-	t.Parallel()
-	cfg := config.GRPCConfig{}
-	source := &mockEventSource{}
-	server := NewServer(cfg, source, slog.Default())
-
-	sub := core.NewSubscriber("test-consumer", nil, false, 100)
-
-	// Use a stream that returns an error on Send
-	mockStream := &mockErrorStream{
-		err: errors.New("send failed"),
-	}
-
-	err := server.sendHeartbeat(mockStream, sub)
-	if err == nil {
-		t.Fatal("sendHeartbeat() should return error when stream.Send fails")
-	}
-	if err.Error() != "send failed" {
-		t.Errorf("sendHeartbeat() error = %v, want 'send failed'", err)
-	}
-}
-
-type mockErrorStream struct {
-	pullerv1.PullerService_SubscribeServer
-	err error
-}
-
-func (m *mockErrorStream) Send(evt *pullerv1.PullerEvent) error {
-	return m.err
-}
-
-func (m *mockErrorStream) Context() context.Context {
-	return context.Background()
-}
-
-type mockSentEvent struct {
-	event *pullerv1.PullerEvent
-}
-
-type mockSubscribeStream struct {
-	pullerv1.PullerService_SubscribeServer
-	sentEvents *[]*mockSentEvent
-	ctx        context.Context
-}
-
-func (m *mockSubscribeStream) Send(evt *pullerv1.PullerEvent) error {
-	*m.sentEvents = append(*m.sentEvents, &mockSentEvent{event: evt})
-	return nil
-}
-
-func (m *mockSubscribeStream) Context() context.Context {
-	if m.ctx != nil {
-		return m.ctx
-	}
-	return context.Background()
+	assert.Zero(t, server.SubscriberCount())
+	assert.EqualValues(t, 1, sub.closed.Load())
+	assert.Equal(t, codes.Unavailable, status.Code(server.Subscribe(&pullerv1.SubscribeRequest{}, &streamFixture{ctx: ctx})))
 }

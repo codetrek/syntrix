@@ -2,6 +2,7 @@ package streamer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,8 @@ import (
 	"github.com/google/uuid"
 	pb "github.com/syntrixbase/syntrix/api/gen/streamer/v1"
 	"github.com/syntrixbase/syntrix/pkg/model"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // subscriptionInfo stores subscription details for recovery on reconnect.
@@ -29,8 +32,10 @@ type remoteStream struct {
 	client     *streamerClient
 	logger     *slog.Logger
 
-	closedMu sync.Mutex
-	closed   bool
+	closedMu    sync.Mutex
+	closed      bool
+	terminal    chan struct{}
+	terminalErr error
 
 	// Connection state
 	state   ConnectionState
@@ -63,9 +68,10 @@ func (rs *remoteStream) Subscribe(database, collection string, filters []model.F
 	rs.ensureRecvLoop()
 
 	rs.closedMu.Lock()
-	if rs.closed {
+	if rs.closed || rs.terminalErr != nil {
+		err := rs.closedErrorLocked()
 		rs.closedMu.Unlock()
-		return "", io.EOF
+		return "", err
 	}
 	rs.closedMu.Unlock()
 
@@ -115,15 +121,20 @@ func (rs *remoteStream) Subscribe(database, collection string, filters []model.F
 		return resp.SubscriptionId, nil
 	case <-rs.ctx.Done():
 		return "", rs.ctx.Err()
+	case <-rs.terminal:
+		rs.closedMu.Lock()
+		defer rs.closedMu.Unlock()
+		return "", rs.terminalErr
 	}
 }
 
 // Unsubscribe removes a subscription by ID.
 func (rs *remoteStream) Unsubscribe(subscriptionID string) error {
 	rs.closedMu.Lock()
-	if rs.closed {
+	if rs.closed || rs.terminalErr != nil {
+		err := rs.closedErrorLocked()
 		rs.closedMu.Unlock()
-		return io.EOF
+		return err
 	}
 	rs.closedMu.Unlock()
 
@@ -177,6 +188,13 @@ func (rs *remoteStream) Close() error {
 	return nil
 }
 
+func (rs *remoteStream) closedErrorLocked() error {
+	if rs.terminalErr != nil {
+		return rs.terminalErr
+	}
+	return io.EOF
+}
+
 // State returns the current connection state.
 func (rs *remoteStream) State() ConnectionState {
 	rs.stateMu.RLock()
@@ -218,6 +236,7 @@ func (rs *remoteStream) notifyStateWithError(state ConnectionState, err error) {
 func (rs *remoteStream) ensureRecvLoop() {
 	rs.recvOnce.Do(func() {
 		rs.recvChan = make(chan *EventDelivery, 100)
+		rs.terminal = make(chan struct{})
 		rs.pendingSubscribes = make(map[string]chan *pb.SubscribeResponse)
 		rs.heartbeatStop = make(chan struct{})
 		rs.updateLastMessageTime()
@@ -263,6 +282,16 @@ func (rs *remoteStream) recvLoop() {
 				return
 			}
 			rs.closedMu.Unlock()
+
+			if status.Code(err) == codes.FailedPrecondition {
+				rs.closedMu.Lock()
+				rs.terminalErr = err
+				close(rs.terminal)
+				rs.closedMu.Unlock()
+				rs.recvErr = errors.Join(err, rs.Close())
+				rs.notifyStateWithError(StateDisconnected, rs.recvErr)
+				return
+			}
 
 			// Attempt reconnect
 			if !rs.reconnect() {

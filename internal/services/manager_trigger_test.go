@@ -25,8 +25,9 @@ import (
 // mockTriggerPuller implements puller.LocalService for testing
 type mockTriggerPuller struct{}
 
-func (m *mockTriggerPuller) Subscribe(ctx context.Context, consumerID string, after string) <-chan *puller.Event {
-	return nil
+func (m *mockTriggerPuller) Err() error { return nil }
+func (m *mockTriggerPuller) Subscribe(ctx context.Context, opts puller.SubscribeOptions) (puller.Subscription, error) {
+	return idlePullerSubscription{}, nil
 }
 func (m *mockTriggerPuller) AddBackend(name string, client *mongo.Client, dbName string, cfg puller_config.PullerBackendConfig) error {
 	return nil
@@ -34,11 +35,6 @@ func (m *mockTriggerPuller) AddBackend(name string, client *mongo.Client, dbName
 func (m *mockTriggerPuller) Start(context.Context) error { return nil }
 func (m *mockTriggerPuller) Stop(context.Context) error  { return nil }
 func (m *mockTriggerPuller) BackendNames() []string      { return nil }
-func (m *mockTriggerPuller) SetEventHandler(handler func(ctx context.Context, backendName string, event *puller.ChangeEvent) error) {
-}
-func (m *mockTriggerPuller) Replay(ctx context.Context, after map[string]string, streaming bool) (puller.Iterator, error) {
-	return nil, nil
-}
 
 // setupTriggerTestFactories saves and restores all trigger-related factories
 func setupTriggerTestFactories(t *testing.T) func() {

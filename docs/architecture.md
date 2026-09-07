@@ -1,67 +1,61 @@
 # Syntrix Architecture
 
-Syntrix is a realtime backend-as-a-service platform designed for high scalability and low latency. It follows a microservices-oriented architecture where components can be deployed together (monolithic mode) or separately.
+Syntrix is a realtime document database whose Go services can run together with
+direct calls or separately through gRPC. MongoDB stores documents; PostgreSQL
+stores user and database metadata. Gateway exposes REST, WebSocket, and SSE.
 
-## System Overview
+## Services
 
-The system consists of the following core services:
+| Service | Responsibility |
+|---|---|
+| Gateway | Authentication, authorization, HTTP requests, and client connections |
+| Query | CRUD and query execution over storage and secondary indexes |
+| Indexer | Maintain derived secondary indexes from Puller events |
+| Puller | Durably order MongoDB changes and serve live delivery and replay |
+| Streamer | Match events to subscriptions and route them to gateways |
+| Trigger evaluator | Evaluate CEL rules and publish matched delivery tasks |
+| Trigger delivery | Execute Webhooks from the configured PubSub queue |
 
-1. **API Gateway**: The entry point for client REST requests. It handles authentication (future), validation, and routing to the Query Service.
-2. **Query Service**: The central brain for data operations. It abstracts the storage layer and provides a unified interface for CRUD and complex queries.
-3. **Indexer** - Secondary index service that subscribes to change events from Puller and maintains in-memory indexes for accelerated query execution.
-4. **Puller** - Realtime change puller, subscribe changes from storage and fanout to consumers.
-5. **Streamer** - Realtime watch processor.
-6. **Trigger Service**: A server-side event reaction system. It evaluates database changes against user-defined rules (CEL) and executes Webhooks via a durable queue (NATS).
+## Data paths
 
-## Arch Overview
+```text
+CRUD:
+Client -> Gateway -> Query -> Storage -> MongoDB
+                       |
+                       +-> Indexer (indexed queries)
 
-![Arch Overview](./_img/architecture.drawio.png)
-
-## Data Flow
-
-### 1. Request Path (CRUD)
-
-```mermaid
-graph LR
-    Client -->|HTTP| API_Gateway
-    API_Gateway -->|RPC/Direct| Query_Service
-    Query_Service -->|Driver| MongoDB
+Changes:
+MongoDB -> Puller -> Sync Pebble commit -> committed memory publication
+                                              |
+                         +--------------------+--------------------+
+                         |                    |                    |
+                         v                    v                    v
+                      Indexer              Streamer        Trigger evaluator
+                                              |                    |
+                                              v                    v
+                                           Gateway               PubSub
+                                              |                    |
+                                              v                    v
+                                         WS/SSE client       Delivery worker
+                                                                   |
+                                                                   v
+                                                                Webhook
 ```
 
-### 2. Realtime Path
+Puller consumers receive live events from memory after synchronous persistence.
+Saved source/generation/sequence progress enables bounded Pebble replay through
+one shared local/gRPC subscription state machine. History expiry or source
+continuity loss produces an explicit failure. Puller durability does not imply
+durable external-client delivery or exactly-once Webhook effects.
 
-```mermaid
-graph LR
-    NATS[(NATS Jetstream)]
+## Deployment and limits
 
-    MongoDB -->|Change Stream| Puller
-    Puller -->|Events| Streamer
-    Streamer -->|Pub| NATS
-    NATS -->|Sub| Gateway
-    Gateway -->|WebSocket/SSE| Client
-```
+Standalone uses direct service calls and in-memory PubSub. Distributed services
+use gRPC, with NATS for Trigger queues. A unified server owns network listeners;
+service adapters register against it.
 
-### 3. Trigger Path
-
-```mermaid
-graph LR
-    MongoDB -->|Change Stream| Trigger_Evaluator
-    Trigger_Evaluator -->|Match?| NATS[NATS JetStream]
-    NATS -->|Task| Trigger_Worker
-    Trigger_Worker -->|HTTP| External_Webhook
-```
-
-## Deployment Modes
-
-Syntrix supports flexible deployment via the `Service Manager`:
-
-- **Monolithic (Dev/Test)**: All services run in a single process.
-- **Microservices (Prod)**: Services run in separate processes/containers, communicating via HTTP/RPC and NATS.
-
-## Technology Stack
-
-- **Language**: Go (Golang) 1.23+
-- **Storage**: MongoDB (Primary Data Store)
-- **Messaging**: NATS JetStream (Durable Queues for Triggers)
-- **Realtime**: WebSocket / Server-Sent Events (SSE)
-- **Logic Engine**: Google CEL (Common Expression Language)
+Indexer rebuild integration, Streamer durable restart progress, Trigger outbox,
+and external-client resynchronization retain separate ownership. See the
+[server architecture](design/server/01.architecture.md),
+[Puller architecture](design/server/puller/01.architecture.md), and
+[documentation guide](README.md) for implemented contracts and remaining work.

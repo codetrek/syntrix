@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/stretchr/testify/require"
 )
 
 // mockDB is a mock implementation of the DB interface for testing error paths.
@@ -18,15 +19,17 @@ type mockDB struct {
 	batches []*mockBatch
 
 	// Error injection
-	getErr      error
-	setErr      error
-	deleteErr   error
-	newIterErr  error
-	closeErr    error
-	iterError   error // Error returned by Iterator.Error()
-	batchSetErr error // Error for batch.Set
-	batchDelErr error // Error for batch.Delete
-	commitErr   error // Error for batch.Commit
+	getErr        error
+	setErr        error
+	deleteErr     error
+	newIterErr    error
+	closeErr      error
+	iterError     error // Error returned by Iterator.Error()
+	batchSetErr   error // Error for batch.Set
+	batchDelErr   error // Error for batch.Delete
+	commitErr     error // Error for batch.Commit
+	commitStarted chan struct{}
+	commitGate    chan struct{}
 }
 
 func newMockDB() *mockDB {
@@ -119,12 +122,16 @@ func (m *mockDB) NewBatch() Batch {
 	defer m.mu.Unlock()
 
 	b := &mockBatch{
-		parent:    m,
-		ops:       make([]batchOp, 0),
-		setErr:    m.batchSetErr,
-		deleteErr: m.batchDelErr,
-		commitErr: m.commitErr,
+		parent:        m,
+		ops:           make([]batchOp, 0),
+		setErr:        m.batchSetErr,
+		deleteErr:     m.batchDelErr,
+		commitErr:     m.commitErr,
+		commitStarted: m.commitStarted,
+		commitGate:    m.commitGate,
 	}
+	m.commitStarted = nil
+	m.commitGate = nil
 	m.batches = append(m.batches, b)
 	return b
 }
@@ -192,12 +199,14 @@ type batchOp struct {
 
 // mockBatch implements Batch for testing.
 type mockBatch struct {
-	parent    *mockDB
-	ops       []batchOp
-	setErr    error
-	deleteErr error
-	commitErr error
-	closed    bool
+	parent        *mockDB
+	ops           []batchOp
+	setErr        error
+	deleteErr     error
+	commitErr     error
+	commitStarted chan struct{}
+	commitGate    chan struct{}
+	closed        bool
 }
 
 func (b *mockBatch) Set(key, value []byte, opt *pebble.WriteOptions) error {
@@ -217,6 +226,10 @@ func (b *mockBatch) Delete(key []byte, opt *pebble.WriteOptions) error {
 }
 
 func (b *mockBatch) Commit(o *pebble.WriteOptions) error {
+	if b.commitStarted != nil {
+		close(b.commitStarted)
+		<-b.commitGate
+	}
 	if b.commitErr != nil {
 		return b.commitErr
 	}
@@ -250,6 +263,7 @@ func newMockPebbleStore(db *mockDB) *PebbleStore {
 		pendingIndexDeletes: make(map[string]indexDeleteOp),
 		notifyCh:            make(chan struct{}, 1),
 		closeCh:             make(chan struct{}),
+		failed:              make(chan struct{}),
 		flushDoneCh:         make(chan struct{}, 1),
 		batchSize:           100,
 		batchInterval:       50 * time.Millisecond,
@@ -772,4 +786,115 @@ func TestDeleteDatabaseWithDeleteIndexMultipleErrors(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected no error (errors should be logged), got: %v", err)
 	}
+}
+
+func TestBatchFailureFencesLaterCheckpoint(t *testing.T) {
+	for _, failure := range []string{"operation", "commit"} {
+		t.Run(failure, func(t *testing.T) {
+			db := newMockDB()
+			s := newMockPebbleStore(db)
+			require.NoError(t, s.Upsert("db", "docs", "index", "first", []byte{1}, "p1"))
+			s.doFlush()
+			require.NoError(t, s.Err())
+			cause := errors.New("injected disk failure")
+			if failure == "operation" {
+				db.batchSetErr = cause
+			} else {
+				db.commitErr = cause
+			}
+			require.NoError(t, s.Upsert("db", "docs", "index", "second", []byte{2}, ""))
+			require.NoError(t, s.SaveProgress("p2"))
+			s.doFlush()
+			require.ErrorIs(t, s.Err(), cause)
+			require.ErrorIs(t, s.Flush(), cause)
+			select {
+			case <-s.Failed():
+			default:
+				t.Fatal("write failure did not wake consumers")
+			}
+			require.ErrorIs(t, s.Upsert("db", "docs", "index", "third", []byte{3}, "p3"), cause)
+			require.ErrorIs(t, s.Delete("db", "docs", "index", "first", "p3"), cause)
+			require.ErrorIs(t, s.SaveProgress("p3"), cause)
+			before := len(db.batches)
+			s.doFlush()
+			require.Len(t, db.batches, before)
+			require.Equal(t, "p1", string(db.data[keyProgress]))
+			require.ErrorIs(t, s.Close(), cause)
+		})
+	}
+}
+
+func TestProgressOnlyBatchPersists(t *testing.T) {
+	s, cleanup := setupTestStore(t)
+	defer cleanup()
+	require.NoError(t, s.SaveProgress("completed-empty-window"))
+	require.NoError(t, s.Flush())
+	value, closer, err := s.db.Get([]byte(keyProgress))
+	require.NoError(t, err)
+	defer closer.Close()
+	require.Equal(t, "completed-empty-window", string(value))
+}
+
+func TestFlushWaitsForProgressOnlySync(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(map[bool]string{false: "success", true: "failure"}[fail], func(t *testing.T) {
+			db := newMockDB()
+			started, release := make(chan struct{}), make(chan struct{})
+			db.commitStarted, db.commitGate = started, release
+			cause := errors.New("sync failed")
+			if fail {
+				db.commitErr = cause
+			}
+			s := newMockPebbleStore(db)
+			require.NoError(t, s.SaveProgress("p1"))
+			commitDone := make(chan struct{})
+			go func() { s.doFlush(); close(commitDone) }()
+			<-started
+			flushDone := make(chan error, 1)
+			go func() { flushDone <- s.Flush() }()
+			select {
+			case err := <-flushDone:
+				close(release)
+				<-commitDone
+				t.Fatalf("Flush returned before Sync completed: %v", err)
+			case <-time.After(20 * time.Millisecond):
+			}
+			close(release)
+			<-commitDone
+			select {
+			case err := <-flushDone:
+				if fail {
+					require.ErrorIs(t, err, cause)
+				} else {
+					require.NoError(t, err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("Flush did not observe Sync completion")
+			}
+		})
+	}
+}
+
+func TestIndexRemovalStaysHiddenUntilCommitCompletes(t *testing.T) {
+	db := newMockDB()
+	s := newMockPebbleStore(db)
+	require.NoError(t, s.Upsert("db", "docs", "index", "first", []byte{1}, "p1"))
+	s.doFlush()
+	started, release := make(chan struct{}), make(chan struct{})
+	db.commitStarted, db.commitGate = started, release
+	require.NoError(t, s.DeleteIndex("db", "docs", "index"))
+	done := make(chan struct{})
+	go func() { s.doFlush(); close(done) }()
+	<-started
+	indexes, err := s.ListIndexes("db")
+	require.NoError(t, err)
+	require.Empty(t, indexes)
+	_, found := s.Get("db", "docs", "index", "first")
+	require.False(t, found)
+	close(release)
+	<-done
+	require.NoError(t, s.Flush())
+	indexes, err = s.ListIndexes("db")
+	require.NoError(t, err)
+	require.Empty(t, indexes)
 }

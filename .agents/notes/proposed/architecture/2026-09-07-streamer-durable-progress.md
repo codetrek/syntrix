@@ -5,16 +5,16 @@ Status: proposed
 ## Problem
 
 The [Streamer requirements](../../../../docs/design/server/streamer/00.requirements.md)
-require replay after restart. In [the service](../../../../internal/streamer/service.go),
-`s.progress = evt.Progress` updates process memory, and startup passes that field
-to Puller without loading durable state. The assignment also follows failed
-transformation or processing. Static inspection therefore shows an incomplete
-restart contract and a checkpoint ordering problem.
+require replay after restart. The [service](../../../../internal/streamer/service.go)
+now advances in-memory progress only after successful processing and closes its
+owned gateway streams on terminal upstream failure. It still does not load or
+persist that marker, so a new process subscribes with an empty start marker and
+cannot replay the work missed across restart.
 
-Subscriptions intentionally remain soft state. Gateway re-registration is
-implemented in [the remote stream](../../../../internal/streamer/remote_stream.go).
-A persisted ingestion marker cannot recover subscriptions or prove delivery to
-disconnected clients.
+Subscriptions remain soft state. Gateway re-registration is implemented in
+[the remote stream](../../../../internal/streamer/remote_stream.go), but it does
+not establish event continuity for disconnected clients. Durable ingestion
+progress and end-client recovery have separate responsibilities.
 
 ## Proposal
 
@@ -69,8 +69,8 @@ must survive deployment changes without allowing concurrent writers.
 
 ## Dependencies
 
-[Local replay](2026-09-07-local-puller-subscription-replay.md) and
-[history-gap recovery](2026-09-07-puller-history-gap-recovery.md) provide upstream
+[Local replay](../../implemented/architecture/2026-09-07-local-puller-subscription-replay.md) and
+[history-gap recovery](../../implemented/architecture/2026-09-07-puller-history-gap-recovery.md) provide upstream
 recovery. [Client resume](../feature/2026-09-07-realtime-client-resume.md) owns
 downstream continuity; [consumer scaling](2026-09-07-consumer-shard-scaling.md)
 owns future ownership transfer.

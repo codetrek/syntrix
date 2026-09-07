@@ -26,6 +26,11 @@ type Store interface {
 	// Checkpoint for event progress
 	// LoadProgress loads the last saved progress marker.
 	LoadProgress() (string, error)
+	// SaveProgress joins the ordered write batch after all changes for an event.
+	SaveProgress(progress string) error
+	// Failed closes when an asynchronous write fails; memory stores return nil.
+	Failed() <-chan struct{}
+	Err() error
 
 	// Lifecycle
 	Flush() error

@@ -76,21 +76,26 @@ trigger:
 
 puller:
   grpc:
-    address: ":50051"
     max_connections: 100
     channel_size: 10000
   backends:
     - name: "default_mongo"
+      source_id: "default-mongo"
       collections: ["documents"]
   buffer:
     path: "puller/events"      # Relative to data_dir
     max_size: "10GiB"
-    batch_size: 100
-    batch_interval: 100ms
+    batch_size: 100          # Maximum events per durable batch
+    batch_interval: 100ms    # Oldest admitted event batching deadline
     queue_size: 10000
+    queue_bytes: 67108864    # 64 MiB across pending, committing, and publication
+    batch_bytes: 16777216    # 16 MiB encoded batch maximum
   consumer:
     catch_up_threshold: 100000
     coalesce_on_catch_up: true
+    queue_bytes: 67108864    # Per-subscription live queue budget
+    page_size: 100
+    page_bytes: 16777216     # Replay page payload budget
   cleaner:
     interval: 1m
     retention: 1h

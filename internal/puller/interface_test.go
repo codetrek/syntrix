@@ -140,34 +140,3 @@ func TestStartHealthServer(t *testing.T) {
 		_ = StartHealthServer(ctx, "localhost:0", hc)
 	}()
 }
-
-func TestNewGRPCServerWithInit(t *testing.T) {
-	t.Parallel()
-	cfg := config.GRPCConfig{
-		MaxConnections: 100,
-	}
-	svc := NewService(config.Config{}, nil)
-
-	server := NewGRPCServerWithInit(cfg, svc, nil)
-	if server == nil {
-		t.Fatal("NewGRPCServerWithInit() returned nil")
-	}
-
-	// Verify Init and Shutdown methods exist and work
-	server.Init()
-	server.Shutdown()
-}
-
-func TestNewGRPCServerWithInit_WithLogger(t *testing.T) {
-	t.Parallel()
-	cfg := config.GRPCConfig{
-		MaxConnections: 100,
-	}
-	svc := NewService(config.Config{}, nil)
-	logger := slog.Default()
-
-	server := NewGRPCServerWithInit(cfg, svc, logger)
-	if server == nil {
-		t.Fatal("NewGRPCServerWithInit() with logger returned nil")
-	}
-}

@@ -13,6 +13,7 @@ import (
 	pb "github.com/syntrixbase/syntrix/api/gen/streamer/v1"
 	"github.com/syntrixbase/syntrix/internal/helper"
 	"github.com/syntrixbase/syntrix/internal/puller"
+	pullerclient "github.com/syntrixbase/syntrix/internal/puller/client"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
 	celengine "github.com/syntrixbase/syntrix/internal/streamer/cel"
 	"github.com/syntrixbase/syntrix/internal/streamer/manager"
@@ -78,10 +79,15 @@ type streamerService struct {
 
 	// Puller integration (created internally on Start)
 	pullerClient puller.Service
-	progress     string // last processed progress marker
+	progress     string
+
+	lifecycleMu sync.Mutex
+	started     bool
+	consumeDone chan struct{}
+	cleanupErr  error
 
 	ctx    context.Context
-	cancel context.CancelFunc
+	cancel context.CancelCauseFunc
 
 	logger *slog.Logger
 }
@@ -107,7 +113,7 @@ func NewService(config ServerConfig, logger *slog.Logger, opts ...ServiceConfigO
 		return nil, fmt.Errorf("failed to create CEL compiler: %w", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 
 	return &streamerService{
 		config:  config,
@@ -128,6 +134,11 @@ func (s *streamerService) Stream(ctx context.Context) (Stream, error) {
 	ls := newLocalStream(ctx, gatewayID, s)
 
 	s.streamsMu.Lock()
+	if err := s.Err(); err != nil {
+		s.streamsMu.Unlock()
+		ls.closeWithError(err)
+		return nil, err
+	}
 	s.streams[gatewayID] = ls
 	s.streamsMu.Unlock()
 
@@ -142,81 +153,136 @@ func (s *streamerService) Stream(ctx context.Context) (Stream, error) {
 
 // Start begins the streamer service, connecting to Puller and consuming events.
 func (s *streamerService) Start(ctx context.Context) error {
-	// Use pre-configured client if available (e.g., for testing)
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if err := s.Err(); err != nil {
+		return err
+	}
+	if s.started {
+		return errors.New("streamer already started")
+	}
+
+	var ownedClient *pullerclient.Client
 	if s.config.pullerClient != nil {
 		s.pullerClient = s.config.pullerClient
 	} else if s.config.PullerAddr != "" {
-		// Create Puller client from address
-		s.logger.Info("Streamer service starting, connecting to Puller", "addr", s.config.PullerAddr)
-		pullerClient, err := puller.NewClient(s.config.PullerAddr, s.logger)
+		client, err := pullerclient.New(s.config.PullerAddr, s.logger)
 		if err != nil {
-			return fmt.Errorf("failed to create puller client: %w", err)
+			return fmt.Errorf("create puller client: %w", err)
 		}
-		s.pullerClient = pullerClient
+		s.pullerClient = client
+		ownedClient = client
 	}
 
-	// If no Puller client configured, run in standalone mode
 	if s.pullerClient == nil {
-		s.logger.Info("Streamer service starting without Puller (standalone mode)")
+		s.started = true
 		return nil
 	}
 
-	// Subscribe to events (auto-reconnects on failures)
-	eventChan := s.pullerClient.Subscribe(ctx, "streamer", s.progress)
+	consumeCtx, cancel := context.WithCancelCause(s.ctx)
+	stopCancellation := context.AfterFunc(ctx, func() { cancel(context.Cause(ctx)) })
+	subscription, err := s.pullerClient.Subscribe(consumeCtx, puller.SubscribeOptions{
+		ConsumerID: "streamer",
+		After:      s.progress,
+	})
+	if err != nil {
+		stopCancellation()
+		cancel(err)
+		if ownedClient != nil {
+			err = errors.Join(err, ownedClient.Close())
+		}
+		err = fmt.Errorf("subscribe to puller: %w", err)
+		s.terminate(err)
+		return err
+	}
 
-	go s.consumePullerEvents(ctx, eventChan)
-	s.logger.Info("Started consuming from Puller")
+	s.started = true
+	s.consumeDone = make(chan struct{})
+	go func() {
+		defer close(s.consumeDone)
+		defer stopCancellation()
+		defer cancel(context.Canceled)
+		defer func() {
+			err := subscription.Close()
+			if ownedClient != nil {
+				err = errors.Join(err, ownedClient.Close())
+			}
+			s.cleanupErr = err
+			if err != nil {
+				s.logger.Error("Failed to close Puller resources", "error", err)
+				s.terminate(fmt.Errorf("close puller resources: %w", err))
+			}
+		}()
+		s.consumePullerEvents(consumeCtx, subscription)
+	}()
 	return nil
 }
 
-// consumePullerEvents consumes events from Puller and processes them.
-func (s *streamerService) consumePullerEvents(ctx context.Context, eventChan <-chan *puller.Event) {
+func (s *streamerService) consumePullerEvents(ctx context.Context, subscription puller.Subscription) {
 	for {
-		select {
-		case <-ctx.Done():
-			s.logger.Info("Stopping Puller consumption")
+		evt, err := subscription.Next(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				s.terminate(context.Cause(ctx))
+			} else {
+				s.terminate(fmt.Errorf("consume puller event: %w", err))
+			}
 			return
-		case <-s.ctx.Done():
-			s.logger.Info("Stopping Puller consumption (service stopped)")
-			return
-		case evt, ok := <-eventChan:
-			if !ok {
-				s.logger.Info("Puller event channel closed")
+		}
+		if evt.Change != nil {
+			event, err := events.Transform(evt)
+			if err != nil && !errors.Is(err, events.ErrDeleteOPIgnored) {
+				s.terminate(fmt.Errorf("transform puller event %s: %w", evt.Change.EventID, err))
 				return
 			}
-			if evt.Change == nil {
-				continue // Skip events without change data
-			}
-
-			s.logger.Debug("Streamer: received event from puller",
-				"eventID", evt.Change.EventID,
-				"op", evt.Change.OpType,
-				"backend", evt.Change.Backend,
-			)
-
-			if event, err := events.Transform(evt); err == nil {
+			if err == nil {
 				if err := s.ProcessEvent(event); err != nil {
-					s.logger.Error("Failed to process event", "error", err, "eventID", evt.Change.EventID)
+					s.terminate(fmt.Errorf("process puller event %s: %w", evt.Change.EventID, err))
+					return
 				}
 			}
-			s.progress = evt.Progress
 		}
+		if err := context.Cause(ctx); err != nil {
+			s.terminate(err)
+			return
+		}
+		s.progress = evt.Progress
 	}
 }
 
-// Stop gracefully shuts down the streamer service.
-func (s *streamerService) Stop(ctx context.Context) error {
-	s.logger.Info("Streamer service stopping")
-	s.cancel()
+func (s *streamerService) Err() error { return context.Cause(s.ctx) }
 
+func (s *streamerService) Done() <-chan struct{} { return s.ctx.Done() }
+
+func (s *streamerService) terminate(err error) {
+	if s.Err() == nil && !errors.Is(err, context.Canceled) {
+		s.logger.Error("Streamer ingestion stopped", "error", err)
+	}
+	s.cancel(err)
 	s.streamsMu.Lock()
 	for id, ls := range s.streams {
-		ls.close()
+		ls.closeWithError(s.Err())
 		delete(s.streams, id)
+		s.manager.UnregisterGateway(id)
 	}
 	s.streamsMu.Unlock()
+}
 
-	return nil
+// Stop waits for the owned Puller subscription to release its resources.
+func (s *streamerService) Stop(ctx context.Context) error {
+	s.terminate(context.Canceled)
+	s.lifecycleMu.Lock()
+	done := s.consumeDone
+	s.lifecycleMu.Unlock()
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return s.cleanupErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // removeStream removes a stream from the service.
@@ -244,6 +310,11 @@ func (s *streamerService) GRPCStream(stream grpc.BidiStreamingServer[pb.GatewayM
 	gs := newGRPCStreamAdapter(stream.Context(), gatewayID, stream, s)
 
 	s.streamsMu.Lock()
+	if err := s.Err(); err != nil {
+		s.streamsMu.Unlock()
+		gs.localStream.closeWithError(err)
+		return err
+	}
 	s.streams[gatewayID] = gs.localStream
 	s.streamsMu.Unlock()
 	defer s.removeStream(gatewayID)
@@ -256,6 +327,9 @@ func (s *streamerService) GRPCStream(stream grpc.BidiStreamingServer[pb.GatewayM
 // Backpressure: Uses blocking send with timeout. If a gateway cannot accept
 // the event within the timeout, it is considered slow and will be disconnected.
 func (s *streamerService) ProcessEvent(event events.SyntrixChangeEvent) error {
+	if err := s.Err(); err != nil {
+		return err
+	}
 	if event.Document == nil {
 		return nil // Skip events without document
 	}
@@ -294,8 +368,10 @@ func (s *streamerService) ProcessEvent(event events.SyntrixChangeEvent) error {
 				"gatewayID", gatewayID,
 				"timeout", s.config.SendTimeout)
 			go s.removeStream(gatewayID)
+		case <-ls.ctx.Done():
+			continue
 		case <-s.ctx.Done():
-			return s.ctx.Err()
+			return s.Err()
 		}
 	}
 
@@ -331,6 +407,11 @@ var _ subscriptionHandler = (*streamerService)(nil)
 
 // subscribe implements subscriptionHandler for localStream.
 func (s *streamerService) subscribe(gatewayID, database, collection string, filters []model.Filter) (string, error) {
+	s.streamsMu.RLock()
+	defer s.streamsMu.RUnlock()
+	if err := s.Err(); err != nil {
+		return "", err
+	}
 	subID := uuid.New().String()
 	protoReq := &pb.SubscribeRequest{
 		SubscriptionId: subID,

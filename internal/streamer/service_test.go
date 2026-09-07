@@ -2,8 +2,12 @@ package streamer
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -540,186 +544,251 @@ func TestService_ProcessEvent_DeleteOperation(t *testing.T) {
 	assert.Equal(t, OperationDelete, delivery.Event.Operation)
 }
 
-// --- Puller Integration Tests ---
-
-// testPullerService is a mock puller.Service for testing Start() and consumePullerEvents.
 type testPullerService struct {
 	events      chan *puller.Event
-	subscribeOK bool
+	requests    chan struct{}
+	closed      chan struct{}
+	closeOnce   sync.Once
 	err         error
+	terminalErr error
+	closeErr    error
+	options     puller.SubscribeOptions
 }
 
 func newTestPullerService() *testPullerService {
 	return &testPullerService{
 		events:      make(chan *puller.Event, 10),
-		subscribeOK: true,
+		requests:    make(chan struct{}, 10),
+		closed:      make(chan struct{}),
+		terminalErr: io.EOF,
 	}
 }
 
-func (m *testPullerService) Subscribe(ctx context.Context, consumerID string, after string) <-chan *puller.Event {
+func (m *testPullerService) Subscribe(ctx context.Context, opts puller.SubscribeOptions) (puller.Subscription, error) {
 	if m.err != nil {
-		return nil
+		return nil, m.err
 	}
-	return m.events
+	m.options = opts
+	return m, nil
+}
+
+func (m *testPullerService) Next(ctx context.Context) (*puller.Event, error) {
+	m.requests <- struct{}{}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-m.closed:
+		return nil, io.EOF
+	case evt, ok := <-m.events:
+		if !ok {
+			return nil, m.terminalErr
+		}
+		return evt, nil
+	}
+}
+
+func (m *testPullerService) Close() error {
+	m.closeOnce.Do(func() { close(m.closed) })
+	return m.closeErr
+}
+
+func waitSignal(t *testing.T, signal <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for lifecycle signal")
+	}
 }
 
 func TestStart_WithMockPuller(t *testing.T) {
 	t.Parallel()
-	mockPuller := newTestPullerService()
-
-	s, err := NewService(ServerConfig{}, slog.Default(), WithPullerClient(mockPuller))
+	upstream := newTestPullerService()
+	s, err := NewService(ServerConfig{}, slog.Default(), WithPullerClient(upstream))
 	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	err = s.Start(ctx)
-	require.NoError(t, err)
-
-	// Give a moment for the goroutine to start
-	time.Sleep(10 * time.Millisecond)
+	t.Cleanup(func() { require.NoError(t, s.Stop(context.Background())) })
+	require.NoError(t, s.Start(context.Background()))
+	assert.Equal(t, puller.SubscribeOptions{ConsumerID: "streamer"}, upstream.options)
+	require.ErrorContains(t, s.Start(context.Background()), "already started")
 }
 
-// Note: TestStart_SubscribeError was removed because with the new auto-reconnect design,
-// Subscribe no longer returns an error. It returns a channel and handles reconnection internally.
+func TestStart_SubscribeFailure(t *testing.T) {
+	t.Parallel()
+	upstream := newTestPullerService()
+	upstream.err = errors.New("history expired")
+	s, err := NewService(ServerConfig{}, slog.Default(), WithPullerClient(upstream))
+	require.NoError(t, err)
+	stream, err := s.Stream(context.Background())
+	require.NoError(t, err)
+	require.ErrorIs(t, s.Start(context.Background()), upstream.err)
+	require.ErrorIs(t, s.Start(context.Background()), upstream.err)
+	waitSignal(t, getInternalService(s).Done())
+	_, err = stream.Recv()
+	require.ErrorIs(t, err, upstream.err)
+	_, err = s.Stream(context.Background())
+	require.ErrorIs(t, err, upstream.err)
+}
+
+func TestStop_PreservesSubscriptionCloseError(t *testing.T) {
+	upstream := newTestPullerService()
+	upstream.closeErr = errors.New("close subscription failed")
+	s, err := NewService(ServerConfig{}, slog.Default(), WithPullerClient(upstream))
+	require.NoError(t, err)
+	require.NoError(t, s.Start(context.Background()))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.ErrorIs(t, s.Stop(ctx), upstream.closeErr)
+	require.ErrorIs(t, s.Stop(ctx), upstream.closeErr)
+}
 
 func TestStart_StandaloneMode(t *testing.T) {
 	t.Parallel()
-	// No puller configured - standalone mode
 	s, err := NewService(ServerConfig{}, slog.Default())
 	require.NoError(t, err)
-
-	ctx := context.Background()
-	err = s.Start(ctx)
-	require.NoError(t, err)
+	require.NoError(t, s.Start(context.Background()))
+	require.NoError(t, s.Stop(context.Background()))
 }
 
-func TestStart_WithPullerAddr(t *testing.T) {
+func TestConsumePullerEvents_CheckpointAfterDelivery(t *testing.T) {
 	t.Parallel()
-	// Test that Start creates a puller client from address.
-	// gRPC connection is lazy, so NewClient won't fail even if server doesn't exist.
-	s, err := NewService(ServerConfig{
-		PullerAddr: "localhost:50051", // Server may not exist, but gRPC is lazy
-	}, slog.Default())
+	upstream := newTestPullerService()
+	s, err := NewService(ServerConfig{}, slog.Default(), WithPullerClient(upstream))
 	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Start should succeed because gRPC connection is lazy
-	err = s.Start(ctx)
+	t.Cleanup(func() { require.NoError(t, s.Stop(context.Background())) })
+	stream, err := s.Stream(context.Background())
 	require.NoError(t, err)
-
-	// Give time for background goroutine to start
-	time.Sleep(10 * time.Millisecond)
-}
-
-func TestConsumePullerEvents_ProcessEvent(t *testing.T) {
-	t.Parallel()
-	mockPuller := newTestPullerService()
-
-	s, err := NewService(ServerConfig{}, slog.Default(), WithPullerClient(mockPuller))
+	_, err = stream.Subscribe("database1", "users", nil)
 	require.NoError(t, err)
-
-	// Start the service
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	err = s.Start(ctx)
-	require.NoError(t, err)
-
-	// Send an event through the mock puller
-	testEvent := &puller.Event{
+	require.NoError(t, s.Start(context.Background()))
+	waitSignal(t, upstream.requests)
+	upstream.events <- &puller.Event{
 		Change: &events.StoreChangeEvent{
-			EventID:  "evt-1",
-			MgoColl:  "test-topic",
-			MgoDocID: "doc-1",
-			OpType:   events.StoreOperationInsert,
+			EventID:      "event-1",
+			Database:     "database1",
+			OpType:       events.StoreOperationInsert,
+			FullDocument: testStoredDoc("users", "doc1", "database1", nil),
 		},
-		Progress: "progress-1",
+		Progress: "processed-1",
 	}
-	mockPuller.events <- testEvent
+	waitSignal(t, upstream.requests)
+	assert.Equal(t, "processed-1", getInternalService(s).progress)
+	delivery, err := stream.Recv()
+	require.NoError(t, err)
+	assert.Equal(t, "event-1", delivery.Event.EventID)
 
-	// Give time for the event to be processed
-	time.Sleep(30 * time.Millisecond)
+	upstream.events <- &puller.Event{Progress: "processed-2"}
+	waitSignal(t, upstream.requests)
+	assert.Equal(t, "processed-2", getInternalService(s).progress)
 }
 
-func TestConsumePullerEvents_ContextDone(t *testing.T) {
+func TestConsumePullerEvents_TransformFailureKeepsCheckpoint(t *testing.T) {
 	t.Parallel()
-	mockPuller := newTestPullerService()
-
-	s, err := NewService(ServerConfig{}, slog.Default(), WithPullerClient(mockPuller))
+	upstream := newTestPullerService()
+	s, err := NewService(ServerConfig{}, slog.Default(), WithPullerClient(upstream))
 	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	err = s.Start(ctx)
-	require.NoError(t, err)
-
-	// Cancel context to trigger consumePullerEvents exit
-	cancel()
-	time.Sleep(20 * time.Millisecond)
-}
-
-func TestConsumePullerEvents_ChannelClose(t *testing.T) {
-	t.Parallel()
-	mockPuller := newTestPullerService()
-
-	s, err := NewService(ServerConfig{}, slog.Default(), WithPullerClient(mockPuller))
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	err = s.Start(ctx)
-	require.NoError(t, err)
-
-	// Close the channel to trigger the "channel closed" case
-	close(mockPuller.events)
-	time.Sleep(20 * time.Millisecond)
-}
-
-func TestConsumePullerEvents_NilChange(t *testing.T) {
-	t.Parallel()
-	mockPuller := newTestPullerService()
-
-	s, err := NewService(ServerConfig{}, slog.Default(), WithPullerClient(mockPuller))
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	err = s.Start(ctx)
-	require.NoError(t, err)
-
-	// Send an event with nil Change (should be skipped)
-	mockPuller.events <- &puller.Event{
-		Change:   nil,
-		Progress: "progress-2",
+	require.NoError(t, s.Start(context.Background()))
+	upstream.events <- &puller.Event{Progress: "processed"}
+	upstream.events <- &puller.Event{
+		Change:   &events.StoreChangeEvent{EventID: "invalid", OpType: "invalid"},
+		Progress: "failed",
 	}
-
-	time.Sleep(20 * time.Millisecond)
+	upstream.events <- &puller.Event{Progress: "later"}
+	internal := getInternalService(s)
+	waitSignal(t, internal.consumeDone)
+	assert.Equal(t, "processed", internal.progress)
+	require.ErrorIs(t, internal.Err(), events.ErrUnknownOpType)
+	waitSignal(t, upstream.closed)
 }
 
-func TestConsumePullerEvents_ServiceStopped(t *testing.T) {
+func TestConsumePullerEvents_CancellationDuringProcessingKeepsCheckpoint(t *testing.T) {
+	upstream := newTestPullerService()
+	s, err := NewService(ServerConfig{SendTimeout: time.Minute}, slog.Default(), WithPullerClient(upstream))
+	require.NoError(t, err)
+	stream, err := s.Stream(context.Background())
+	require.NoError(t, err)
+	_, err = stream.Subscribe("database1", "users", nil)
+	require.NoError(t, err)
+	local := stream.(*localStream)
+	for range cap(local.outgoing) {
+		local.outgoing <- &EventDelivery{}
+	}
+	require.NoError(t, s.Start(context.Background()))
+	upstream.events <- &puller.Event{Progress: "processed"}
+	waitSignal(t, upstream.requests)
+	waitSignal(t, upstream.requests)
+	upstream.events <- &puller.Event{
+		Change: &events.StoreChangeEvent{
+			EventID: "blocked", Database: "database1", OpType: events.StoreOperationInsert,
+			FullDocument: testStoredDoc("users", "doc1", "database1", nil),
+		},
+		Progress: "not-delivered",
+	}
+	require.Eventually(t, func() bool { return len(upstream.events) == 0 }, time.Second, time.Millisecond)
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, s.Stop(stopCtx))
+	assert.Equal(t, "processed", getInternalService(s).progress)
+}
+
+func TestConsumePullerEvents_UpstreamFailureClosesStreams(t *testing.T) {
 	t.Parallel()
-	mockPuller := newTestPullerService()
-
-	s, err := NewService(ServerConfig{}, slog.Default(), WithPullerClient(mockPuller))
+	upstream := newTestPullerService()
+	upstream.terminalErr = errors.New("durable source unavailable")
+	s, err := NewService(ServerConfig{}, slog.Default(), WithPullerClient(upstream))
 	require.NoError(t, err)
-
-	ctx := context.Background()
-	err = s.Start(ctx)
+	local, err := s.Stream(context.Background())
 	require.NoError(t, err)
-
-	// Stop the service to trigger the s.ctx.Done() case
-	s.Stop(context.Background())
-	time.Sleep(20 * time.Millisecond)
+	internal := getInternalService(s)
+	grpcCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	remoteResult := make(chan error, 1)
+	go func() { remoteResult <- internal.GRPCStream(&mockBidiStream{ctx: grpcCtx}) }()
+	require.Eventually(t, func() bool {
+		internal.streamsMu.RLock()
+		defer internal.streamsMu.RUnlock()
+		return len(internal.streams) == 2
+	}, time.Second, time.Millisecond)
+	require.NoError(t, s.Start(context.Background()))
+	close(upstream.events)
+	waitSignal(t, internal.consumeDone)
+	_, err = local.Recv()
+	require.ErrorIs(t, err, upstream.terminalErr)
+	_, err = local.Subscribe("database1", "users", nil)
+	require.ErrorIs(t, err, upstream.terminalErr)
+	select {
+	case err := <-remoteResult:
+		require.ErrorIs(t, err, upstream.terminalErr)
+	case <-time.After(time.Second):
+		t.Fatal("gRPC stream remained open after upstream failure")
+	}
+	_, err = s.Stream(context.Background())
+	require.ErrorIs(t, err, upstream.terminalErr)
+	require.ErrorIs(t, internal.GRPCStream(&mockBidiStream{ctx: grpcCtx}), upstream.terminalErr)
 }
 
-// Note: TestStart_WithPullerAddr_Error and TestStart_WithValidPullerAddr_NoServer were removed
-// because with the new auto-reconnect design, Subscribe no longer returns an immediate error.
-// The client will keep trying to reconnect in the background.
+func TestConsumePullerEvents_CancellationClosesSubscription(t *testing.T) {
+	for _, stopService := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stopService=%t", stopService), func(t *testing.T) {
+			t.Parallel()
+			upstream := newTestPullerService()
+			s, err := NewService(ServerConfig{}, slog.Default(), WithPullerClient(upstream))
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			require.NoError(t, s.Start(ctx))
+			waitSignal(t, upstream.requests)
+			if stopService {
+				stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+				defer stopCancel()
+				require.NoError(t, s.Stop(stopCtx))
+			} else {
+				cancel()
+			}
+			waitSignal(t, upstream.closed)
+			require.ErrorIs(t, getInternalService(s).Err(), context.Canceled)
+		})
+	}
+}
 
 func TestService_Subscribe_FilterCompileError(t *testing.T) {
 	t.Parallel()
@@ -756,37 +825,4 @@ func TestService_Subscribe_ManagerReturnsError(t *testing.T) {
 	})
 
 	require.Error(t, err)
-}
-
-func TestService_ConsumePullerEvents_ServiceContextDone(t *testing.T) {
-	t.Parallel()
-	// Test that consumePullerEvents stops when service context is done
-	s, err := NewService(ServerConfig{}, slog.Default())
-	require.NoError(t, err)
-	internal := getInternalService(s)
-
-	// Create a mock puller event channel
-	eventChan := make(chan *puller.Event)
-
-	// Start consumePullerEvents in a goroutine
-	consumeCtx := context.Background()
-	done := make(chan struct{})
-	go func() {
-		internal.consumePullerEvents(consumeCtx, eventChan)
-		close(done)
-	}()
-
-	// Wait briefly then stop the service (which cancels internal context)
-	time.Sleep(50 * time.Millisecond)
-	internal.cancel()
-
-	// consumePullerEvents should exit via s.ctx.Done()
-	select {
-	case <-done:
-		// Good
-	case <-time.After(2 * time.Second):
-		t.Fatal("consumePullerEvents did not exit after service context cancel")
-	}
-
-	close(eventChan)
 }

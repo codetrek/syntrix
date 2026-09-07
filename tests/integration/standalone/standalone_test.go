@@ -172,7 +172,7 @@ templates:
 		},
 		Puller: puller_config.Config{
 			Backends: []puller_config.PullerBackendConfig{
-				{Name: "default"},
+				{Name: "default", SourceID: "standalone-mongo", Collections: []string{"documents"}},
 			},
 			Buffer: puller_config.BufferConfig{
 				Path: t.TempDir() + "/buffer",
@@ -208,6 +208,8 @@ templates:
 		},
 	}
 
+	cfg.Puller.ApplyDefaults()
+
 	// Apply config modifiers
 	for _, mod := range configModifiers {
 		mod(cfg)
@@ -232,14 +234,8 @@ templates:
 	manager := services.NewManager(cfg, opts)
 	require.NoError(t, manager.Init(context.Background()))
 
-	// Start Manager
 	mgrCtx, mgrCancel := context.WithCancel(context.Background())
-	manager.Start(mgrCtx)
-
-	// Wait for API server only
-	waitForHealth(t, fmt.Sprintf("http://localhost:%d/health", apiPort))
-
-	return &StandaloneEnv{
+	env := &StandaloneEnv{
 		APIURL:      fmt.Sprintf("http://localhost:%d", apiPort),
 		Manager:     manager,
 		MongoURI:    mongoURI,
@@ -262,6 +258,12 @@ templates:
 			}
 		},
 	}
+	if err := manager.Start(mgrCtx); err != nil {
+		env.Cancel()
+		require.NoError(t, err, "start standalone manager")
+	}
+	waitForHealth(t, env.APIURL+"/health")
+	return env
 }
 
 func (e *StandaloneEnv) GetToken(t *testing.T, uid string, role string) string {

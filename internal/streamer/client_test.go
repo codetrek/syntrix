@@ -79,9 +79,11 @@ type mockStreamerServiceClient struct {
 	pb.StreamerServiceClient
 	streamClient pb.StreamerService_StreamClient
 	streamErr    error
+	streamCalls  int
 }
 
 func (m *mockStreamerServiceClient) Stream(ctx context.Context, opts ...grpc.CallOption) (pb.StreamerService_StreamClient, error) {
+	m.streamCalls++
 	if m.streamErr != nil {
 		return nil, m.streamErr
 	}

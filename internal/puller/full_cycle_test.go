@@ -7,323 +7,263 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	pullerv1 "github.com/syntrixbase/syntrix/api/gen/puller/v1"
+	pullerclient "github.com/syntrixbase/syntrix/internal/puller/client"
 	"github.com/syntrixbase/syntrix/internal/puller/config"
-	"github.com/syntrixbase/syntrix/internal/puller/core"
-	pullergrpc "github.com/syntrixbase/syntrix/internal/puller/grpc"
+	"github.com/syntrixbase/syntrix/internal/puller/cursor"
+	"github.com/syntrixbase/syntrix/internal/puller/events"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
-// testGRPCServer wraps a gRPC server with the Puller service for testing.
-type testGRPCServer struct {
-	grpcServer   *grpc.Server
-	pullerServer *pullergrpc.Server
-	listener     net.Listener
-	port         int
+const integrationSourceID = "puller-integration-mongo"
+
+type pullerIntegrationEnv struct {
+	t          *testing.T
+	ctx        context.Context
+	mongo      *mongo.Client
+	collection *mongo.Collection
+	cfg        config.Config
+	local      LocalService
+	remote     *pullerclient.Client
+	server     *grpc.Server
+	serveDone  chan error
+	address    string
 }
 
-// newTestGRPCServer creates a test gRPC server with the Puller service registered.
-func newTestGRPCServer(t *testing.T, pullerCore *core.Puller, logger *slog.Logger) *testGRPCServer {
-	port := getFreePort(t)
-	lis, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", port))
-	require.NoError(t, err)
-
-	grpcCfg := config.GRPCConfig{
-		MaxConnections: 10,
-	}
-	pullerServer := pullergrpc.NewServer(grpcCfg, pullerCore, logger)
-
-	grpcServer := grpc.NewServer()
-	pullerv1.RegisterPullerServiceServer(grpcServer, pullerServer)
-
-	// Initialize the puller server event handler
-	pullerServer.Init()
-
-	// Start serving in background
-	go grpcServer.Serve(lis)
-
-	return &testGRPCServer{
-		grpcServer:   grpcServer,
-		pullerServer: pullerServer,
-		listener:     lis,
-		port:         port,
-	}
-}
-
-func (s *testGRPCServer) Stop() {
-	s.pullerServer.Shutdown()
-	s.grpcServer.GracefulStop()
-}
-
-func setupIntegrationEnv(t *testing.T) (*mongo.Collection, *core.Puller, *pullergrpc.Server, pullerv1.PullerServiceClient, func()) {
-	// Setup MongoDB connection
-
-	// 1. Setup MongoDB
+func newPullerIntegrationEnv(t *testing.T, modify func(*config.Config)) *pullerIntegrationEnv {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
 		mongoURI = "mongodb://localhost:27017"
 	}
-	dbName := strings.ReplaceAll(t.Name(), "/", "_") + "_" + fmt.Sprintf("%d", time.Now().UnixNano())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
 	require.NoError(t, err)
-
-	// Create collection
-	collName := "test_collection"
-	err = client.Database(dbName).CreateCollection(ctx, collName)
-	require.NoError(t, err)
-	coll := client.Database(dbName).Collection(collName)
-
-	// 2. Configure Puller
-	tmpDir := t.TempDir()
-	cfg := config.Config{
-		Buffer: config.BufferConfig{
-			Path:          filepath.Join(tmpDir, "buffer"),
-			BatchSize:     10,
-			BatchInterval: 10 * time.Millisecond,
-			QueueSize:     100,
-			MaxSize:       "10MB",
-		},
-		Cleaner: config.CleanerConfig{
-			Retention: 1 * time.Hour,
-			Interval:  1 * time.Minute,
-		},
-		Bootstrap: config.BootstrapConfig{
-			Mode: "from_now",
-		},
+	db := client.Database(fmt.Sprintf("puller_integration_%d", time.Now().UnixNano()))
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		assert.NoError(t, db.Drop(cleanupCtx))
+		assert.NoError(t, client.Disconnect(cleanupCtx))
+	})
+	require.NoError(t, db.CreateCollection(ctx, "documents"))
+	cfg := config.DefaultConfig()
+	cfg.Backends = []config.PullerBackendConfig{{
+		Name: "backend", SourceID: integrationSourceID, Collections: []string{"documents"},
+	}}
+	cfg.Buffer.Path = filepath.Join(t.TempDir(), "buffer")
+	cfg.Buffer.BatchSize = 10
+	cfg.Buffer.BatchInterval = 5 * time.Millisecond
+	cfg.Buffer.QueueSize = 100
+	cfg.Buffer.QueueBytes = 1 << 20
+	cfg.Buffer.BatchBytes = 64 << 10
+	cfg.Buffer.MaxSize = "10MB"
+	cfg.GRPC.ChannelSize = 100
+	cfg.GRPC.HeartbeatInterval = time.Hour
+	cfg.Consumer.QueueBytes = 1 << 20
+	cfg.Consumer.PageSize = 3
+	cfg.Consumer.PageBytes = 64 << 10
+	if modify != nil {
+		modify(&cfg)
 	}
+	env := &pullerIntegrationEnv{t: t, ctx: ctx, mongo: client, collection: db.Collection("documents"), cfg: cfg}
+	t.Cleanup(env.stop)
+	env.start()
+	return env
+}
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	pullerCore := core.New(cfg, logger)
-	pullerCore.SetRetryDelay(10 * time.Millisecond)
-	pullerCore.SetBackpressureSlowDownDelay(10 * time.Millisecond)
-	pullerCore.SetBackpressurePauseDelay(50 * time.Millisecond)
+func (e *pullerIntegrationEnv) start() {
+	e.t.Helper()
+	logger := slog.Default()
+	e.local = NewService(e.cfg, logger)
+	require.NoError(e.t, e.local.AddBackend("backend", e.mongo, e.collection.Database().Name(), e.cfg.Backends[0]))
+	require.NoError(e.t, e.local.Start(e.ctx))
+	e.startTransport("127.0.0.1:0")
+	var err error
+	e.remote, err = pullerclient.New(e.address, logger)
+	require.NoError(e.t, err)
+}
 
-	// Add backend
-	backendCfg := config.PullerBackendConfig{
-		Name:        "backend1",
-		Collections: []string{collName},
+func (e *pullerIntegrationEnv) startTransport(address string) {
+	e.t.Helper()
+	listener, err := net.Listen("tcp", address)
+	require.NoError(e.t, err)
+	e.address = listener.Addr().String()
+	e.server = grpc.NewServer()
+	pullerv1.RegisterPullerServiceServer(e.server, NewGRPCServer(e.cfg.GRPC, e.local, slog.Default()))
+	e.serveDone = make(chan error, 1)
+	server := e.server
+	serveDone := e.serveDone
+	go func() { serveDone <- server.Serve(listener) }()
+}
+
+func (e *pullerIntegrationEnv) stopTransport() {
+	e.t.Helper()
+	if e.server != nil {
+		e.server.Stop()
+		select {
+		case err := <-e.serveDone:
+			assert.NoError(e.t, err)
+		case <-time.After(5 * time.Second):
+			e.t.Error("gRPC server did not stop")
+		}
+		e.server = nil
 	}
-	err = pullerCore.AddBackend("backend1", client, dbName, backendCfg)
-	require.NoError(t, err)
+}
 
-	// Start Puller Core
-	err = pullerCore.Start(context.Background())
-	require.NoError(t, err)
-
-	// 3. Start gRPC Server
-	grpcTestServer := newTestGRPCServer(t, pullerCore, logger)
-	grpcServer := grpcTestServer.pullerServer
-
-	// 4. Connect gRPC Client
-	conn, err := grpc.NewClient(fmt.Sprintf("localhost:%d", grpcTestServer.port), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	require.NoError(t, err)
-
-	grpcClient := pullerv1.NewPullerServiceClient(conn)
-
-	cleanup := func() {
-		conn.Close()
-		grpcTestServer.Stop()
-		pullerCore.Stop(context.Background())
-		_ = client.Database(dbName).Drop(context.Background())
-		_ = client.Disconnect(context.Background())
+func (e *pullerIntegrationEnv) stop() {
+	e.t.Helper()
+	if e.remote != nil {
+		assert.NoError(e.t, e.remote.Close())
+		e.remote = nil
 	}
+	e.stopTransport()
+	if e.local != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		assert.NoError(e.t, e.local.Stop(ctx))
+		e.local = nil
+	}
+}
 
-	return coll, pullerCore, grpcServer, grpcClient, cleanup
+func (e *pullerIntegrationEnv) insert(first, count int) {
+	e.t.Helper()
+	documents := make([]any, count)
+	for i := range documents {
+		n := first + i
+		documents[i] = bson.M{
+			"_id": fmt.Sprintf("doc-%d", n), "id": fmt.Sprintf("doc-%d", n),
+			"database": "default", "collection": "items", "data": bson.M{"value": fmt.Sprintf("value-%d", n)},
+		}
+	}
+	_, err := e.collection.InsertMany(e.ctx, documents)
+	require.NoError(e.t, err)
+}
+
+func subscribeIntegration(t *testing.T, ctx context.Context, service Service, after string) events.Subscription {
+	t.Helper()
+	sub, err := service.Subscribe(ctx, events.SubscribeOptions{ConsumerID: t.Name(), After: after})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sub.Close()) })
+	initial, err := sub.Next(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, initial)
+	require.Nil(t, initial.Change, "registration must deliver its effective starting position before document events")
+	require.NotEmpty(t, initial.Progress)
+	if after != "" {
+		require.Equal(t, after, initial.Progress)
+	}
+	return sub
+}
+
+func nextIntegration(t *testing.T, ctx context.Context, sub events.Subscription) *events.PullerEvent {
+	t.Helper()
+	for {
+		event, err := sub.Next(ctx)
+		require.NoError(t, err)
+		require.NotNil(t, event)
+		if event.Change != nil {
+			return event
+		}
+	}
+}
+
+func eventPosition(t *testing.T, event *events.PullerEvent) cursor.Position {
+	t.Helper()
+	marker, err := cursor.DecodeProgressMarker(event.Progress)
+	require.NoError(t, err)
+	position, found := marker.GetPosition(integrationSourceID)
+	require.True(t, found)
+	require.NotEmpty(t, position.Generation)
+	return position
 }
 
 func TestPuller_FullCycle_DataIntegrity(t *testing.T) {
-	coll, _, _, client, cleanup := setupIntegrationEnv(t)
-	defer cleanup()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Subscribe first
-	stream, err := client.Subscribe(ctx, &pullerv1.SubscribeRequest{
-		ConsumerId: "integrity-consumer",
-	})
-	require.NoError(t, err)
-
-	// Insert 50 documents
-	count := 50
-	for i := 0; i < count; i++ {
-		_, err := coll.InsertOne(ctx, bson.M{"_id": fmt.Sprintf("doc-%d", i), "val": i})
-		require.NoError(t, err)
-	}
-
-	// Verify 50 events
-	for i := 0; i < count; i++ {
-		evt, err := stream.Recv()
-		require.NoError(t, err)
-		assert.Equal(t, "insert", evt.ChangeEvent.OpType)
-		assert.Equal(t, fmt.Sprintf("doc-%d", i), evt.ChangeEvent.MgoDocId)
+	env := newPullerIntegrationEnv(t, nil)
+	local := subscribeIntegration(t, env.ctx, env.local, "")
+	remote := subscribeIntegration(t, env.ctx, env.remote, "")
+	env.insert(1, 50)
+	var generation string
+	for i := 1; i <= 50; i++ {
+		localEvent := nextIntegration(t, env.ctx, local)
+		remoteEvent := nextIntegration(t, env.ctx, remote)
+		assert.Equal(t, fmt.Sprintf("doc-%d", i), localEvent.Change.MgoDocID)
+		assert.Equal(t, events.StoreOperationInsert, localEvent.Change.OpType)
+		assert.Equal(t, localEvent.Change.EventID, remoteEvent.Change.EventID)
+		assert.Equal(t, localEvent.Change.MgoDocID, remoteEvent.Change.MgoDocID)
+		assert.Equal(t, localEvent.Change.Timestamp, remoteEvent.Change.Timestamp)
+		assert.Equal(t, localEvent.Progress, remoteEvent.Progress)
+		position := eventPosition(t, localEvent)
+		assert.Equal(t, uint64(i), position.Sequence)
+		if i == 1 {
+			generation = position.Generation
+		}
+		assert.Equal(t, generation, position.Generation)
 	}
 }
 
-func TestPuller_FullCycle_Resilience(t *testing.T) {
-	// Custom setup to allow restarting puller while keeping DB/Buffer
-	mongoURI := os.Getenv("MONGO_URI")
-	if mongoURI == "" {
-		mongoURI = "mongodb://localhost:27017"
+func TestPuller_FullCycle_RestartPreservesReplayIdentity(t *testing.T) {
+	env := newPullerIntegrationEnv(t, nil)
+	observer := subscribeIntegration(t, env.ctx, env.local, "")
+	env.insert(1, 12)
+	original := make([]*events.PullerEvent, 12)
+	for i := range original {
+		original[i] = nextIntegration(t, env.ctx, observer)
 	}
-	dbName := strings.ReplaceAll(t.Name(), "/", "_") + "_" + fmt.Sprintf("%d", time.Now().UnixNano())
-	collName := "test_collection"
-	tmpDir := t.TempDir()
-	bufferPath := filepath.Join(tmpDir, "buffer")
+	after := original[4].Progress
+	require.NoError(t, observer.Close())
+	env.stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	mongoClient, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
-	require.NoError(t, err)
-	defer func() {
-		_ = mongoClient.Database(dbName).Drop(context.Background())
-		_ = mongoClient.Disconnect(context.Background())
-	}()
-
-	err = mongoClient.Database(dbName).CreateCollection(ctx, collName)
-	require.NoError(t, err)
-	coll := mongoClient.Database(dbName).Collection(collName)
-
-	// Helper to start puller
-	startPuller := func() (*core.Puller, *testGRPCServer, pullerv1.PullerServiceClient, *grpc.ClientConn) {
-		cfg := config.Config{
-			Buffer: config.BufferConfig{
-				Path:          bufferPath,
-				BatchSize:     10,
-				BatchInterval: 10 * time.Millisecond,
-				QueueSize:     100,
-				MaxSize:       "10MB",
-			},
-			Cleaner: config.CleanerConfig{
-				Retention: 1 * time.Hour,
-				Interval:  1 * time.Minute,
-			},
-			Bootstrap: config.BootstrapConfig{
-				Mode: "from_now", // Should use checkpoint on restart
-			},
+	// These writes must be recovered from Mongo's saved resume token; the other
+	// seven records must be replayed with their original persistent identities.
+	env.insert(13, 5)
+	env.start()
+	local := subscribeIntegration(t, env.ctx, env.local, after)
+	remote := subscribeIntegration(t, env.ctx, env.remote, after)
+	generation := eventPosition(t, original[0]).Generation
+	for i := 6; i <= 17; i++ {
+		localEvent := nextIntegration(t, env.ctx, local)
+		remoteEvent := nextIntegration(t, env.ctx, remote)
+		assert.Equal(t, fmt.Sprintf("doc-%d", i), localEvent.Change.MgoDocID)
+		assert.Equal(t, localEvent.Change.EventID, remoteEvent.Change.EventID)
+		assert.Equal(t, localEvent.Progress, remoteEvent.Progress)
+		position := eventPosition(t, localEvent)
+		assert.Equal(t, uint64(i), position.Sequence)
+		assert.Equal(t, generation, position.Generation)
+		if i <= 12 {
+			assert.Equal(t, original[i-1], localEvent)
 		}
-		logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-		p := core.New(cfg, logger)
-
-		backendCfg := config.PullerBackendConfig{
-			Name:        "backend1",
-			Collections: []string{collName},
-		}
-		err := p.AddBackend("backend1", mongoClient, dbName, backendCfg)
-		require.NoError(t, err)
-		err = p.Start(ctx)
-		require.NoError(t, err)
-
-		grpcTestServer := newTestGRPCServer(t, p, logger)
-
-		conn, err := grpc.NewClient(fmt.Sprintf("localhost:%d", grpcTestServer.port), grpc.WithTransportCredentials(insecure.NewCredentials()))
-		require.NoError(t, err)
-		c := pullerv1.NewPullerServiceClient(conn)
-
-		return p, grpcTestServer, c, conn
-	}
-
-	// 1. Start Puller
-	p1, s1, c1, conn1 := startPuller()
-
-	// 2. Subscribe and consume some events
-	stream1, err := c1.Subscribe(ctx, &pullerv1.SubscribeRequest{ConsumerId: "resilience-1"})
-	require.NoError(t, err)
-
-	// Insert 10 docs
-	for i := 0; i < 10; i++ {
-		_, err := coll.InsertOne(ctx, bson.M{"_id": fmt.Sprintf("doc-%d", i)})
-		require.NoError(t, err)
-	}
-
-	// Consume 5
-	var lastToken string
-	for i := 0; i < 5; i++ {
-		evt, err := stream1.Recv()
-		require.NoError(t, err)
-		assert.Equal(t, fmt.Sprintf("doc-%d", i), evt.ChangeEvent.MgoDocId)
-		lastToken = evt.Progress
-	}
-	t.Logf("[DEBUG] Phase 1: Consumed 5 events, lastToken=%s", lastToken)
-
-	// 3. Stop Puller (Simulate Crash)
-	// Note: Some events may still be in transit from MongoDB change stream.
-	// The checkpoint saves the last written event's resume token, so on restart,
-	// the change stream will resume from that point and recover any missing events.
-	conn1.Close()
-	s1.Stop()
-	p1.Stop(ctx)
-
-	// 4. Restart Puller
-	// The puller will resume the change stream from the checkpoint and
-	// fetch any events that were in transit when we stopped.
-	p2, s2, c2, conn2 := startPuller()
-	defer func() {
-		conn2.Close()
-		s2.Stop()
-		p2.Stop(ctx)
-	}()
-
-	// 5. Subscribe with last token
-	// The subscriber will:
-	// 1. Replay events from buffer (events already persisted)
-	// 2. Switch to live mode and receive new events (including doc-9 recovered via resume token)
-	t.Logf("[DEBUG] Subscribing with lastToken=%s", lastToken)
-	stream2, err := c2.Subscribe(ctx, &pullerv1.SubscribeRequest{
-		ConsumerId: "resilience-2",
-		After:      lastToken,
-	})
-	require.NoError(t, err)
-
-	// 6. Consume remaining 5
-	for i := 5; i < 10; i++ {
-		evt, err := stream2.Recv()
-		if err != nil {
-			t.Fatalf("[DEBUG] Failed to receive event doc-%d: %v", i, err)
-		}
-		assert.Equal(t, fmt.Sprintf("doc-%d", i), evt.ChangeEvent.MgoDocId)
 	}
 }
 
-func TestPuller_FullCycle_SlowConsumer(t *testing.T) {
-	coll, _, _, client, cleanup := setupIntegrationEnv(t)
-	defer cleanup()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Subscribe
-	stream, err := client.Subscribe(ctx, &pullerv1.SubscribeRequest{
-		ConsumerId: "slow-consumer",
+func TestPuller_FullCycle_SlowConsumerCatchesUp(t *testing.T) {
+	env := newPullerIntegrationEnv(t, func(cfg *config.Config) {
+		cfg.GRPC.ChannelSize = 2
+		cfg.Buffer.BatchSize = 2
 	})
-	require.NoError(t, err)
-
-	// Insert 20 docs fast
-	for i := 0; i < 20; i++ {
-		_, err := coll.InsertOne(ctx, bson.M{"_id": fmt.Sprintf("doc-%d", i)})
-		require.NoError(t, err)
+	lagging := subscribeIntegration(t, env.ctx, env.local, "")
+	observer := subscribeIntegration(t, env.ctx, env.local, "")
+	env.insert(1, 30)
+	for i := 1; i <= 30; i++ {
+		event := nextIntegration(t, env.ctx, observer)
+		require.Equal(t, fmt.Sprintf("doc-%d", i), event.Change.MgoDocID)
 	}
-
-	// Consume slowly
-	for i := 0; i < 20; i++ {
-		time.Sleep(10 * time.Millisecond) // Simulate processing time
-		evt, err := stream.Recv()
-		require.NoError(t, err)
-		assert.Equal(t, fmt.Sprintf("doc-%d", i), evt.ChangeEvent.MgoDocId)
+	// No document was read from lagging while all 30 records committed into a
+	// two-record live queue. Recovery must cross pages without skipping records.
+	for i := 1; i <= 30; i++ {
+		event := nextIntegration(t, env.ctx, lagging)
+		assert.Equal(t, fmt.Sprintf("doc-%d", i), event.Change.MgoDocID)
+		assert.Equal(t, uint64(i), eventPosition(t, event).Sequence)
 	}
+	env.insert(31, 1)
+	assert.Equal(t, "doc-31", nextIntegration(t, env.ctx, lagging).Change.MgoDocID)
 }

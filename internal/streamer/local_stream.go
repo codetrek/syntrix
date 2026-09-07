@@ -3,7 +3,6 @@ package streamer
 import (
 	"context"
 	"io"
-	"sync"
 
 	"github.com/syntrixbase/syntrix/pkg/model"
 )
@@ -13,19 +12,16 @@ import (
 // unnecessary message serialization and channel passing.
 type localStream struct {
 	ctx       context.Context
-	cancel    context.CancelFunc
+	cancel    context.CancelCauseFunc
 	gatewayID string
 	handler   subscriptionHandler
 
 	// outgoing delivers events to the consumer
 	outgoing chan *EventDelivery
-
-	closed   bool
-	closedMu sync.Mutex
 }
 
 func newLocalStream(ctx context.Context, gatewayID string, handler subscriptionHandler) *localStream {
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancelCause(ctx)
 	return &localStream{
 		ctx:       ctx,
 		cancel:    cancel,
@@ -37,30 +33,27 @@ func newLocalStream(ctx context.Context, gatewayID string, handler subscriptionH
 
 // Subscribe creates a new subscription and returns the subscription ID.
 func (ls *localStream) Subscribe(database, collection string, filters []model.Filter) (string, error) {
-	ls.closedMu.Lock()
-	if ls.closed {
-		ls.closedMu.Unlock()
-		return "", io.EOF
+	if err := context.Cause(ls.ctx); err != nil {
+		return "", err
 	}
-	ls.closedMu.Unlock()
 
 	return ls.handler.subscribe(ls.gatewayID, database, collection, filters)
 }
 
 // Unsubscribe removes a subscription by ID.
 func (ls *localStream) Unsubscribe(subscriptionID string) error {
-	ls.closedMu.Lock()
-	if ls.closed {
-		ls.closedMu.Unlock()
-		return io.EOF
+	if err := context.Cause(ls.ctx); err != nil {
+		return err
 	}
-	ls.closedMu.Unlock()
 
 	return ls.handler.unsubscribe(subscriptionID)
 }
 
 // Recv receives an EventDelivery from the Streamer.
 func (ls *localStream) Recv() (*EventDelivery, error) {
+	if err := context.Cause(ls.ctx); err != nil {
+		return nil, err
+	}
 	select {
 	case delivery, ok := <-ls.outgoing:
 		if !ok {
@@ -68,30 +61,19 @@ func (ls *localStream) Recv() (*EventDelivery, error) {
 		}
 		return delivery, nil
 	case <-ls.ctx.Done():
-		return nil, ls.ctx.Err()
+		return nil, context.Cause(ls.ctx)
 	}
 }
 
 // Close closes the stream and releases resources.
 func (ls *localStream) Close() error {
-	ls.closedMu.Lock()
-	defer ls.closedMu.Unlock()
-
-	if !ls.closed {
-		ls.closed = true
-		ls.cancel()
-	}
+	ls.close()
 	return nil
 }
 
-func (ls *localStream) close() {
-	ls.closedMu.Lock()
-	if !ls.closed {
-		ls.closed = true
-		ls.cancel()
-	}
-	ls.closedMu.Unlock()
-}
+func (ls *localStream) close() { ls.closeWithError(io.EOF) }
+
+func (ls *localStream) closeWithError(err error) { ls.cancel(err) }
 
 // Compile-time check
 var _ Stream = (*localStream)(nil)

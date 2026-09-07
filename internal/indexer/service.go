@@ -31,11 +31,13 @@ type service struct {
 	pullerSvc puller.Service
 
 	// State
-	mu       sync.RWMutex
-	running  bool
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	progress string // last progress marker
+	mu          sync.RWMutex
+	running     bool
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	progress    string // last successfully applied progress marker
+	terminalErr error
+	closed      bool
 
 	// Stats
 	eventsApplied atomic.Int64
@@ -84,6 +86,9 @@ func (s *service) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.closed {
+		return errors.New("service is closed")
+	}
 	if s.running {
 		return errors.New("service already running")
 	}
@@ -100,7 +105,7 @@ func (s *service) Start(ctx context.Context) error {
 
 	// Load progress from store
 	if savedProgress, err := s.store.LoadProgress(); err != nil {
-		s.logger.Warn("failed to load progress from store", "error", err)
+		return fmt.Errorf("failed to load progress from store: %w", err)
 	} else if savedProgress != "" {
 		s.progress = savedProgress
 		s.logger.Info("loaded progress from store", "progress", savedProgress)
@@ -109,11 +114,16 @@ func (s *service) Start(ctx context.Context) error {
 	// Start Puller subscription if configured
 	if s.pullerSvc != nil {
 		subCtx, cancel := context.WithCancel(ctx)
+		subscription, err := s.pullerSvc.Subscribe(subCtx, puller.SubscribeOptions{ConsumerID: s.cfg.ConsumerID, After: s.progress})
+		if err != nil {
+			cancel()
+			return fmt.Errorf("failed to subscribe to puller: %w", err)
+		}
 		s.cancel = cancel
 		s.running = true
 
 		s.wg.Add(1)
-		go s.subscriptionLoop(subCtx)
+		go s.subscriptionLoop(subCtx, subscription)
 	} else {
 		s.running = true
 	}
@@ -125,133 +135,105 @@ func (s *service) Start(ctx context.Context) error {
 // Stop gracefully stops the indexer service.
 func (s *service) Stop(ctx context.Context) error {
 	s.mu.Lock()
-	if !s.running {
+	if s.closed {
 		s.mu.Unlock()
 		return nil
 	}
-
 	if s.cancel != nil {
 		s.cancel()
 	}
 	s.running = false
 	s.mu.Unlock()
 
-	// Wait for subscription loop to finish
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
 		close(done)
 	}()
-
 	select {
-	case <-done:
-		// Close the store
-		if s.store != nil {
-			if err := s.store.Close(); err != nil {
-				s.logger.Error("failed to close store", "error", err)
-			}
-		}
-		s.logger.Info("indexer service stopped")
-		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-done:
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.closed {
+			return nil
+		}
+		s.closed = true
+		return s.store.Close()
 	}
 }
 
-// subscriptionLoop runs the Puller subscription.
-func (s *service) subscriptionLoop(ctx context.Context) {
+func (s *service) fail(err error) {
+	s.mu.Lock()
+	if s.terminalErr == nil {
+		s.terminalErr = err
+	}
+	s.mu.Unlock()
+	s.logger.Error("indexer consumption stopped", "error", err)
+}
+
+func (s *service) subscriptionLoop(ctx context.Context, subscription puller.Subscription) {
 	defer s.wg.Done()
-
-	s.logger.Info("starting puller subscription",
-		"consumerID", s.cfg.ConsumerID,
-		"progress", s.progress)
-
-	events := s.pullerSvc.Subscribe(ctx, s.cfg.ConsumerID, s.progress)
-
-	for {
+	defer subscription.Close()
+	readCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(context.Canceled)
+	monitorDone := make(chan struct{})
+	defer close(monitorDone)
+	go func() {
 		select {
-		case <-ctx.Done():
+		case <-s.store.Failed():
+			cancel(s.store.Err())
+		case <-monitorDone:
+		case <-readCtx.Done():
+		}
+	}()
+	for {
+		evt, err := subscription.Next(readCtx)
+		if err != nil {
+			if ctx.Err() == nil {
+				if cause := context.Cause(readCtx); cause != nil {
+					err = cause
+				}
+				s.fail(fmt.Errorf("puller subscription failed: %w", err))
+			}
 			return
-		case evt, ok := <-events:
-			if !ok {
-				s.logger.Warn("puller subscription closed, will reconnect")
-				// Reconnect after backoff
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(time.Second):
-					events = s.pullerSvc.Subscribe(ctx, s.cfg.ConsumerID, s.progress)
-					continue
-				}
-			}
-
-			if evt.Change != nil {
-				if err := s.ApplyEvent(ctx, evt.Change, evt.Progress); err != nil {
-					s.logger.Error("failed to apply event",
-						"eventID", evt.Change.EventID,
-						"error", err)
-					// Don't update progress if ApplyEvent failed
-					continue
-				}
-			}
-
-			// Update in-memory progress marker
-			if evt.Progress != "" {
-				s.mu.Lock()
-				s.progress = evt.Progress
-				s.mu.Unlock()
-			}
+		}
+		if err := s.ApplyEvent(ctx, evt.Change, evt.Progress); err != nil {
+			s.fail(fmt.Errorf("failed to apply puller event: %w", err))
+			return
+		}
+		if evt.Progress != "" {
+			s.mu.Lock()
+			s.progress = evt.Progress
+			s.mu.Unlock()
 		}
 	}
 }
 
 // ApplyEvent applies a single change event to the indexes.
-func (s *service) ApplyEvent(ctx context.Context, evt *ChangeEvent, progress string) error {
-	if evt == nil {
+func (s *service) ApplyEvent(ctx context.Context, evt *ChangeEvent, progress string) (err error) {
+	// Checkpoints follow every accepted template update, including windows that
+	// produce no index mutations. The store orders them with pending writes.
+	defer func() {
+		if err == nil && progress != "" {
+			err = s.store.SaveProgress(progress)
+		}
+	}()
+	if evt == nil || evt.FullDocument == nil || evt.FullDocument.Collection == "" {
 		return nil
 	}
-
-	// Get collection path from the event
-	var collection string
-	if evt.FullDocument != nil {
-		collection = evt.FullDocument.Collection
-	} else {
-		// For deletes without FullDocument, we cannot update indexes
-		// This is handled by includeDeleted templates only
-		return nil
-	}
-
-	if collection == "" {
-		return nil
-	}
-
-	// Match templates for this collection
-	matches := s.manager.MatchTemplatesForCollection(collection)
+	matches := s.manager.MatchTemplatesForCollection(evt.FullDocument.Collection)
 	if len(matches) == 0 {
-		// No indexes for this collection
 		return nil
 	}
-
-	// Process each matching template
-	// Pass progress only to the last template operation
-	for i, match := range matches {
-		// Only pass progress on the last operation to avoid duplicate writes
-		var opProgress string
-		if i == len(matches)-1 {
-			opProgress = progress
-		}
-		if err := s.applyEventToTemplate(ctx, evt, match.Template, opProgress); err != nil {
-			s.logger.Error("failed to apply event to template",
-				"template", match.Template.Name,
-				"eventID", evt.EventID,
-				"error", err)
-			// Continue with other templates
+	for _, match := range matches {
+		if err := s.applyEventToTemplate(ctx, evt, match.Template, ""); err != nil {
+			return fmt.Errorf("failed to apply event %s to template %s: %w", evt.EventID, match.Template.Name, err)
 		}
 	}
-
 	s.eventsApplied.Add(1)
 	s.lastEventTime.Store(time.Now().Unix())
-
 	return nil
 }
 
@@ -285,8 +267,7 @@ func (s *service) applyEventToTemplate(ctx context.Context, evt *ChangeEvent, tm
 	// Skip deleted documents unless template includes them
 	if doc.Deleted && !tmpl.IncludeDeleted {
 		// Delete from index
-		st.Delete(evt.Database, pattern, tmplID, docID, progress)
-		return nil
+		return st.Delete(evt.Database, pattern, tmplID, docID, progress)
 	}
 
 	// Build OrderKey from document fields
@@ -296,9 +277,7 @@ func (s *service) applyEventToTemplate(ctx context.Context, evt *ChangeEvent, tm
 	}
 
 	// Upsert document using the user-facing document ID
-	st.Upsert(evt.Database, pattern, tmplID, docID, orderKey, progress)
-
-	return nil
+	return st.Upsert(evt.Database, pattern, tmplID, docID, orderKey, progress)
 }
 
 // buildOrderKey builds an OrderKey from document data and template fields.
@@ -343,7 +322,11 @@ func (s *service) Search(ctx context.Context, database string, plan Plan) ([]Doc
 func (s *service) Health(ctx context.Context) (Health, error) {
 	s.mu.RLock()
 	running := s.running
+	terminalErr := s.terminalErr
 	s.mu.RUnlock()
+	if terminalErr != nil {
+		return Health{Status: HealthUnhealthy}, terminalErr
+	}
 
 	status := HealthOK
 	if !running {
@@ -351,6 +334,9 @@ func (s *service) Health(ctx context.Context) (Health, error) {
 	}
 
 	st := s.manager.Store()
+	if err := st.Err(); err != nil {
+		return Health{Status: HealthUnhealthy}, err
+	}
 	indexes := make(map[string]manager.IndexHealth)
 	databases, err := st.ListDatabases()
 	if err != nil {

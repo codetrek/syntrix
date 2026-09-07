@@ -3,7 +3,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	services "github.com/syntrixbase/syntrix/internal/services/config"
@@ -35,7 +37,7 @@ type Config struct {
 }
 
 // GRPCConfig holds gRPC server configuration.
-// Note: Address is no longer used as Puller registers with the unified gRPC server.
+// Puller registers with the shared server; this config controls subscriptions.
 type GRPCConfig struct {
 	MaxConnections int `yaml:"max_connections"`
 	// ChannelSize is the size of the subscriber channel.
@@ -44,7 +46,7 @@ type GRPCConfig struct {
 	// HeartbeatInterval is the interval at which the server sends heartbeat
 	// events to connected clients to keep connections alive.
 	// A heartbeat is a PullerEvent with nil ChangeEvent.
-	// Defaults to 30 seconds if not set. Set to 0 to disable.
+	// Defaults to 30 seconds through the service configuration lifecycle.
 	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
 }
 
@@ -52,6 +54,8 @@ type GRPCConfig struct {
 type PullerBackendConfig struct {
 	// Name references storage.backends[name]
 	Name string `yaml:"name"`
+	// SourceID binds this stream to a stable operator-assigned source identity.
+	SourceID string `yaml:"source_id"`
 
 	// Collections to pull (whitelist)
 	Collections []string `yaml:"collections"`
@@ -62,17 +66,22 @@ type BufferConfig struct {
 	// Path for PebbleDB storage (per-backend subdirs created automatically)
 	Path string `yaml:"path"`
 
-	// Maximum size of the buffer (e.g., "10GiB", "1TiB")
+	// Maximum retained logical record bytes (e.g., "10GiB"). Pebble physical
+	// disk usage also includes WAL, compaction and versions held by readers.
 	MaxSize string `yaml:"max_size"`
 
 	// BatchSize is the max number of events per batch.
 	BatchSize int `yaml:"batch_size"`
 
-	// BatchInterval is the max time to wait before flushing a batch.
+	// BatchInterval limits formation wait from the oldest admitted event.
+	// Storage synchronization and existing backlog can extend delivery latency.
 	BatchInterval time.Duration `yaml:"batch_interval"`
 
-	// QueueSize is the buffer for pending writes.
-	QueueSize int `yaml:"queue_size"`
+	// QueueSize includes pending, batching and synchronizing events until
+	// committed memory publication completes.
+	QueueSize  int   `yaml:"queue_size"`
+	QueueBytes int64 `yaml:"queue_bytes"`
+	BatchBytes int64 `yaml:"batch_bytes"`
 }
 
 // ConsumerConfig holds consumer management configuration.
@@ -81,7 +90,10 @@ type ConsumerConfig struct {
 	CatchUpThreshold int `yaml:"catch_up_threshold"`
 
 	// Enable coalescing when consumer is catching up
-	CoalesceOnCatchUp bool `yaml:"coalesce_on_catch_up"`
+	CoalesceOnCatchUp bool  `yaml:"coalesce_on_catch_up"`
+	QueueBytes        int64 `yaml:"queue_bytes"`
+	PageSize          int   `yaml:"page_size"`
+	PageBytes         int64 `yaml:"page_bytes"`
 }
 
 // CleanerConfig holds event cleanup configuration.
@@ -116,11 +128,13 @@ func DefaultConfig() Config {
 	return Config{
 		GRPC: GRPCConfig{
 			MaxConnections:    100,
+			ChannelSize:       10000,
 			HeartbeatInterval: 30 * time.Second,
 		},
 		Backends: []PullerBackendConfig{
 			{
 				Name:        "default_mongo",
+				SourceID:    "default-mongo",
 				Collections: []string{"documents"},
 			},
 		},
@@ -130,10 +144,15 @@ func DefaultConfig() Config {
 			BatchSize:     100,
 			BatchInterval: 100 * time.Millisecond,
 			QueueSize:     10000,
+			QueueBytes:    64 << 20,
+			BatchBytes:    16 << 20,
 		},
 		Consumer: ConsumerConfig{
 			CatchUpThreshold:  100000,
 			CoalesceOnCatchUp: true,
+			QueueBytes:        64 << 20,
+			PageSize:          100,
+			PageBytes:         16 << 20,
 		},
 		Cleaner: CleanerConfig{
 			Interval:  1 * time.Minute,
@@ -163,15 +182,39 @@ func (c *Config) Validate(_ services.DeploymentMode) error {
 		return errors.New("puller.backends must have at least one backend")
 	}
 
+	seenNames := make(map[string]bool)
+	seenSources := make(map[string]bool)
 	for i, b := range c.Backends {
 		if b.Name == "" {
 			return fmt.Errorf("puller.backends[%d].name is required", i)
 		}
+		if b.SourceID == "" {
+			return fmt.Errorf("puller.backends[%d].source_id is required", i)
+		}
+		if seenNames[b.Name] || seenSources[b.SourceID] {
+			return errors.New("puller backend names and source IDs must be unique")
+		}
+		seenNames[b.Name], seenSources[b.SourceID] = true, true
 		if len(b.Collections) == 0 {
 			return fmt.Errorf("puller.backends[%d].collections must specify at least one collection", i)
 		}
 	}
 
+	if c.GRPC.ChannelSize <= 0 || c.GRPC.HeartbeatInterval < 0 {
+		return errors.New("puller channel_size must be positive and heartbeat_interval nonnegative")
+	}
+	if c.Buffer.QueueBytes <= 0 || c.Buffer.BatchBytes <= 0 || c.Buffer.BatchBytes > c.Buffer.QueueBytes {
+		return errors.New("puller buffer byte limits must be positive and batch_bytes must not exceed queue_bytes")
+	}
+	if c.Consumer.QueueBytes <= 0 || c.Consumer.PageSize <= 0 || c.Consumer.PageBytes <= 0 {
+		return errors.New("puller consumer queue_bytes, page_size and page_bytes must be positive")
+	}
+	if c.Consumer.PageBytes < c.Buffer.BatchBytes {
+		return errors.New("puller consumer page_bytes must accommodate a maximum-sized event")
+	}
+	if size, err := ParseByteSize(c.Buffer.MaxSize); err != nil || size <= 0 {
+		return fmt.Errorf("puller.buffer.max_size must be a positive byte size: %s", c.Buffer.MaxSize)
+	}
 	if c.Buffer.Path == "" {
 		return errors.New("puller.buffer.path is required")
 	}
@@ -210,7 +253,25 @@ func (c *Config) Validate(_ services.DeploymentMode) error {
 // ApplyDefaults fills in zero values with defaults.
 func (c *Config) ApplyDefaults() {
 	defaults := DefaultConfig()
-	if c.GRPC.MaxConnections <= 0 {
+	if c.GRPC.ChannelSize == 0 {
+		c.GRPC.ChannelSize = defaults.GRPC.ChannelSize
+	}
+	if c.Buffer.QueueBytes == 0 {
+		c.Buffer.QueueBytes = defaults.Buffer.QueueBytes
+	}
+	if c.Buffer.BatchBytes == 0 {
+		c.Buffer.BatchBytes = defaults.Buffer.BatchBytes
+	}
+	if c.Consumer.QueueBytes == 0 {
+		c.Consumer.QueueBytes = defaults.Consumer.QueueBytes
+	}
+	if c.Consumer.PageSize == 0 {
+		c.Consumer.PageSize = defaults.Consumer.PageSize
+	}
+	if c.Consumer.PageBytes == 0 {
+		c.Consumer.PageBytes = defaults.Consumer.PageBytes
+	}
+	if c.GRPC.MaxConnections == 0 {
 		c.GRPC.MaxConnections = defaults.GRPC.MaxConnections
 	}
 	if c.GRPC.HeartbeatInterval == 0 {
@@ -225,16 +286,16 @@ func (c *Config) ApplyDefaults() {
 	if c.Buffer.MaxSize == "" {
 		c.Buffer.MaxSize = defaults.Buffer.MaxSize
 	}
-	if c.Buffer.BatchSize <= 0 {
+	if c.Buffer.BatchSize == 0 {
 		c.Buffer.BatchSize = defaults.Buffer.BatchSize
 	}
 	if c.Buffer.BatchInterval == 0 {
 		c.Buffer.BatchInterval = defaults.Buffer.BatchInterval
 	}
-	if c.Buffer.QueueSize <= 0 {
+	if c.Buffer.QueueSize == 0 {
 		c.Buffer.QueueSize = defaults.Buffer.QueueSize
 	}
-	if c.Consumer.CatchUpThreshold <= 0 {
+	if c.Consumer.CatchUpThreshold == 0 {
 		c.Consumer.CatchUpThreshold = defaults.Consumer.CatchUpThreshold
 	}
 	if c.Cleaner.Interval == 0 {
@@ -298,9 +359,9 @@ func ParseByteSize(s string) (int64, error) {
 	numStr := s[:numEnd]
 	unit := s[numEnd:]
 
-	var num int64
-	for _, c := range numStr {
-		num = num*10 + int64(c-'0')
+	num, err := strconv.ParseInt(numStr, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid byte count: %w", err)
 	}
 
 	multiplier := int64(1)
@@ -319,5 +380,8 @@ func ParseByteSize(s string) (int64, error) {
 		return 0, fmt.Errorf("unknown size unit: %q", unit)
 	}
 
+	if num > math.MaxInt64/multiplier {
+		return 0, errors.New("byte size overflows int64")
+	}
 	return num * multiplier, nil
 }

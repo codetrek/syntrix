@@ -8,7 +8,12 @@ option go_package = "github.com/syntrixbase/syntrix/api/gen/puller/v1;pullerv1";
 // Consumers subscribe to events and manage their own progress.
 service PullerService {
   // Subscribe to merged event stream from all backends.
-  // Events are delivered in order within each backend, merged across backends.
+  // Events are delivered in durable sequence order within each backend.
+  // The first delivery contains only the effective starting progress.
+  // Registration response headers expose that position for safe reconnection
+  // before the first delivery. No total order is promised across backends.
+  // Terminal failures carry
+  // google.rpc.ErrorInfo with the syntrix.puller domain.
   rpc Subscribe(SubscribeRequest) returns (stream PullerEvent);
 }
 
@@ -31,18 +36,18 @@ message SubscribeRequest {
 
 // PullerEvent is the top-level wrapper for events emitted by the Puller service.
 message PullerEvent {
-  // The actual change event.
+  // The actual change event. Absent for heartbeat or progress-only delivery.
   ChangeEvent change_event = 1;
 
   // Current progress marker (opaque string).
-  // Consumer should save this value and pass it as 'after'
-  // when reconnecting to resume from this position.
+  // Save this value only after successfully processing the delivery, and pass
+  // it as 'after' when reconnecting. Progress-only deliveries must be preserved.
   string progress = 2;
 }
 
 // ChangeEvent represents a normalized change event from the database.
 message ChangeEvent {
-  // Unique event identifier.
+  // Stable source-event identity, independent of its durable sequence.
   string event_id = 1;
 
   // Database identifier.
@@ -78,7 +83,7 @@ message ChangeEvent {
   string backend = 11;
 }
 
-// ClusterTime represents MongoDB cluster timestamp for ordering.
+// ClusterTime records MongoDB provenance; recovery uses the opaque progress.
 message ClusterTime {
   // Seconds since Unix epoch.
   uint32 t = 1;

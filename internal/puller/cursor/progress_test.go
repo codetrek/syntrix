@@ -1,83 +1,95 @@
 package cursor
 
 import (
+	"encoding/base64"
+	"errors"
+	"math"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/syntrixbase/syntrix/internal/puller/events"
 )
 
-func TestProgressMarker(t *testing.T) {
-	t.Run("NewProgressMarker", func(t *testing.T) {
-		pm := NewProgressMarker()
-		require.NotNil(t, pm)
-		assert.Empty(t, pm.Positions)
-	})
+func TestProgressRoundTripAndIsolation(t *testing.T) {
+	original := NewProgressMarker()
+	original.SetPosition(Position{SourceID: "source-a", Generation: "generation-1", Sequence: math.MaxUint64})
+	original.SetPosition(Position{SourceID: "source-b", Generation: "generation-2", Sequence: 0})
+	encoded, err := original.Encode()
+	require.NoError(t, err)
+	decoded, err := DecodeProgressMarker(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, original, decoded)
+	copy := decoded.Clone()
+	copy.SetPosition(Position{SourceID: "source-a", Generation: "generation-1", Sequence: 1})
+	position, exists := original.GetPosition("source-a")
+	require.True(t, exists)
+	assert.Equal(t, uint64(math.MaxUint64), position.Sequence)
+	_, exists = original.GetPosition("absent")
+	assert.False(t, exists)
+}
 
-	t.Run("SetAndGetPosition", func(t *testing.T) {
-		pm := NewProgressMarker()
-		pm.SetPosition("backend1", "pos1")
-		pm.SetPosition("backend2", "pos2")
-
-		assert.Equal(t, "pos1", pm.GetPosition("backend1"))
-		assert.Equal(t, "pos2", pm.GetPosition("backend2"))
-		assert.Empty(t, pm.GetPosition("backend3"))
-	})
-
-	t.Run("EncodeDecode", func(t *testing.T) {
-		pm := NewProgressMarker()
-		pm.SetPosition("backend1", "pos1")
-		pm.SetPosition("backend2", "pos2")
-
-		encoded := pm.Encode()
-		require.NotEmpty(t, encoded)
-
-		decoded, err := DecodeProgressMarker(encoded)
-		require.NoError(t, err)
-		require.NotNil(t, decoded)
-
-		assert.Equal(t, "pos1", decoded.GetPosition("backend1"))
-		assert.Equal(t, "pos2", decoded.GetPosition("backend2"))
-	})
-
-	t.Run("DecodeEmpty", func(t *testing.T) {
-		decoded, err := DecodeProgressMarker("")
-		require.NoError(t, err)
-		require.NotNil(t, decoded)
-		assert.Empty(t, decoded.Positions)
-	})
-
-	t.Run("DecodeInvalid", func(t *testing.T) {
-		_, err := DecodeProgressMarker("invalid-base64")
+func TestSavedCursorRejectsMalformedOrUnsupportedState(t *testing.T) {
+	cases := map[string]struct {
+		body string
+		code events.ErrorCode
+	}{
+		"legacy":             {`{"p":{"backend":"event-id"}}`, events.CodeInvalidCursor},
+		"version":            {`{"v":2,"positions":{}}`, events.CodeUnsupportedFormat},
+		"missing positions":  {`{"v":1}`, events.CodeInvalidCursor},
+		"missing sequence":   {`{"v":1,"positions":{"a":{"source":"a","generation":"g"}}}`, events.CodeInvalidCursor},
+		"missing source":     {`{"v":1,"positions":{"a":{"generation":"g","sequence":0}}}`, events.CodeInvalidCursor},
+		"missing generation": {`{"v":1,"positions":{"a":{"source":"a","sequence":0}}}`, events.CodeInvalidCursor},
+		"mismatched key":     {`{"v":1,"positions":{"b":{"source":"a","generation":"g","sequence":0}}}`, events.CodeInvalidCursor},
+		"negative":           {`{"v":1,"positions":{"a":{"source":"a","generation":"g","sequence":-1}}}`, events.CodeInvalidCursor},
+		"overflow":           {`{"v":1,"positions":{"a":{"source":"a","generation":"g","sequence":18446744073709551616}}}`, events.CodeInvalidCursor},
+		"unknown field":      {`{"v":1,"positions":{},"extra":true}`, events.CodeInvalidCursor},
+		"trailing":           {`{"v":1,"positions":{}} {}`, events.CodeInvalidCursor},
+	}
+	for name, item := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := DecodeProgressMarker(base64.RawURLEncoding.EncodeToString([]byte(item.body)))
+			var typed *events.Error
+			require.ErrorAs(t, err, &typed)
+			assert.Equal(t, item.code, typed.Code)
+		})
+	}
+	for _, encoded := range []string{"invalid!!!", strings.Repeat("a", maxEncodedMarkerBytes+1)} {
+		_, err := DecodeProgressMarker(encoded)
 		require.Error(t, err)
-	})
+	}
+	empty, err := DecodeProgressMarker("")
+	require.NoError(t, err)
+	assert.Empty(t, empty.Positions)
+	_, err = empty.Encode()
+	require.Error(t, err)
+}
 
-	t.Run("Clone", func(t *testing.T) {
-		pm := NewProgressMarker()
-		pm.SetPosition("backend1", "pos1")
+func TestEncodingRejectsInvalidPositions(t *testing.T) {
+	var absent *ProgressMarker
+	_, err := absent.Encode()
+	require.Error(t, err)
+	for _, position := range []Position{{Generation: "g"}, {SourceID: "s"}} {
+		marker := NewProgressMarker()
+		marker.SetPosition(position)
+		_, err := marker.Encode()
+		require.Error(t, err)
+	}
+	marker := NewProgressMarker()
+	marker.Positions["other"] = Position{SourceID: "source", Generation: "g"}
+	_, err = marker.Encode()
+	require.Error(t, err)
+	marker = NewProgressMarker()
+	marker.SetPosition(Position{SourceID: strings.Repeat("s", maxEncodedMarkerBytes), Generation: "g"})
+	_, err = marker.Encode()
+	require.Error(t, err)
+}
 
-		clone := pm.Clone()
-		require.NotNil(t, clone)
-		assert.Equal(t, "pos1", clone.GetPosition("backend1"))
-
-		// Modify clone, original should not change
-		clone.SetPosition("backend1", "pos2")
-		assert.Equal(t, "pos2", clone.GetPosition("backend1"))
-		assert.Equal(t, "pos1", pm.GetPosition("backend1"))
-	})
-
-	t.Run("NilReceiver", func(t *testing.T) {
-		var pm *ProgressMarker
-		assert.Empty(t, pm.Encode())
-		assert.NotNil(t, pm.Clone())
-	})
-
-	t.Run("NilPositions", func(t *testing.T) {
-		pm := &ProgressMarker{Positions: nil}
-		assert.Empty(t, pm.Encode())
-		assert.Empty(t, pm.GetPosition("backend1"))
-
-		pm.SetPosition("backend1", "pos1")
-		assert.Equal(t, "pos1", pm.GetPosition("backend1"))
-	})
+func TestDomainErrorPreservesCause(t *testing.T) {
+	cause := errors.New("storage synchronization failed")
+	err := &events.Error{Code: events.CodeStorageFailure, SourceID: "source", Generation: "g", Backend: "mongo", Cause: cause}
+	assert.ErrorIs(t, err, cause)
+	assert.Contains(t, err.Error(), "STORAGE_FAILURE")
+	assert.Contains(t, err.Error(), "storage synchronization failed")
 }

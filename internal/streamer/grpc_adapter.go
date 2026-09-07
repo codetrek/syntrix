@@ -3,6 +3,7 @@ package streamer
 import (
 	"context"
 	"log/slog"
+	"sync"
 
 	"github.com/google/uuid"
 	pb "github.com/syntrixbase/syntrix/api/gen/streamer/v1"
@@ -19,6 +20,7 @@ type grpcStreamAdapter struct {
 	localStream *localStream
 	service     *streamerService
 	logger      *slog.Logger
+	sendMu      sync.Mutex
 }
 
 func newGRPCStreamAdapter(
@@ -38,6 +40,7 @@ func newGRPCStreamAdapter(
 }
 
 func (g *grpcStreamAdapter) run() error {
+	defer g.localStream.close()
 	errChan := make(chan error, 2)
 
 	// Handle incoming gRPC messages
@@ -58,26 +61,19 @@ func (g *grpcStreamAdapter) run() error {
 		}
 	}()
 
-	// Handle outgoing events to gRPC
 	go func() {
 		for {
-			select {
-			case delivery, ok := <-g.localStream.outgoing:
-				if !ok {
-					return
-				}
-				// Convert EventDelivery to proto and send
-				protoDelivery := eventDeliveryToProto(delivery)
-				protoMsg := &pb.StreamerMessage{
-					Payload: &pb.StreamerMessage_Delivery{
-						Delivery: protoDelivery,
-					},
-				}
-				if err := g.grpcStream.Send(protoMsg); err != nil {
-					errChan <- err
-					return
-				}
-			case <-g.ctx.Done():
+			delivery, err := g.localStream.Recv()
+			if err != nil {
+				errChan <- err
+				return
+			}
+			if err := g.send(&pb.StreamerMessage{
+				Payload: &pb.StreamerMessage_Delivery{
+					Delivery: eventDeliveryToProto(delivery),
+				},
+			}); err != nil {
+				errChan <- err
 				return
 			}
 		}
@@ -88,8 +84,10 @@ func (g *grpcStreamAdapter) run() error {
 		return err
 	case <-g.ctx.Done():
 		return g.ctx.Err()
+	case <-g.localStream.ctx.Done():
+		return context.Cause(g.localStream.ctx)
 	case <-g.service.ctx.Done():
-		return g.service.ctx.Err()
+		return g.service.Err()
 	}
 }
 
@@ -102,10 +100,19 @@ func (g *grpcStreamAdapter) handleProtoMessage(msg *pb.GatewayMessage) error {
 			req.SubscriptionId = uuid.New().String()
 		}
 
-		resp, _ := g.service.manager.Subscribe(g.gatewayID, req)
+		g.service.streamsMu.RLock()
+		if err := g.service.Err(); err != nil {
+			g.service.streamsMu.RUnlock()
+			return err
+		}
+		resp, err := g.service.manager.Subscribe(g.gatewayID, req)
+		g.service.streamsMu.RUnlock()
+		if err != nil {
+			return err
+		}
 
 		// Send response back
-		return g.grpcStream.Send(&pb.StreamerMessage{
+		return g.send(&pb.StreamerMessage{
 			Payload: &pb.StreamerMessage_SubscribeResponse{
 				SubscribeResponse: resp,
 			},
@@ -120,7 +127,7 @@ func (g *grpcStreamAdapter) handleProtoMessage(msg *pb.GatewayMessage) error {
 		return nil
 
 	case *pb.GatewayMessage_Heartbeat:
-		return g.grpcStream.Send(&pb.StreamerMessage{
+		return g.send(&pb.StreamerMessage{
 			Payload: &pb.StreamerMessage_HeartbeatAck{
 				HeartbeatAck: &pb.HeartbeatAck{
 					Timestamp: m.Heartbeat.Timestamp,
@@ -129,4 +136,13 @@ func (g *grpcStreamAdapter) handleProtoMessage(msg *pb.GatewayMessage) error {
 		})
 	}
 	return nil
+}
+
+func (g *grpcStreamAdapter) send(msg *pb.StreamerMessage) error {
+	g.sendMu.Lock()
+	defer g.sendMu.Unlock()
+	if err := context.Cause(g.localStream.ctx); err != nil {
+		return err
+	}
+	return g.grpcStream.Send(msg)
 }

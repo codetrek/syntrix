@@ -2,8 +2,9 @@ package watcher
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
+	"sync"
 	"time"
 
 	"github.com/syntrixbase/syntrix/internal/core/storage"
@@ -11,6 +12,8 @@ import (
 	"github.com/syntrixbase/syntrix/internal/puller/events"
 	"github.com/syntrixbase/syntrix/pkg/model"
 )
+
+const checkpointKey = "sys/checkpoints/trigger_evaluator"
 
 // WatcherOptions configures the watcher.
 type WatcherOptions struct {
@@ -22,96 +25,130 @@ type pullerWatcher struct {
 	puller puller.Service
 	store  storage.DocumentStore
 	opts   WatcherOptions
+
+	mu        sync.Mutex
+	streams   map[*pullerStream]struct{}
+	closed    bool
+	closeOnce sync.Once
+	closeErr  error
 }
 
-// NewWatcher creates a new DocumentWatcher.
-// The watcher receives all events from Puller; database filtering is done by the Evaluator
-// based on each trigger's Database field.
+// NewWatcher receives all databases; each trigger selects its database during evaluation.
 func NewWatcher(p puller.Service, store storage.DocumentStore, opts WatcherOptions) DocumentWatcher {
-	// Apply default if not set
 	if opts.CheckpointDatabase == "" {
 		opts.CheckpointDatabase = "default"
 	}
-	return &pullerWatcher{
-		puller: p,
-		store:  store,
-		opts:   opts,
-	}
+	return &pullerWatcher{puller: p, store: store, opts: opts, streams: make(map[*pullerStream]struct{})}
 }
 
-func (w *pullerWatcher) Watch(ctx context.Context) (<-chan events.SyntrixChangeEvent, error) {
-	// 1. Load Checkpoint
-	// Checkpoint is global (not per-database) because Puller returns a single aggregated
-	// progress token across all databases.
-	checkpointKey := "sys/checkpoints/trigger_evaluator"
-	checkpointDatabase := w.opts.CheckpointDatabase
-
+func (w *pullerWatcher) Watch(ctx context.Context) (WatcherStream, error) {
+	// One checkpoint contains Puller's aggregate positions across all sources.
+	checkpointDoc, err := w.store.Get(ctx, w.opts.CheckpointDatabase, checkpointKey)
 	var resumeToken string
-	checkpointDoc, err := w.store.Get(ctx, checkpointDatabase, checkpointKey)
-	if err == nil && checkpointDoc != nil {
-		if token, ok := checkpointDoc.Data["token"].(string); ok {
-			resumeToken = token
-			log.Printf("Resuming trigger watcher from checkpoint: %s", token)
-		}
-	} else if err == model.ErrNotFound {
+	switch {
+	case errors.Is(err, model.ErrNotFound):
 		if !w.opts.StartFromNow {
-			return nil, fmt.Errorf("checkpoint not found and StartFromNow is false")
+			return nil, fmt.Errorf("checkpoint not found and StartFromNow is false: %w", err)
 		}
-		log.Printf("AUDIT: Starting watch from NOW (checkpoint missing)")
-	} else {
-		log.Printf("Failed to load checkpoint: %v", err)
-		return nil, err
+	case err != nil:
+		return nil, fmt.Errorf("load trigger checkpoint: %w", err)
+	default:
+		if checkpointDoc == nil {
+			return nil, errors.New("trigger checkpoint is missing from successful storage response")
+		}
+		var ok bool
+		resumeToken, ok = checkpointDoc.Data["token"].(string)
+		if !ok || resumeToken == "" {
+			return nil, errors.New("trigger checkpoint token must be a nonempty string")
+		}
 	}
 
-	// 2. Start Watch
-	consumerID := "trigger-evaluator"
-	pullerCh := w.puller.Subscribe(ctx, consumerID, resumeToken)
+	subscription, err := w.puller.Subscribe(ctx, events.SubscribeOptions{
+		ConsumerID: "trigger-evaluator",
+		After:      resumeToken,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("subscribe trigger watcher: %w", err)
+	}
+	stream := &pullerStream{subscription: subscription, owner: w}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return nil, errors.Join(errors.New("trigger watcher is closed"), subscription.Close())
+	}
+	w.streams[stream] = struct{}{}
+	return stream, nil
+}
 
-	outCh := make(chan events.SyntrixChangeEvent)
+type pullerStream struct {
+	subscription events.Subscription
+	owner        *pullerWatcher
+	nextMu       sync.Mutex
+	terminalErr  error
+	closeOnce    sync.Once
+	closeErr     error
+}
 
-	go func() {
-		defer close(outCh)
-		for pEvent := range pullerCh {
-			// Convert puller event to SyntrixChangeEvent
-			// No database filtering here - Evaluator handles database matching per trigger
-			event, err := events.Transform(pEvent)
-			if err != nil {
-				continue
-			}
+func (s *pullerStream) Next(ctx context.Context) (events.SyntrixChangeEvent, error) {
+	s.nextMu.Lock()
+	defer s.nextMu.Unlock()
+	if s.terminalErr != nil {
+		return events.SyntrixChangeEvent{}, s.terminalErr
+	}
+	pEvent, err := s.subscription.Next(ctx)
+	if err != nil {
+		s.terminalErr = err
+		return events.SyntrixChangeEvent{}, err
+	}
+	if pEvent.Change == nil {
+		return events.SyntrixChangeEvent{Progress: pEvent.Progress}, nil
+	}
+	event, err := events.Transform(pEvent)
+	if errors.Is(err, events.ErrDeleteOPIgnored) {
+		// Physical deletes are storage cleanup; their position still completes the prefix.
+		return events.SyntrixChangeEvent{Progress: pEvent.Progress}, nil
+	}
+	if err != nil {
+		s.terminalErr = fmt.Errorf("transform trigger event %q: %w", pEvent.Change.EventID, err)
+		return events.SyntrixChangeEvent{}, s.terminalErr
+	}
+	return event, nil
+}
 
-			select {
-			case outCh <- event:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	return outCh, nil
+func (s *pullerStream) Close() error {
+	s.closeOnce.Do(func() {
+		s.closeErr = s.subscription.Close()
+		s.owner.mu.Lock()
+		delete(s.owner.streams, s)
+		s.owner.mu.Unlock()
+	})
+	return s.closeErr
 }
 
 func (w *pullerWatcher) SaveCheckpoint(ctx context.Context, token interface{}) error {
-	checkpointKey := "sys/checkpoints/trigger_evaluator"
-	checkpointDatabase := w.opts.CheckpointDatabase
-
-	data := map[string]interface{}{
-		"token":     token,
-		"updatedAt": time.Now().Unix(),
+	data := map[string]interface{}{"token": token, "updatedAt": time.Now().Unix()}
+	err := w.store.Update(ctx, w.opts.CheckpointDatabase, checkpointKey, data, model.Filters{})
+	if errors.Is(err, model.ErrNotFound) {
+		doc := storage.NewStoredDoc(w.opts.CheckpointDatabase, "sys/checkpoints", "trigger_evaluator", data)
+		return w.store.Create(ctx, w.opts.CheckpointDatabase, doc)
 	}
-
-	err := w.store.Update(ctx, checkpointDatabase, checkpointKey, data, model.Filters{})
-	if err != nil {
-		if err == model.ErrNotFound {
-			// Create if not exists
-			doc := storage.NewStoredDoc(checkpointDatabase, "sys/checkpoints", "trigger_evaluator", data)
-			return w.store.Create(ctx, checkpointDatabase, doc)
-		}
-		return err
-	}
-	return nil
+	return err
 }
 
-// Close releases resources held by the watcher.
 func (w *pullerWatcher) Close() error {
-	return nil
+	w.closeOnce.Do(func() {
+		w.mu.Lock()
+		w.closed = true
+		streams := make([]*pullerStream, 0, len(w.streams))
+		for stream := range w.streams {
+			streams = append(streams, stream)
+		}
+		w.mu.Unlock()
+		var errs []error
+		for _, stream := range streams {
+			errs = append(errs, stream.Close())
+		}
+		w.closeErr = errors.Join(errs...)
+	})
+	return w.closeErr
 }

@@ -48,11 +48,8 @@ func (m *mockStreamerStream) Recv() (*streamer.EventDelivery, error) {
 		return evt, nil
 	case <-time.After(1 * time.Second):
 		// Timeout to avoid blocking tests forever if channel empty
-		return nil, nil // Or wait? Ideally we block or return EOF if closed.
-		// For Broadcast test, we might not read from here unless we are mocking the other side.
-		// Use a blocking receive for now.
+		return nil, nil
 	}
-	return nil, nil
 }
 
 func (m *mockStreamerStream) Close() error {

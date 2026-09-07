@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestHealthStatus(t *testing.T) {
@@ -107,6 +109,48 @@ func TestChecker_RecordGap(t *testing.T) {
 	}
 }
 
+func TestChecker_FailBackend(t *testing.T) {
+	t.Parallel()
+	h := NewChecker(nil)
+	h.RegisterBackend("backend-1")
+	h.FailBackend("backend-1")
+
+	report := h.GetReport()
+	require.Equal(t, StatusUnhealthy, report.Status)
+	require.Equal(t, StatusUnhealthy, h.Check())
+	require.Len(t, report.Backends, 1)
+	require.Equal(t, StatusUnhealthy, report.Backends[0].Status)
+	require.Equal(t, 1, report.Backends[0].Errors)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", nil))
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&report))
+	require.Equal(t, StatusUnhealthy, report.Status)
+	require.Equal(t, StatusUnhealthy, report.Backends[0].Status)
+}
+
+func TestChecker_TerminalFailureSurvivesLaterActivity(t *testing.T) {
+	t.Parallel()
+	h := NewChecker(nil)
+	h.RegisterBackend("backend-1")
+	h.FailBackend("backend-1")
+
+	for range 6 {
+		h.RecordEvent("backend-1")
+		require.Equal(t, StatusUnhealthy, h.Check(), "an in-flight event cannot recover a terminal backend")
+		h.RecordError("backend-1")
+		require.Equal(t, StatusUnhealthy, h.Check(), "later errors cannot downgrade a terminal failure")
+	}
+
+	report := h.GetReport()
+	require.Len(t, report.Backends, 1)
+	require.Equal(t, StatusUnhealthy, report.Backends[0].Status)
+	require.Equal(t, int64(6), report.Backends[0].EventsTotal)
+	require.NotNil(t, report.Backends[0].LastEvent)
+	require.Equal(t, 7, report.Backends[0].Errors)
+}
+
 func TestChecker_SetConsumerCount(t *testing.T) {
 	t.Parallel()
 	h := NewChecker(nil)
@@ -149,6 +193,9 @@ func TestChecker_GetReport_AggregateStatus(t *testing.T) {
 	if report.Status != StatusDegraded {
 		t.Errorf("Status = %q, want 'degraded'", report.Status)
 	}
+
+	h.FailBackend("backend-2")
+	require.Equal(t, StatusUnhealthy, h.Check())
 }
 
 func TestChecker_Check(t *testing.T) {
@@ -212,4 +259,6 @@ func TestChecker_RecordEvent_UnknownBackend(t *testing.T) {
 	h.RecordEvent("unknown-backend")
 	h.RecordError("unknown-backend")
 	h.RecordGap("unknown-backend")
+	h.FailBackend("unknown-backend")
+	require.Empty(t, h.GetReport().Backends)
 }

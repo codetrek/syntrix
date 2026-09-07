@@ -28,6 +28,18 @@ func (m *Manager) Shutdown(ctx context.Context) {
 		}()
 	}
 
+	if m.streamerService != nil {
+		if err := m.streamerService.Stop(ctx); err != nil {
+			slog.Error("Error stopping Streamer service", "error", err)
+		}
+	}
+
+	// GracefulStop waits for active RPCs, so close subscriptions before waiting
+	// for transport shutdown. The Puller log remains open until its normal stop.
+	if m.pullerGRPC != nil {
+		m.pullerGRPC.Shutdown()
+	}
+
 	// Stop Unified Server Service
 	if s := server.Default(); s != nil {
 		slog.Info("Stopping Unified Server Service...")
@@ -57,12 +69,6 @@ func (m *Manager) Shutdown(ctx context.Context) {
 		if err := m.pubsubProvider.Close(); err != nil {
 			slog.Error("Error closing pubsub provider", "error", err)
 		}
-	}
-
-	// Shutdown Puller gRPC Service
-	if m.pullerGRPC != nil {
-		slog.Info("Shutting down Puller gRPC Service...")
-		m.pullerGRPC.Shutdown()
 	}
 
 	// Stop Change Stream Puller

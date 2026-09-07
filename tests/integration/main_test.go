@@ -413,13 +413,12 @@ templates:
 		return nil, fmt.Errorf("failed to create webhook test server: %w", err)
 	}
 
-	// Create trigger rules file with webhook server URL
-	// This trigger watches any collection and fires when age >= 18
-	// Using "*" as collection pattern matches any collection name
+	// Trigger tests own collections containing _trigger_. Other parallel tests
+	// use different document schemas, which must not enter this age predicate.
 	triggerRulesContent := fmt.Sprintf(`database: default
 triggers:
   integration-test-trigger:
-    collection: "*"
+    collection: "*_trigger_*"
     events:
       - create
       - update
@@ -526,7 +525,7 @@ triggers:
 		},
 		Puller: puller_config.Config{
 			Backends: []puller_config.PullerBackendConfig{
-				{Name: "default", Collections: []string{"documents"}},
+				{Name: "default", SourceID: "integration-mongo", Collections: []string{"documents"}},
 			},
 			Cleaner: puller_config.CleanerConfig{
 				Interval:  1 * time.Minute,
@@ -572,6 +571,8 @@ triggers:
 		},
 	}
 
+	cfg.Puller.ApplyDefaults()
+
 	// Initialize the unified server
 	server.InitDefault(cfg.Server, nil)
 
@@ -587,25 +588,8 @@ triggers:
 	}
 
 	manager := services.NewManager(cfg, opts)
-	if err := manager.Init(context.Background()); err != nil {
-		return nil, fmt.Errorf("failed to init manager: %w", err)
-	}
-
-	// Start manager
 	mgrCtx, mgrCancel := context.WithCancel(context.Background())
-	manager.Start(mgrCtx)
-
-	// Wait for services to be healthy
-	if err := waitForHealthWithTimeout(fmt.Sprintf("http://localhost:%d/health", apiPort), 30*time.Second); err != nil {
-		mgrCancel()
-		return nil, fmt.Errorf("API server failed to start: %w", err)
-	}
-	// Query service now uses unified gRPC server, no separate health check needed
-
-	log.Printf("[Integration Test] Global environment started (Distributed Mode) - API: %d, gRPC: %d, DB: %s",
-		apiPort, grpcPort, dbName)
-
-	return &GlobalTestEnv{
+	env := &GlobalTestEnv{
 		APIURL:          fmt.Sprintf("http://localhost:%d", apiPort),
 		QueryURL:        fmt.Sprintf("localhost:%d", grpcPort),
 		Manager:         manager,
@@ -618,7 +602,23 @@ triggers:
 		WebhookServer:   webhookServer,
 		cancel:          mgrCancel,
 		tempDir:         tempDir,
-	}, nil
+	}
+	if err := manager.Init(mgrCtx); err != nil {
+		env.Shutdown()
+		return nil, fmt.Errorf("failed to init manager: %w", err)
+	}
+	if err := manager.Start(mgrCtx); err != nil {
+		env.Shutdown()
+		return nil, fmt.Errorf("failed to start manager: %w", err)
+	}
+	if err := waitForHealthWithTimeout(env.APIURL+"/health", 30*time.Second); err != nil {
+		env.Shutdown()
+		return nil, fmt.Errorf("API server failed to start: %w", err)
+	}
+
+	log.Printf("[Integration Test] Global environment started (Distributed Mode) - API: %d, gRPC: %d, DB: %s",
+		apiPort, grpcPort, dbName)
+	return env, nil
 }
 
 // Shutdown stops the global service and cleans up resources

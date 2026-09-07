@@ -209,6 +209,16 @@ func (s *Store) LoadProgress() (string, error) {
 	return s.progress, nil
 }
 
+func (s *Store) SaveProgress(progress string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.progress = progress
+	return nil
+}
+
+func (s *Store) Failed() <-chan struct{} { return nil }
+func (s *Store) Err() error              { return nil }
+
 // Flush is a no-op for memory store.
 func (s *Store) Flush() error {
 	return nil

@@ -492,7 +492,7 @@ func (m *Manager) initPullerService(ctx context.Context) error {
 
 // initPullerGRPCServer registers the Puller service with the unified gRPC server.
 func (m *Manager) initPullerGRPCServer() {
-	grpcServer := puller.NewGRPCServerWithInit(m.cfg.Puller.GRPC, m.pullerService, nil)
+	grpcServer := puller.NewGRPCServer(m.cfg.Puller.GRPC, m.pullerService, nil)
 	m.pullerGRPC = grpcServer
 	server.Default().RegisterGRPCService(&pullerv1.PullerService_ServiceDesc, grpcServer)
 	slog.Info("Registered Puller Service (gRPC)")

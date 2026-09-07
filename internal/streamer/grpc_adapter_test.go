@@ -14,7 +14,9 @@ import (
 	pb "github.com/syntrixbase/syntrix/api/gen/streamer/v1"
 	"github.com/syntrixbase/syntrix/internal/core/storage"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // --- Mock gRPC Stream for testing GRPCStream ---
@@ -176,7 +178,8 @@ func TestGRPCStream_ServiceStopped(t *testing.T) {
 	require.NoError(t, err)
 	internal := getInternalService(s)
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	mockStream := &mockBidiStream{ctx: ctx}
 
 	done := make(chan error, 1)
@@ -530,4 +533,16 @@ func TestGRPCServerAdapter_Stream(t *testing.T) {
 
 	err = <-done
 	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestGRPCServerAdapter_UpstreamFailureIsTerminal(t *testing.T) {
+	s, err := NewService(ServerConfig{}, slog.Default())
+	require.NoError(t, err)
+	failure := errors.New("upstream continuity lost")
+	getInternalService(s).terminate(failure)
+	server, err := NewGRPCServer(s)
+	require.NoError(t, err)
+	err = server.Stream(&mockBidiStream{ctx: context.Background()})
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	require.ErrorContains(t, err, failure.Error())
 }

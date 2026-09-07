@@ -1,192 +1,274 @@
-// Package buffer provides event buffering with PebbleDB persistence.
 package buffer
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/syntrixbase/syntrix/internal/puller/cursor"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
 )
 
-// Read retrieves an event by its buffer key.
-func (b *Buffer) Read(key string) (*events.StoreChangeEvent, error) {
-	b.mu.RLock()
-	if b.closed {
-		b.mu.RUnlock()
-		return nil, fmt.Errorf("buffer is closed")
-	}
-	b.mu.RUnlock()
-
-	value, closer, err := b.db.Get([]byte(key))
-	if err != nil {
-		if err == pebble.ErrNotFound {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to read event: %w", err)
-	}
-	defer closer.Close()
-
-	var evt events.StoreChangeEvent
-	if err := json.Unmarshal(value, &evt); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal event: %w", err)
-	}
-
-	return &evt, nil
+func eventRange(generation string, after uint64) *pebble.IterOptions {
+	return &pebble.IterOptions{LowerBound: eventKey(generation, after+1), UpperBound: []byte("event/" + generation + "0")}
 }
 
-// ScanFrom returns an iterator starting from the given key (exclusive).
-// If afterKey is empty, starts from the beginning.
-func (b *Buffer) ScanFrom(afterKey string) (Iterator, error) {
-	b.mu.RLock()
-	if b.closed {
-		b.mu.RUnlock()
-		return nil, fmt.Errorf("buffer is closed")
+func (b *Buffer) validatePosition(position cursor.Position, state State) error {
+	if position.SourceID != state.Position.SourceID {
+		return domain("UNKNOWN_SOURCE", state, b.opts.SourceID, errors.New("cursor belongs to another source"))
 	}
-	b.mu.RUnlock()
-
-	iterOpts := &pebble.IterOptions{}
-	if afterKey != "" {
-		// Start after the given key
-		iterOpts.LowerBound = []byte(afterKey + "\x00") // Next key after afterKey
+	if position.Generation != state.Position.Generation {
+		return domain("GENERATION_MISMATCH", state, b.opts.SourceID, errors.New("cursor belongs to another log generation"))
 	}
-
-	iter, err := b.db.NewIter(iterOpts)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create iterator: %w", err)
+	if position.Sequence < state.DiscardedThrough {
+		return domain("HISTORY_EXPIRED", state, b.opts.SourceID, errors.New("cursor precedes retained event history"))
 	}
-
-	dbIter := &bufferIterator{
-		iter:  iter,
-		first: true,
+	if position.Sequence > state.Position.Sequence {
+		return domain("POSITION_AHEAD", state, b.opts.SourceID, errors.New("cursor exceeds the committed event frontier"))
 	}
-
-	// Create snapshot iterator over pending events
-	snapshotIter := b.newSnapshotIterator(afterKey)
-
-	// Return a deduplicating iterator that reads from DB then snapshot
-	return newDeduplicatingIterator(dbIter, snapshotIter), nil
+	return nil
 }
 
-// Head returns the most recent event key.
-func (b *Buffer) Head() (string, error) {
-	b.mu.RLock()
-	if b.closed {
-		b.mu.RUnlock()
-		return "", fmt.Errorf("buffer is closed")
+// ReadPage holds a short safe snapshot lease only while copying a bounded page.
+// Pebble's in-flight memtable visibility is never a replay authority.
+func (b *Buffer) ReadPage(ctx context.Context, after, through cursor.Position, maxEvents int, maxBytes int64) (Page, error) {
+	page := Page{Through: after}
+	if maxEvents <= 0 || maxBytes <= 0 {
+		return page, errors.New("page event and byte limits must be positive")
 	}
-	b.mu.RUnlock()
-
-	iter, err := b.db.NewIter(nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create iterator: %w", err)
+	if err := ctx.Err(); err != nil {
+		return page, err
 	}
-	defer iter.Close()
-
-	for iter.Last(); iter.Valid(); iter.Prev() {
-		if isCheckpointKey(iter.Key()) {
-			continue
-		}
-		return string(iter.Key()), nil
-	}
-	return "", nil // Empty buffer
-}
-
-// First returns the oldest event key.
-func (b *Buffer) First() (string, error) {
-	b.mu.RLock()
-	if b.closed {
-		b.mu.RUnlock()
-		return "", fmt.Errorf("buffer is closed")
-	}
-	b.mu.RUnlock()
-
-	iter, err := b.db.NewIter(nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create iterator: %w", err)
-	}
-	defer iter.Close()
-
-	for iter.First(); iter.Valid(); iter.Next() {
-		if isCheckpointKey(iter.Key()) {
-			continue
-		}
-		return string(iter.Key()), nil
-	}
-	return "", nil // Empty buffer
-}
-
-// Size returns the estimated disk usage of the buffer.
-func (b *Buffer) Size() (int64, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	if b.closed {
-		return 0, fmt.Errorf("buffer is closed")
+	if b.err != nil {
+		return page, b.err
 	}
-	// DiskSpaceUsage includes WAL and SSTables
-	return int64(b.db.Metrics().DiskSpaceUsage()), nil
-}
-
-// Count returns the approximate number of events in the buffer.
-func (b *Buffer) Count() (int, error) {
-	b.mu.RLock()
 	if b.closed {
-		b.mu.RUnlock()
-		return 0, fmt.Errorf("buffer is closed")
+		return page, errors.New("event buffer is closed")
 	}
-	b.mu.RUnlock()
-
-	count := 0
-	iter, err := b.db.NewIter(nil)
+	if b.state.Discontinuous {
+		return page, domain("CONTINUITY_LOST", b.state, b.opts.SourceID, errors.New("event history is discontinuous"))
+	}
+	if err := b.validatePosition(after, b.state); err != nil {
+		return page, err
+	}
+	if err := b.validatePosition(through, b.state); err != nil {
+		return page, err
+	}
+	if through.Sequence < after.Sequence {
+		return page, domain("INVALID_CURSOR", b.state, b.opts.SourceID, errors.New("replay ceiling precedes starting position"))
+	}
+	if after.Sequence == through.Sequence {
+		return page, nil
+	}
+	iter, err := b.snapshot.NewIter(eventRange(after.Generation, after.Sequence))
 	if err != nil {
-		return 0, fmt.Errorf("failed to create iterator: %w", err)
+		return page, b.storageError(err)
 	}
-	defer iter.Close()
-
-	for iter.First(); iter.Valid(); iter.Next() {
-		if isCheckpointKey(iter.Key()) {
-			continue
+	var bytesRead int64
+	var readErr error
+	for valid := iter.First(); valid && len(page.Records) < maxEvents; valid = iter.Next() {
+		if err := ctx.Err(); err != nil {
+			readErr = err
+			break
 		}
-		count++
+		expected := page.Through.Sequence + 1
+		if expected > through.Sequence {
+			break
+		}
+		disk, event, err := readRecord(iter.Key(), iter.Value(), after.Generation, expected, b.opts.SourceID)
+		if err != nil {
+			readErr = b.storageError(err)
+			break
+		}
+		size := int64(len(disk.Event))
+		if size > maxBytes-bytesRead {
+			if len(page.Records) == 0 {
+				readErr = domain("OVERLOADED", b.state, b.opts.SourceID, fmt.Errorf("event requires %d bytes, exceeding replay page budget %d", size, maxBytes))
+			}
+			break
+		}
+		position := after
+		position.Sequence = expected
+		page.Records = append(page.Records, Record{Position: position, Event: event, EncodedBytes: size})
+		bytesRead += size
+		page.Through = position
+		if expected == through.Sequence {
+			break
+		}
 	}
-
-	return count, nil
+	if readErr == nil && len(page.Records) == 0 && page.Through.Sequence < through.Sequence {
+		readErr = b.storageError(errors.New("committed event sequence is missing"))
+	}
+	if err := errors.Join(iter.Error(), iter.Close()); err != nil {
+		readErr = errors.Join(readErr, b.storageError(err))
+	}
+	return page, readErr
 }
 
-// CountAfter returns the number of events after the given key.
-func (b *Buffer) CountAfter(afterKey string) (int, error) {
-	b.mu.RLock()
-	if b.closed {
-		b.mu.RUnlock()
-		return 0, fmt.Errorf("buffer is closed")
+func readRecord(key, value []byte, generation string, expected uint64, source string) (diskRecord, *events.StoreChangeEvent, error) {
+	var disk diskRecord
+	if !bytes.Equal(key, eventKey(generation, expected)) {
+		return disk, nil, fmt.Errorf("committed event sequence %d is missing", expected)
 	}
-	b.mu.RUnlock()
-
-	count := 0
-	iterOpts := &pebble.IterOptions{}
-	if afterKey != "" {
-		iterOpts.LowerBound = []byte(afterKey + "\x00")
+	if err := decode(value, &disk); err != nil {
+		return disk, nil, err
 	}
+	if disk.Sequence != expected {
+		return disk, nil, errors.New("stored event position disagrees with its key")
+	}
+	if err := disk.Token.Validate(); err != nil {
+		return disk, nil, fmt.Errorf("invalid stored event identity: %w", err)
+	}
+	var event events.StoreChangeEvent
+	if err := json.Unmarshal(disk.Event, &event); err != nil {
+		return disk, nil, err
+	}
+	if event.EventID != eventIdentity(source, disk.Token) {
+		return disk, nil, errors.New("stored event identity does not match source token")
+	}
+	return disk, &event, nil
+}
 
-	iter, err := b.db.NewIter(iterOpts)
+func (b *Buffer) verifyLog() error {
+	if b.state.DiscardedThrough == math.MaxUint64 {
+		if b.state.RetainedBytes != 0 {
+			return b.storageError(errors.New("empty retained log has nonzero byte accounting"))
+		}
+		return nil
+	}
+	iter, err := b.db.NewIter(eventRange(b.state.Position.Generation, b.state.DiscardedThrough))
 	if err != nil {
-		return 0, fmt.Errorf("failed to create iterator: %w", err)
+		return b.storageError(err)
 	}
-	defer iter.Close()
-
-	for iter.First(); iter.Valid(); iter.Next() {
-		if isCheckpointKey(iter.Key()) {
-			continue
+	sequence := b.state.DiscardedThrough
+	var size int64
+	var checkErr error
+	for valid := iter.First(); valid; valid = iter.Next() {
+		if sequence == b.state.Position.Sequence {
+			checkErr = errors.New("event record exceeds stored frontier")
+			break
 		}
-		count++
+		sequence++
+		disk, event, err := readRecord(iter.Key(), iter.Value(), b.state.Position.Generation, sequence, b.opts.SourceID)
+		if err != nil {
+			checkErr = err
+			break
+		}
+		ikey := identityKey(b.state.Position.Generation, event.EventID)
+		value, closer, err := b.db.Get(ikey)
+		if err != nil {
+			checkErr = err
+			break
+		}
+		var identity identityRecord
+		decodeErr := decode(value, &identity)
+		size += int64(len(iter.Key()) + len(iter.Value()) + len(ikey) + len(value))
+		closeErr := closer.Close()
+		if err := errors.Join(decodeErr, closeErr); err != nil {
+			checkErr = err
+			break
+		}
+		if identity.Sequence != sequence || !bytes.Equal(identity.Token, disk.Token) {
+			checkErr = errors.New("event identity mapping is inconsistent")
+			break
+		}
+		if sequence == b.state.Position.Sequence && !bytes.Equal(disk.Token, b.state.ResumeToken) {
+			checkErr = errors.New("resume token disagrees with committed frontier")
+			break
+		}
 	}
-
-	return count, nil
-}
-
-// Revalidate returns true if the buffer is consistent (last event matches last in DB).
-func (b *Buffer) Revalidate(ctx time.Duration) error {
-	// Not implemented for now, but placeholder if needed to check consistency
+	checkErr = errors.Join(checkErr, iter.Error(), iter.Close())
+	if checkErr != nil {
+		return b.storageError(checkErr)
+	}
+	if sequence != b.state.Position.Sequence || size != b.state.RetainedBytes {
+		return b.storageError(errors.New("stored frontier or retained byte accounting disagrees with event log"))
+	}
 	return nil
+}
+
+func (b *Buffer) retain(cutoff time.Time, maxBytes int64) error {
+	for {
+		state := cloneState(b.state)
+		if state.DiscardedThrough == state.Position.Sequence {
+			return nil
+		}
+		iter, err := b.db.NewIter(eventRange(state.Position.Generation, state.DiscardedThrough))
+		if err != nil {
+			return err
+		}
+		batch := b.newBatch()
+		deleted := 0
+		var batchBytes int64
+		var mutationErr error
+		for valid := iter.First(); valid; valid = iter.Next() {
+			disk, event, err := readRecord(iter.Key(), iter.Value(), state.Position.Generation, state.DiscardedThrough+1, b.opts.SourceID)
+			if err != nil {
+				mutationErr = err
+				break
+			}
+			expired := !cutoff.IsZero() && event.Timestamp < cutoff.UnixMilli()
+			oversized := maxBytes > 0 && state.RetainedBytes > maxBytes
+			if !expired && !oversized {
+				break
+			}
+			ikey := identityKey(state.Position.Generation, event.EventID)
+			value, closer, err := b.db.Get(ikey)
+			if err != nil {
+				mutationErr = err
+				break
+			}
+			size := int64(len(iter.Key()) + len(iter.Value()) + len(ikey) + len(value))
+			var identity identityRecord
+			decodeErr := decode(value, &identity)
+			closeErr := closer.Close()
+			if err := errors.Join(decodeErr, closeErr); err != nil {
+				mutationErr = err
+				break
+			}
+			if identity.Sequence != disk.Sequence || !bytes.Equal(identity.Token, disk.Token) {
+				mutationErr = errors.New("retained event identity is inconsistent")
+				break
+			}
+			if deleted == b.opts.BatchSize || (deleted > 0 && size > b.opts.BatchBytes-batchBytes) {
+				break
+			}
+			if err := batch.Delete(iter.Key(), nil); err != nil {
+				mutationErr = err
+				break
+			}
+			if err := batch.Delete(ikey, nil); err != nil {
+				mutationErr = err
+				break
+			}
+			state.DiscardedThrough = disk.Sequence
+			state.RetainedBytes -= size
+			batchBytes += size
+			deleted++
+		}
+		mutationErr = errors.Join(mutationErr, iter.Error(), iter.Close())
+		if mutationErr == nil && deleted > 0 {
+			mutationErr = b.storeState(batch, state)
+		}
+		if mutationErr == nil && deleted > 0 {
+			mutationErr = batch.Commit(pebble.Sync)
+		}
+		mutationErr = errors.Join(mutationErr, batch.Close())
+		if mutationErr != nil {
+			return mutationErr
+		}
+		if deleted == 0 {
+			return nil
+		}
+		if err := b.publish(state, nil); err != nil {
+			return err
+		}
+	}
 }

@@ -20,7 +20,6 @@ import (
 	indexer_config "github.com/syntrixbase/syntrix/internal/indexer/config"
 	"github.com/syntrixbase/syntrix/internal/puller"
 	puller_config "github.com/syntrixbase/syntrix/internal/puller/config"
-	"github.com/syntrixbase/syntrix/internal/puller/events"
 	"github.com/syntrixbase/syntrix/internal/server"
 	"github.com/syntrixbase/syntrix/internal/server/ratelimit"
 	"github.com/syntrixbase/syntrix/internal/streamer"
@@ -29,6 +28,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/mongo"
 	"google.golang.org/grpc"
 )
@@ -126,7 +126,7 @@ func TestManager_Start_TriggerEvaluator_CallsStart(t *testing.T) {
 
 	mockTS.On("Start", bgCtx).Return(nil)
 
-	mgr.Start(bgCtx)
+	require.NoError(t, mgr.Start(bgCtx))
 
 	// Wait for Start to be called
 	time.Sleep(50 * time.Millisecond)
@@ -143,7 +143,7 @@ func TestManager_Start_TriggerWorker_CallsStart(t *testing.T) {
 	bgCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mgr.Start(bgCtx)
+	require.NoError(t, mgr.Start(bgCtx))
 
 	assert.Eventually(t, func() bool {
 		return worker.called.Load() == 1
@@ -156,12 +156,12 @@ func TestManager_Start_PullerAndGRPC(t *testing.T) {
 
 	pullerSvc := &stubPullerService{}
 	mgr.pullerService = pullerSvc
-	mgr.pullerGRPC = puller.NewGRPCServerWithInit(puller_config.GRPCConfig{MaxConnections: 10}, pullerSvc, nil)
+	mgr.pullerGRPC = puller.NewGRPCServer(puller_config.GRPCConfig{MaxConnections: 10}, pullerSvc, nil)
 
 	bgCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mgr.Start(bgCtx)
+	require.NoError(t, mgr.Start(bgCtx))
 	mgr.Shutdown(context.Background())
 
 	assert.Equal(t, int32(1), pullerSvc.startCount.Load())
@@ -197,6 +197,7 @@ func (s *rtQueryStub) Push(context.Context, string, storage.ReplicationPushReque
 }
 
 type stubPullerService struct {
+	startHook  func(context.Context) error
 	startCount atomic.Int32
 	stopCount  atomic.Int32
 	mu         sync.Mutex
@@ -216,6 +217,9 @@ func (s *stubPullerService) AddBackend(name string, _ *mongo.Client, dbName stri
 }
 func (s *stubPullerService) Start(ctx context.Context) error {
 	s.startCount.Add(1)
+	if s.startHook != nil {
+		return s.startHook(ctx)
+	}
 	return nil
 }
 func (s *stubPullerService) Stop(ctx context.Context) error {
@@ -223,13 +227,10 @@ func (s *stubPullerService) Stop(ctx context.Context) error {
 	return nil
 }
 func (s *stubPullerService) BackendNames() []string { return nil }
-func (s *stubPullerService) SetEventHandler(func(ctx context.Context, backendName string, event *events.StoreChangeEvent) error) {
-}
-func (s *stubPullerService) Replay(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error) {
-	return nil, nil
-}
-func (s *stubPullerService) Subscribe(ctx context.Context, consumerID string, after string) <-chan *events.PullerEvent {
-	return make(chan *events.PullerEvent)
+
+func (s *stubPullerService) Err() error { return nil }
+func (s *stubPullerService) Subscribe(ctx context.Context, opts puller.SubscribeOptions) (puller.Subscription, error) {
+	return idlePullerSubscription{}, nil
 }
 
 func freeAddr() string {
@@ -308,7 +309,7 @@ func TestManager_Start_AllServices(t *testing.T) {
 
 	// Start Manager
 	// This launches multiple goroutines.
-	mgr.Start(ctx)
+	require.NoError(t, mgr.Start(ctx))
 
 	// Give time for goroutines to initialize
 	time.Sleep(200 * time.Millisecond)
@@ -474,7 +475,7 @@ func TestManager_Start_RealtimeRetry(t *testing.T) {
 	mgr.rtServer = rtSrv
 
 	// Start
-	mgr.Start(ctx)
+	require.NoError(t, mgr.Start(ctx))
 
 	// Wait for context timeout (200ms)
 	<-ctx.Done()
@@ -508,7 +509,7 @@ func TestManager_Start_IndexerService(t *testing.T) {
 	bgCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mgr.Start(bgCtx)
+	require.NoError(t, mgr.Start(bgCtx))
 
 	// Wait for Start to be called
 	time.Sleep(100 * time.Millisecond)
@@ -551,7 +552,7 @@ func TestManager_Start_DeletionWorker(t *testing.T) {
 	bgCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mgr.Start(bgCtx)
+	require.NoError(t, mgr.Start(bgCtx))
 
 	// Wait for deletion worker to start
 	assert.Eventually(t, func() bool {
@@ -570,7 +571,7 @@ func TestManager_Start_DeletionWorker_Error(t *testing.T) {
 	defer cancel()
 
 	// Should not panic even if deletion worker fails
-	mgr.Start(bgCtx)
+	require.NoError(t, mgr.Start(bgCtx))
 
 	// Wait for attempt
 	assert.Eventually(t, func() bool {
@@ -599,7 +600,7 @@ func TestManager_Start_NilServices(t *testing.T) {
 
 	// Start should complete without panic
 	assert.NotPanics(t, func() {
-		mgr.Start(bgCtx)
+		require.NoError(t, mgr.Start(bgCtx))
 	}, "Start should not panic when services are nil")
 
 	// Allow goroutines to settle
@@ -620,7 +621,7 @@ func TestManager_Start_OnlyInitializedServicesStarted(t *testing.T) {
 	bgCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mgr.Start(bgCtx)
+	require.NoError(t, mgr.Start(bgCtx))
 
 	// Wait for Start to be called
 	time.Sleep(100 * time.Millisecond)
@@ -629,4 +630,117 @@ func TestManager_Start_OnlyInitializedServicesStarted(t *testing.T) {
 	mockTrigger.AssertCalled(t, "Start", mock.Anything)
 
 	// Other services are nil and should not cause panic
+}
+
+type idlePullerSubscription struct{}
+
+func (idlePullerSubscription) Next(ctx context.Context) (*puller.Event, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+func (idlePullerSubscription) Close() error { return nil }
+
+type startupIndexer struct {
+	stubIndexerService
+	start func(context.Context) error
+}
+
+func (s *startupIndexer) Start(ctx context.Context) error { return s.start(ctx) }
+
+func TestManager_StartWaitsForDurableSourceReadiness(t *testing.T) {
+	mgr := NewManager(config.LoadConfig(), Options{})
+	entered, release := make(chan struct{}), make(chan struct{})
+	started := make(chan string, 4)
+	mgr.pullerService = &stubPullerService{startHook: func(ctx context.Context) error {
+		close(entered)
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}}
+	localStreamer := new(MockStreamerService)
+	localStreamer.On("Start", mock.Anything).Run(func(mock.Arguments) { started <- "streamer" }).Return(nil).Once()
+	mgr.streamerService = localStreamer
+	mgr.indexerService = &startupIndexer{start: func(context.Context) error { started <- "indexer"; return nil }}
+	evaluator := new(MockTriggerService)
+	evaluator.On("Start", mock.Anything).Run(func(mock.Arguments) { started <- "trigger" }).Return(nil).Once()
+	mgr.triggerService = evaluator
+	serverService := new(MockServerService)
+	serverService.On("Start", mock.Anything).Run(func(mock.Arguments) { started <- "server" }).Return(nil).Once()
+	server.SetDefault(serverService)
+	defer server.SetDefault(nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- mgr.Start(ctx) }()
+	<-entered
+	select {
+	case component := <-started:
+		t.Fatalf("%s started before source was durable", component)
+	default:
+	}
+	close(release)
+	require.NoError(t, <-result)
+	seen := make(map[string]bool)
+	for len(seen) != 4 {
+		select {
+		case component := <-started:
+			seen[component] = true
+		case <-ctx.Done():
+			t.Fatal("dependent components did not start after readiness")
+		}
+	}
+	mgr.wg.Wait()
+	localStreamer.AssertExpectations(t)
+	evaluator.AssertExpectations(t)
+	serverService.AssertExpectations(t)
+}
+
+func TestManager_StartPullerFailurePreventsDependents(t *testing.T) {
+	mgr := NewManager(config.LoadConfig(), Options{})
+	cause := errors.New("source anchor commit failed")
+	mgr.pullerService = &stubPullerService{startHook: func(context.Context) error { return cause }}
+	localStreamer := new(MockStreamerService)
+	mgr.streamerService = localStreamer
+	indexerStarted := false
+	mgr.indexerService = &startupIndexer{start: func(context.Context) error { indexerStarted = true; return nil }}
+	evaluator := new(MockTriggerService)
+	mgr.triggerService = evaluator
+	serverService := new(MockServerService)
+	server.SetDefault(serverService)
+	defer server.SetDefault(nil)
+
+	require.ErrorIs(t, mgr.Start(context.Background()), cause)
+	require.False(t, indexerStarted)
+	localStreamer.AssertNotCalled(t, "Start", mock.Anything)
+	evaluator.AssertNotCalled(t, "Start", mock.Anything)
+	serverService.AssertNotCalled(t, "Start", mock.Anything)
+}
+
+func TestManager_StartPropagatesConsumerStartupFailures(t *testing.T) {
+	for _, component := range []string{"streamer", "indexer"} {
+		t.Run(component, func(t *testing.T) {
+			server.SetDefault(nil)
+			mgr := NewManager(config.LoadConfig(), Options{})
+			cause := errors.New("checkpoint validation failed")
+			pullerService := &stubPullerService{}
+			mgr.pullerService = pullerService
+			localStreamer := new(MockStreamerService)
+			if component == "streamer" {
+				localStreamer.On("Start", mock.Anything).Return(cause)
+			} else {
+				localStreamer.On("Start", mock.Anything).Return(nil)
+			}
+			mgr.streamerService = localStreamer
+			mgr.indexerService = &startupIndexer{start: func(context.Context) error { return cause }}
+			evaluator := new(MockTriggerService)
+			mgr.triggerService = evaluator
+			require.ErrorIs(t, mgr.Start(context.Background()), cause)
+			require.Equal(t, int32(1), pullerService.startCount.Load())
+			evaluator.AssertNotCalled(t, "Start", mock.Anything)
+		})
+	}
 }

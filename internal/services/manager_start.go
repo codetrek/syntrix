@@ -2,13 +2,24 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/syntrixbase/syntrix/internal/server"
 )
 
-func (m *Manager) Start(bgCtx context.Context) {
+// Start establishes durable source boundaries before starting event consumers.
+// The caller cancels bgCtx and calls Shutdown if a synchronous startup fails.
+func (m *Manager) Start(bgCtx context.Context) error {
+	if err := bgCtx.Err(); err != nil {
+		return err
+	}
+	if m.pullerService != nil {
+		if err := m.pullerService.Start(bgCtx); err != nil {
+			return fmt.Errorf("start Puller service: %w", err)
+		}
+	}
 	// Start Unified Server Service
 	if s := server.Default(); s != nil {
 		m.wg.Add(1)
@@ -21,13 +32,17 @@ func (m *Manager) Start(bgCtx context.Context) {
 		}()
 	}
 
-	// Start Streamer Service (only for local service, not when using gRPC client)
+	// Distributed deployments may route collocated consumers through the unified
+	// server, so launch it before their transport connection attempts.
 	if m.streamerService != nil {
-		go func() {
-			if err := m.streamerService.Start(bgCtx); err != nil {
-				slog.Error("Failed to start Streamer Service", "error", err)
-			}
-		}()
+		if err := m.streamerService.Start(bgCtx); err != nil {
+			return fmt.Errorf("start Streamer service: %w", err)
+		}
+	}
+	if m.indexerService != nil {
+		if err := m.indexerService.Start(bgCtx); err != nil {
+			return fmt.Errorf("start Indexer service: %w", err)
+		}
 	}
 
 	// Start Realtime Background Tasks with retry
@@ -90,28 +105,6 @@ func (m *Manager) Start(bgCtx context.Context) {
 		}()
 	}
 
-	// Start Change Stream Puller
-	if m.pullerService != nil {
-		slog.Info("Starting Change Stream Puller...")
-		if err := m.pullerService.Start(bgCtx); err != nil {
-			slog.Error("Failed to start Change Stream Puller", "error", err)
-		}
-
-		// Initialize gRPC Server event handler (server is registered with unified server)
-		if m.pullerGRPC != nil {
-			slog.Info("Initializing Puller gRPC Service...")
-			m.pullerGRPC.Init()
-		}
-	}
-
-	// Start Indexer Service
-	if m.indexerService != nil {
-		slog.Info("Starting Indexer Service...")
-		if err := m.indexerService.Start(bgCtx); err != nil {
-			slog.Error("Failed to start Indexer Service", "error", err)
-		}
-	}
-
 	// Start Deletion Worker
 	if m.deletionWorker != nil {
 		m.wg.Add(1)
@@ -122,4 +115,5 @@ func (m *Manager) Start(bgCtx context.Context) {
 			}
 		}()
 	}
+	return nil
 }

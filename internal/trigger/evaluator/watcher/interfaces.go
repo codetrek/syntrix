@@ -6,11 +6,15 @@ import (
 	"github.com/syntrixbase/syntrix/internal/puller/events"
 )
 
+// WatcherStream preserves progress-only deliveries and reports terminal failures.
+type WatcherStream interface {
+	Next(context.Context) (events.SyntrixChangeEvent, error)
+	Close() error
+}
+
 // DocumentWatcher watches for document changes in the storage.
 type DocumentWatcher interface {
-	// Watch starts watching for changes.
-	// It returns a channel of events or an error if the watch could not be started.
-	Watch(ctx context.Context) (<-chan events.SyntrixChangeEvent, error)
+	Watch(ctx context.Context) (WatcherStream, error)
 
 	// SaveCheckpoint saves the resume token for the watcher.
 	SaveCheckpoint(ctx context.Context, token interface{}) error

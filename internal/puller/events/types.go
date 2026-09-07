@@ -29,7 +29,7 @@ func (o StoreOperationType) IsValid() bool {
 }
 
 // ClusterTime represents a MongoDB cluster timestamp.
-// This is used for ordering and idempotency checks.
+// It preserves source provenance; durable positions define local replay order.
 type ClusterTime struct {
 	T uint32 `json:"T"` // Seconds since epoch
 	I uint32 `json:"I"` // Increment within second
@@ -115,54 +115,4 @@ type StoreChangeEvent struct {
 	TxnNumber   *int64      `json:"txnNumber,omitempty"`
 	Timestamp   int64       `json:"timestamp"` // Unix milliseconds
 	Backend     string      `json:"backend,omitempty"`
-}
-
-// BufferKey generates the PebbleDB key for this event.
-// Format: {clusterTime.T}-{clusterTime.I}-{eventId}
-// This ensures events are stored in cluster time order.
-func (e *StoreChangeEvent) BufferKey() string {
-	return FormatBufferKey(e.ClusterTime, e.EventID)
-}
-
-// FormatBufferKey formats a buffer key from components.
-func FormatBufferKey(ct ClusterTime, eventID string) string {
-	// Use fixed-width formatting for proper lexicographic ordering
-	return formatUint32(ct.T) + "-" + formatUint32(ct.I) + "-" + eventID
-}
-
-// formatUint32 formats a uint32 as a fixed-width string for lexicographic ordering.
-func formatUint32(v uint32) string {
-	// 10 digits is enough for uint32 max value (4294967295)
-	s := "0000000000"
-	n := s + uintToString(v)
-	return n[len(n)-10:]
-}
-
-func uintToString(v uint32) string {
-	if v == 0 {
-		return "0"
-	}
-	var buf [10]byte
-	i := len(buf)
-	for v > 0 {
-		i--
-		buf[i] = byte('0' + v%10)
-		v /= 10
-	}
-	return string(buf[i:])
-}
-
-// Iterator provides ordered iteration over events.
-type Iterator interface {
-	// Next advances to the next event. Returns false when done.
-	Next() bool
-
-	// Event returns the current event.
-	Event() *StoreChangeEvent
-
-	// Err returns any error encountered during iteration.
-	Err() error
-
-	// Close releases the iterator resources.
-	Close() error
 }

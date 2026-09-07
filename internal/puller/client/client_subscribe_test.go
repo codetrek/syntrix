@@ -2,10 +2,9 @@ package client
 
 import (
 	"context"
-	"fmt"
+	"encoding/base64"
+	"errors"
 	"io"
-	"log/slog"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,554 +12,356 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	pullerv1 "github.com/syntrixbase/syntrix/api/gen/puller/v1"
-	"google.golang.org/grpc"
+	"github.com/syntrixbase/syntrix/internal/puller/events"
+	grpcapi "google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
-// mockSubscribeClient implements pullerv1.PullerService_SubscribeClient
-type mockSubscribeClient struct {
-	grpc.ClientStream
-	events    []*pullerv1.PullerEvent
-	index     int
-	mu        sync.Mutex
-	failAfter int   // Return error after this many events (-1 = never)
-	failError error // Error to return when failing
+type rpcClientFunc func(context.Context, *pullerv1.SubscribeRequest) (pullerv1.PullerService_SubscribeClient, error)
+
+func (f rpcClientFunc) Subscribe(ctx context.Context, req *pullerv1.SubscribeRequest, _ ...grpcapi.CallOption) (pullerv1.PullerService_SubscribeClient, error) {
+	return f(ctx, req)
 }
 
-func (m *mockSubscribeClient) Recv() (*pullerv1.PullerEvent, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+type rpcStream struct {
+	initial string
+	grpcapi.ClientStream
+	recv   func() (*pullerv1.PullerEvent, error)
+	header func() (metadata.MD, error)
+}
 
-	// Check if we should fail
-	if m.failAfter >= 0 && m.index >= m.failAfter {
-		if m.failError != nil {
-			return nil, m.failError
-		}
-		return nil, io.EOF
+func (s *rpcStream) Recv() (*pullerv1.PullerEvent, error) { return s.recv() }
+func (s *rpcStream) Header() (metadata.MD, error) {
+	if s.header != nil {
+		return s.header()
 	}
-
-	if m.index >= len(m.events) {
-		return nil, io.EOF
+	initial := s.initial
+	if initial == "" {
+		initial = "start"
 	}
-	evt := m.events[m.index]
-	m.index++
-	return evt, nil
+	return metadata.Pairs("syntrix-puller-subscription", "ready", "syntrix-puller-initial-progress", initial), nil
 }
 
-// mockPullerServiceClient implements pullerv1.PullerServiceClient
-type mockPullerServiceClient struct {
-	subscribeFunc func(ctx context.Context, in *pullerv1.SubscribeRequest, opts ...grpc.CallOption) (pullerv1.PullerService_SubscribeClient, error)
+func testClient(t *testing.T, client pullerv1.PullerServiceClient) *Client {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	c := &Client{client: client, cfg: ClientConfig{InitialBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond, BackoffMultiplier: 2, MaxRetries: 2}, ctx: ctx, cancel: cancel}
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	return c
 }
 
-func (m *mockPullerServiceClient) Subscribe(ctx context.Context, in *pullerv1.SubscribeRequest, opts ...grpc.CallOption) (pullerv1.PullerService_SubscribeClient, error) {
-	return m.subscribeFunc(ctx, in, opts...)
-}
-
-func TestNew(t *testing.T) {
+func TestReconnectUsesOnlyDeliveredProgressIncludingProgressOnly(t *testing.T) {
 	t.Parallel()
-	c, err := New("localhost:50051", nil)
-	require.NoError(t, err)
-	require.NotNil(t, c)
-	assert.NotNil(t, c.logger)
-
-	_ = c.Close()
-}
-
-func TestNewWithConfig(t *testing.T) {
-	t.Parallel()
-	cfg := ClientConfig{
-		InitialBackoff:    500 * time.Millisecond,
-		MaxBackoff:        10 * time.Second,
-		BackoffMultiplier: 1.5,
-		MaxRetries:        5,
-	}
-
-	c, err := NewWithConfig("localhost:50051", nil, cfg)
-	require.NoError(t, err)
-	require.NotNil(t, c)
-	assert.Equal(t, 500*time.Millisecond, c.cfg.InitialBackoff)
-	assert.Equal(t, 5, c.cfg.MaxRetries)
-
-	_ = c.Close()
-}
-
-func TestNewWithConfig_Defaults(t *testing.T) {
-	t.Parallel()
-	cfg := ClientConfig{} // All zeros
-
-	c, err := NewWithConfig("localhost:50051", nil, cfg)
-	require.NoError(t, err)
-
-	assert.Equal(t, 1*time.Second, c.cfg.InitialBackoff)
-	assert.Equal(t, 30*time.Second, c.cfg.MaxBackoff)
-	assert.Equal(t, 2.0, c.cfg.BackoffMultiplier)
-
-	_ = c.Close()
-}
-
-func TestDefaultClientConfig(t *testing.T) {
-	t.Parallel()
-	cfg := DefaultClientConfig()
-
-	assert.Equal(t, 1*time.Second, cfg.InitialBackoff)
-	assert.Equal(t, 30*time.Second, cfg.MaxBackoff)
-	assert.Equal(t, 2.0, cfg.BackoffMultiplier)
-	assert.Equal(t, 0, cfg.MaxRetries)
-}
-
-func TestClient_Close(t *testing.T) {
-	t.Parallel()
-	// Test Close with nil conn
-	c := &Client{}
-	assert.NoError(t, c.Close())
-}
-
-func TestClient_Close_Real(t *testing.T) {
-	t.Parallel()
-	c, err := New("localhost:50051", slog.Default())
-	require.NoError(t, err)
-
-	err = c.Close()
-	assert.NoError(t, err)
-}
-
-func TestClient_Subscribe_BasicFlow(t *testing.T) {
-	t.Parallel()
-
-	events := []*pullerv1.PullerEvent{
-		{
-			ChangeEvent: &pullerv1.ChangeEvent{
-				EventId: "evt-1",
-				OpType:  "insert",
-			},
-			Progress: "p1",
-		},
-		{
-			ChangeEvent: &pullerv1.ChangeEvent{
-				EventId: "evt-2",
-				OpType:  "update",
-			},
-			Progress: "p2",
-		},
-	}
-
-	mockClient := &mockPullerServiceClient{
-		subscribeFunc: func(ctx context.Context, in *pullerv1.SubscribeRequest, opts ...grpc.CallOption) (pullerv1.PullerService_SubscribeClient, error) {
-			return &mockSubscribeClient{events: events, failAfter: -1}, nil
-		},
-	}
-
-	c := &Client{
-		address: "localhost:50051",
-		client:  mockClient,
-		logger:  slog.Default(),
-		cfg:     DefaultClientConfig(),
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	requests := []*pullerv1.SubscribeRequest{}
+	rpc := rpcClientFunc(func(_ context.Context, req *pullerv1.SubscribeRequest) (pullerv1.PullerService_SubscribeClient, error) {
+		requests = append(requests, req)
+		switch len(requests) {
+		case 1:
+			index := 0
+			return &rpcStream{initial: req.After, recv: func() (*pullerv1.PullerEvent, error) {
+				index++
+				if index == 1 {
+					return &pullerv1.PullerEvent{ChangeEvent: &pullerv1.ChangeEvent{EventId: "e1"}, Progress: "p1"}, nil
+				}
+				if index == 2 {
+					return &pullerv1.PullerEvent{Progress: "window-end"}, nil
+				}
+				return nil, status.Error(codes.Unavailable, "transport broke")
+			}}, nil
+		default:
+			return &rpcStream{initial: req.After, recv: func() (*pullerv1.PullerEvent, error) {
+				return &pullerv1.PullerEvent{ChangeEvent: &pullerv1.ChangeEvent{EventId: "e2"}, Progress: "p3"}, nil
+			}}, nil
+		}
+	})
+	client := testClient(t, rpc)
+	sub, err := client.Subscribe(ctx, events.SubscribeOptions{ConsumerID: "consumer", After: "start", CoalesceOnCatchUp: true})
+	require.NoError(t, err)
+	defer sub.Close()
+	first, err := sub.Next(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "e1", first.Change.EventID)
+	progress, err := sub.Next(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, progress.Change)
+	assert.Equal(t, "window-end", progress.Progress)
+	last, err := sub.Next(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "e2", last.Change.EventID)
+	require.Len(t, requests, 2)
+	assert.Equal(t, "start", requests[0].After)
+	assert.Equal(t, "window-end", requests[1].After)
+	assert.True(t, requests[1].CoalesceOnCatchUp)
+	assert.Equal(t, "consumer", requests[1].ConsumerId)
+}
 
-	ch := c.Subscribe(ctx, "consumer-1", "")
+func TestMalformedDeliveryIsTerminalWithoutAdvancingProgress(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	calls := 0
+	c := testClient(t, rpcClientFunc(func(context.Context, *pullerv1.SubscribeRequest) (pullerv1.PullerService_SubscribeClient, error) {
+		calls++
+		return &rpcStream{initial: "safe", recv: func() (*pullerv1.PullerEvent, error) {
+			return &pullerv1.PullerEvent{Progress: "unsafe", ChangeEvent: &pullerv1.ChangeEvent{FullDoc: []byte("invalid-json")}}, nil
+		}}, nil
+	}))
+	sub, err := c.Subscribe(ctx, events.SubscribeOptions{After: "safe"})
+	require.NoError(t, err)
+	event, err := sub.Next(ctx)
+	require.Nil(t, event)
+	var domainErr *events.Error
+	require.ErrorAs(t, err, &domainErr)
+	assert.Equal(t, events.CodeUnsupportedFormat, domainErr.Code)
+	assert.Equal(t, "safe", sub.(*subscription).progress)
+	_, again := sub.Next(ctx)
+	assert.Same(t, err, again)
+	assert.Equal(t, 1, calls)
+}
 
-	// Collect events
-	var received []*pullerv1.PullerEvent
-	for evt := range ch {
-		received = append(received, &pullerv1.PullerEvent{
-			ChangeEvent: &pullerv1.ChangeEvent{
-				EventId: evt.Change.EventID,
-			},
-			Progress: evt.Progress,
+func TestReconnectBudgetIncludesStreamsThatFailBeforeDelivery(t *testing.T) {
+	t.Parallel()
+	for _, failAtHeader := range []bool{false, true} {
+		t.Run(map[bool]string{false: "receive", true: "header"}[failAtHeader], func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			calls := 0
+			failure := status.Error(codes.Unavailable, "offline")
+			c := testClient(t, rpcClientFunc(func(context.Context, *pullerv1.SubscribeRequest) (pullerv1.PullerService_SubscribeClient, error) {
+				calls++
+				stream := &rpcStream{recv: func() (*pullerv1.PullerEvent, error) { return nil, failure }}
+				if failAtHeader {
+					stream.header = func() (metadata.MD, error) { return nil, nil }
+				}
+				return stream, nil
+			}))
+			sub, err := c.Subscribe(ctx, events.SubscribeOptions{})
+			require.NoError(t, err)
+			_, err = sub.Next(ctx)
+			require.ErrorContains(t, err, "reconnect attempts exhausted")
+			assert.ErrorIs(t, err, failure)
+			assert.Equal(t, 3, calls)
 		})
-		if len(received) >= 2 {
-			cancel()
-		}
-	}
-
-	require.Len(t, received, 2)
-	assert.Equal(t, "evt-1", received[0].ChangeEvent.EventId)
-	assert.Equal(t, "evt-2", received[1].ChangeEvent.EventId)
-}
-
-func TestClient_Subscribe_HeartbeatFiltering(t *testing.T) {
-	t.Parallel()
-
-	events := []*pullerv1.PullerEvent{
-		{
-			ChangeEvent: &pullerv1.ChangeEvent{EventId: "evt-1"},
-			Progress:    "p1",
-		},
-		{
-			// Heartbeat - nil ChangeEvent
-			ChangeEvent: nil,
-			Progress:    "p2",
-		},
-		{
-			ChangeEvent: &pullerv1.ChangeEvent{EventId: "evt-2"},
-			Progress:    "p3",
-		},
-	}
-
-	mockClient := &mockPullerServiceClient{
-		subscribeFunc: func(ctx context.Context, in *pullerv1.SubscribeRequest, opts ...grpc.CallOption) (pullerv1.PullerService_SubscribeClient, error) {
-			return &mockSubscribeClient{events: events, failAfter: -1}, nil
-		},
-	}
-
-	c := &Client{
-		address: "localhost:50051",
-		client:  mockClient,
-		logger:  slog.Default(),
-		cfg:     DefaultClientConfig(),
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	ch := c.Subscribe(ctx, "consumer-1", "")
-
-	// Collect events - heartbeats should be filtered
-	var received int
-	for range ch {
-		received++
-		if received >= 2 {
-			cancel()
-		}
-	}
-
-	// Should receive only 2 events (heartbeat filtered out)
-	assert.Equal(t, 2, received)
-}
-
-func TestClient_Subscribe_AutoReconnect(t *testing.T) {
-	t.Parallel()
-
-	var callCount atomic.Int32
-
-	mockClient := &mockPullerServiceClient{
-		subscribeFunc: func(ctx context.Context, in *pullerv1.SubscribeRequest, opts ...grpc.CallOption) (pullerv1.PullerService_SubscribeClient, error) {
-			count := callCount.Add(1)
-
-			if count == 1 {
-				// First call: return one event then fail
-				return &mockSubscribeClient{
-					events: []*pullerv1.PullerEvent{
-						{
-							ChangeEvent: &pullerv1.ChangeEvent{EventId: "evt-1"},
-							Progress:    "progress-1",
-						},
-					},
-					failAfter: 1,
-					failError: fmt.Errorf("connection lost"),
-				}, nil
-			}
-
-			// Check that reconnect uses the last progress
-			if in.After != "progress-1" {
-				t.Errorf("Expected after='progress-1', got '%s'", in.After)
-			}
-
-			// Second call: succeed
-			return &mockSubscribeClient{
-				events: []*pullerv1.PullerEvent{
-					{
-						ChangeEvent: &pullerv1.ChangeEvent{EventId: "evt-2"},
-						Progress:    "progress-2",
-					},
-				},
-				failAfter: -1,
-			}, nil
-		},
-	}
-
-	var stateChanges []ConnectionState
-	var mu sync.Mutex
-
-	c := &Client{
-		address: "localhost:50051",
-		client:  mockClient,
-		logger:  slog.Default(),
-		cfg: ClientConfig{
-			InitialBackoff:    10 * time.Millisecond,
-			MaxBackoff:        50 * time.Millisecond,
-			BackoffMultiplier: 2.0,
-			OnStateChange: func(state ConnectionState, err error) {
-				mu.Lock()
-				stateChanges = append(stateChanges, state)
-				mu.Unlock()
-			},
-		},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	ch := c.Subscribe(ctx, "consumer-1", "")
-
-	var eventIDs []string
-	for evt := range ch {
-		eventIDs = append(eventIDs, evt.Change.EventID)
-		if len(eventIDs) >= 2 {
-			cancel()
-		}
-	}
-
-	// Should have received events from both connections
-	require.Len(t, eventIDs, 2)
-	assert.Equal(t, "evt-1", eventIDs[0])
-	assert.Equal(t, "evt-2", eventIDs[1])
-
-	// Should have seen reconnecting state
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Contains(t, stateChanges, StateReconnecting)
-}
-
-func TestClient_Subscribe_MaxRetries(t *testing.T) {
-	t.Parallel()
-
-	mockClient := &mockPullerServiceClient{
-		subscribeFunc: func(ctx context.Context, in *pullerv1.SubscribeRequest, opts ...grpc.CallOption) (pullerv1.PullerService_SubscribeClient, error) {
-			return nil, fmt.Errorf("connection refused")
-		},
-	}
-
-	var finalState ConnectionState
-	var mu sync.Mutex
-
-	c := &Client{
-		address: "localhost:50051",
-		client:  mockClient,
-		logger:  slog.Default(),
-		cfg: ClientConfig{
-			InitialBackoff:    10 * time.Millisecond,
-			MaxBackoff:        50 * time.Millisecond,
-			BackoffMultiplier: 2.0,
-			MaxRetries:        3,
-			OnStateChange: func(state ConnectionState, err error) {
-				mu.Lock()
-				finalState = state
-				mu.Unlock()
-			},
-		},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	ch := c.Subscribe(ctx, "consumer-1", "")
-
-	// Channel should close after max retries
-	for range ch {
-		t.Error("Should not receive any events")
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Equal(t, StateDisconnected, finalState)
-}
-
-func TestClient_SubscribeWithCoalesce(t *testing.T) {
-	t.Parallel()
-
-	events := []*pullerv1.PullerEvent{
-		{
-			ChangeEvent: &pullerv1.ChangeEvent{EventId: "evt-1"},
-			Progress:    "p1",
-		},
-	}
-
-	mockClient := &mockPullerServiceClient{
-		subscribeFunc: func(ctx context.Context, in *pullerv1.SubscribeRequest, opts ...grpc.CallOption) (pullerv1.PullerService_SubscribeClient, error) {
-			if !in.CoalesceOnCatchUp {
-				t.Error("Expected CoalesceOnCatchUp to be true")
-			}
-			return &mockSubscribeClient{events: events, failAfter: -1}, nil
-		},
-	}
-
-	c := &Client{
-		address: "localhost:50051",
-		client:  mockClient,
-		logger:  slog.Default(),
-		cfg:     DefaultClientConfig(),
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	ch := c.SubscribeWithCoalesce(ctx, "consumer-1", "")
-
-	select {
-	case evt := <-ch:
-		require.NotNil(t, evt)
-		assert.Equal(t, "evt-1", evt.Change.EventID)
-		cancel()
-	case <-ctx.Done():
-		t.Fatal("Timeout waiting for event")
 	}
 }
 
-func TestClient_reconnect(t *testing.T) {
+func TestNextCancellationInterruptsRecvAndIsSticky(t *testing.T) {
 	t.Parallel()
-
-	c := &Client{
-		address: "localhost:50051",
-		logger:  slog.Default(),
-		cfg:     DefaultClientConfig(),
-	}
-
-	// First reconnect should succeed
-	err := c.reconnect()
+	lifetime, stop := context.WithTimeout(context.Background(), 3*time.Second)
+	defer stop()
+	entered := make(chan struct{})
+	c := testClient(t, rpcClientFunc(func(ctx context.Context, _ *pullerv1.SubscribeRequest) (pullerv1.PullerService_SubscribeClient, error) {
+		return &rpcStream{recv: func() (*pullerv1.PullerEvent, error) {
+			close(entered)
+			<-ctx.Done()
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}}, nil
+	}))
+	sub, err := c.Subscribe(lifetime, events.SubscribeOptions{})
 	require.NoError(t, err)
-	require.NotNil(t, c.conn)
-	require.NotNil(t, c.client)
-
-	_ = c.Close()
-}
-
-func TestConnectionState_Values(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, ConnectionState(0), StateConnected)
-	assert.Equal(t, ConnectionState(1), StateReconnecting)
-	assert.Equal(t, ConnectionState(2), StateDisconnected)
-}
-
-func TestClient_Subscribe_ContextCanceled(t *testing.T) {
-	t.Parallel()
-
-	events := []*pullerv1.PullerEvent{
-		{
-			ChangeEvent: &pullerv1.ChangeEvent{EventId: "evt-1"},
-			Progress:    "p1",
-		},
+	call, cancel := context.WithCancel(lifetime)
+	result := make(chan error, 1)
+	go func() { _, err := sub.Next(call); result <- err }()
+	select {
+	case <-entered:
+	case <-lifetime.Done():
+		t.Fatal(lifetime.Err())
 	}
-
-	mockClient := &mockPullerServiceClient{
-		subscribeFunc: func(ctx context.Context, in *pullerv1.SubscribeRequest, opts ...grpc.CallOption) (pullerv1.PullerService_SubscribeClient, error) {
-			return &mockSubscribeClient{events: events, failAfter: -1}, nil
-		},
-	}
-
-	var finalState ConnectionState
-	var mu sync.Mutex
-
-	c := &Client{
-		address: "localhost:50051",
-		client:  mockClient,
-		logger:  slog.Default(),
-		cfg: ClientConfig{
-			InitialBackoff:    10 * time.Millisecond,
-			MaxBackoff:        50 * time.Millisecond,
-			BackoffMultiplier: 2.0,
-			OnStateChange: func(state ConnectionState, err error) {
-				mu.Lock()
-				finalState = state
-				mu.Unlock()
-			},
-		},
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	ch := c.Subscribe(ctx, "consumer-1", "")
-
-	// Read one event then cancel
-	<-ch
 	cancel()
-
-	// Wait for channel to close
-	for range ch {
-		// drain
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-lifetime.Done():
+		t.Fatal(lifetime.Err())
 	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Equal(t, StateDisconnected, finalState)
+	_, err = sub.Next(lifetime)
+	require.ErrorIs(t, err, context.Canceled)
+	require.NoError(t, sub.Close())
+	require.NoError(t, sub.Close())
 }
 
-// contextCanceledSubscribeClient returns context.Canceled after receiving cancel signal
-type contextCanceledSubscribeClient struct {
-	grpc.ClientStream
-	events     []*pullerv1.PullerEvent
-	index      int
-	mu         sync.Mutex
-	ctx        context.Context
-	sentEvents int
-}
-
-func (m *contextCanceledSubscribeClient) Recv() (*pullerv1.PullerEvent, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// If context is canceled, return a context error
-	if m.ctx.Err() != nil {
-		return nil, m.ctx.Err()
-	}
-
-	if m.index >= len(m.events) {
-		// Block until context is canceled
-		m.mu.Unlock()
-		<-m.ctx.Done()
-		m.mu.Lock()
-		return nil, m.ctx.Err()
-	}
-	evt := m.events[m.index]
-	m.index++
-	m.sentEvents++
-	return evt, nil
-}
-
-func TestClient_Subscribe_ContextCanceled_DuringRecv(t *testing.T) {
+func TestClientCloseCancelsAllSubscriptionsAndRejectsNewOnes(t *testing.T) {
 	t.Parallel()
-
-	events := []*pullerv1.PullerEvent{
-		{
-			ChangeEvent: &pullerv1.ChangeEvent{EventId: "evt-1"},
-			Progress:    "p1",
-		},
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var entered atomic.Int32
+	ready := make(chan struct{})
+	c := testClient(t, rpcClientFunc(func(streamCtx context.Context, _ *pullerv1.SubscribeRequest) (pullerv1.PullerService_SubscribeClient, error) {
+		return &rpcStream{recv: func() (*pullerv1.PullerEvent, error) {
+			if entered.Add(1) == 2 {
+				close(ready)
+			}
+			<-streamCtx.Done()
+			return nil, context.Canceled
+		}}, nil
+	}))
+	done := make(chan error, 2)
+	for range 2 {
+		sub, err := c.Subscribe(ctx, events.SubscribeOptions{})
+		require.NoError(t, err)
+		go func() { _, err := sub.Next(ctx); done <- err }()
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	mockClient := &mockPullerServiceClient{
-		subscribeFunc: func(innerCtx context.Context, in *pullerv1.SubscribeRequest, opts ...grpc.CallOption) (pullerv1.PullerService_SubscribeClient, error) {
-			return &contextCanceledSubscribeClient{events: events, ctx: innerCtx}, nil
-		},
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
 	}
-
-	var finalState ConnectionState
-	var mu sync.Mutex
-
-	c := &Client{
-		address: "localhost:50051",
-		client:  mockClient,
-		logger:  slog.Default(),
-		cfg: ClientConfig{
-			InitialBackoff:    10 * time.Millisecond,
-			MaxBackoff:        50 * time.Millisecond,
-			BackoffMultiplier: 2.0,
-			OnStateChange: func(state ConnectionState, err error) {
-				mu.Lock()
-				finalState = state
-				mu.Unlock()
-			},
-		},
+	require.NoError(t, c.Close())
+	for range 2 {
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
 	}
+	_, err := c.Subscribe(ctx, events.SubscribeOptions{})
+	require.ErrorIs(t, err, context.Canceled)
+}
 
-	ch := c.Subscribe(ctx, "consumer-1", "")
-
-	// Read one event
-	evt := <-ch
-	require.NotNil(t, evt)
-
-	// Cancel context while Recv is waiting
-	cancel()
-
-	// Wait for channel to close
-	for range ch {
-		// drain
+func TestRetryClassificationDoesNotHideApplicationFailures(t *testing.T) {
+	t.Parallel()
+	assert.True(t, retryable(io.EOF))
+	assert.True(t, retryable(status.Error(codes.Unavailable, "connection lost")))
+	for _, err := range []error{context.Canceled, context.DeadlineExceeded, errors.New("unexpected failure"), status.Error(codes.Internal, "bug"), status.Error(codes.PermissionDenied, "denied"), status.Error(codes.ResourceExhausted, "overload")} {
+		assert.False(t, retryable(err), "%v", err)
 	}
+}
 
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Equal(t, StateDisconnected, finalState)
+func TestSubscribeCancellationInterruptsRegistration(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	entered := make(chan struct{})
+	c := testClient(t, rpcClientFunc(func(streamCtx context.Context, _ *pullerv1.SubscribeRequest) (pullerv1.PullerService_SubscribeClient, error) {
+		return &rpcStream{header: func() (metadata.MD, error) {
+			close(entered)
+			<-streamCtx.Done()
+			return nil, status.FromContextError(streamCtx.Err()).Err()
+		}}, nil
+	}))
+	call, stop := context.WithCancel(ctx)
+	result := make(chan error, 1)
+	go func() { _, err := c.Subscribe(call, events.SubscribeOptions{}); result <- err }()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	stop()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+}
+
+func TestCancellationInterruptsReconnectBackoff(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	started := make(chan struct{})
+	c := testClient(t, rpcClientFunc(func(context.Context, *pullerv1.SubscribeRequest) (pullerv1.PullerService_SubscribeClient, error) {
+		return nil, status.Error(codes.Unavailable, "offline")
+	}))
+	c.cfg.InitialBackoff, c.cfg.MaxBackoff = time.Hour, time.Hour
+	c.cfg.OnStateChange = func(state ConnectionState, err error) {
+		if state == StateReconnecting {
+			close(started)
+		}
+	}
+	sub, err := c.Subscribe(ctx, events.SubscribeOptions{})
+	require.NoError(t, err)
+	result := make(chan error, 1)
+	go func() { _, err := sub.Next(ctx); result <- err }()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	require.NoError(t, sub.Close())
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+}
+
+func TestReconnectBeforeFirstDeliveryUsesRegistrationAnchor(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var requests []string
+	c := testClient(t, rpcClientFunc(func(_ context.Context, req *pullerv1.SubscribeRequest) (pullerv1.PullerService_SubscribeClient, error) {
+		requests = append(requests, req.After)
+		if len(requests) == 1 {
+			return &rpcStream{initial: "position-10", recv: func() (*pullerv1.PullerEvent, error) {
+				return nil, status.Error(codes.Unavailable, "disconnected after registration")
+			}}, nil
+		}
+		return &rpcStream{initial: req.After, recv: func() (*pullerv1.PullerEvent, error) {
+			return &pullerv1.PullerEvent{ChangeEvent: &pullerv1.ChangeEvent{EventId: "event-11"}, Progress: "position-11"}, nil
+		}}, nil
+	}))
+	sub, err := c.Subscribe(ctx, events.SubscribeOptions{})
+	require.NoError(t, err)
+	defer sub.Close()
+	event, err := sub.Next(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "event-11", event.Change.EventID)
+	assert.Equal(t, []string{"", "position-10"}, requests)
+}
+
+func TestRegistrationEnvelopesDoNotResetReconnectBudget(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	calls := 0
+	c := testClient(t, rpcClientFunc(func(context.Context, *pullerv1.SubscribeRequest) (pullerv1.PullerService_SubscribeClient, error) {
+		calls++
+		initial := true
+		return &rpcStream{initial: "unchanged", recv: func() (*pullerv1.PullerEvent, error) {
+			if initial {
+				initial = false
+				return &pullerv1.PullerEvent{Progress: "unchanged"}, nil
+			}
+			return nil, status.Error(codes.Unavailable, "dropped after registration")
+		}}, nil
+	}))
+	sub, err := c.Subscribe(ctx, events.SubscribeOptions{})
+	require.NoError(t, err)
+	defer sub.Close()
+	for range 3 {
+		event, err := sub.Next(ctx)
+		require.NoError(t, err)
+		assert.Nil(t, event.Change)
+		assert.Equal(t, "unchanged", event.Progress)
+	}
+	_, err = sub.Next(ctx)
+	require.ErrorContains(t, err, "reconnect attempts exhausted")
+	assert.Equal(t, 3, calls)
+}
+
+func TestRegistrationAcceptsEquivalentCursorEncoding(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	requested := base64.RawURLEncoding.EncodeToString([]byte(`{ "positions": { "source": {"sequence":10,"generation":"g","source":"source"} }, "v":1 }`))
+	canonical := base64.RawURLEncoding.EncodeToString([]byte(`{"v":1,"positions":{"source":{"source":"source","generation":"g","sequence":10}}}`))
+	c := testClient(t, rpcClientFunc(func(_ context.Context, req *pullerv1.SubscribeRequest) (pullerv1.PullerService_SubscribeClient, error) {
+		assert.Equal(t, requested, req.After)
+		return &rpcStream{initial: canonical, recv: func() (*pullerv1.PullerEvent, error) { return &pullerv1.PullerEvent{Progress: canonical}, nil }}, nil
+	}))
+	sub, err := c.Subscribe(ctx, events.SubscribeOptions{After: requested})
+	require.NoError(t, err)
+	defer sub.Close()
+	event, err := sub.Next(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, canonical, event.Progress)
 }

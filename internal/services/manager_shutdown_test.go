@@ -35,7 +35,7 @@ func TestManager_Init_Start_Shutdown_NoServices(t *testing.T) {
 	assert.NoError(t, mgr.Init(ctx))
 
 	bgCtx, bgCancel := context.WithCancel(context.Background())
-	mgr.Start(bgCtx)
+	require.NoError(t, mgr.Start(bgCtx))
 	bgCancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second)
@@ -130,7 +130,7 @@ func TestManager_Shutdown_PullerAndPubSub(t *testing.T) {
 	pullerSvc := &stubPullerService{}
 	mgr.pubsubProvider = provider
 	mgr.pullerService = pullerSvc
-	mgr.pullerGRPC = puller.NewGRPCServerWithInit(puller_config.GRPCConfig{MaxConnections: 10}, pullerSvc, nil)
+	mgr.pullerGRPC = puller.NewGRPCServer(puller_config.GRPCConfig{MaxConnections: 10}, pullerSvc, nil)
 
 	mgr.Shutdown(context.Background())
 
@@ -192,4 +192,13 @@ func TestManager_Shutdown_IndexerService(t *testing.T) {
 
 	// Should not panic and should stop the indexer
 	mgr.Shutdown(context.Background())
+}
+
+func TestManager_Shutdown_LocalStreamer(t *testing.T) {
+	mgr := NewManager(config.LoadConfig(), Options{})
+	local := new(MockStreamerService)
+	local.On("Stop", mock.Anything).Return(nil).Once()
+	mgr.streamerService = local
+	mgr.Shutdown(context.Background())
+	local.AssertExpectations(t)
 }

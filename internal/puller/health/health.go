@@ -92,7 +92,9 @@ func (h *Checker) RecordEvent(backend string) {
 		now := time.Now()
 		bh.LastEvent = &now
 		bh.EventsTotal++
-		bh.Status = StatusOK
+		if bh.Status != StatusUnhealthy {
+			bh.Status = StatusOK
+		}
 	}
 }
 
@@ -102,9 +104,19 @@ func (h *Checker) RecordError(backend string) {
 	defer h.mu.Unlock()
 	if bh, ok := h.backendHealth[backend]; ok {
 		bh.Errors++
-		if bh.Errors > 5 {
+		if bh.Errors > 5 && bh.Status != StatusUnhealthy {
 			bh.Status = StatusDegraded
 		}
+	}
+}
+
+// FailBackend makes a terminal ingestion failure observable immediately.
+func (h *Checker) FailBackend(backend string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if bh, ok := h.backendHealth[backend]; ok {
+		bh.Errors++
+		bh.Status = StatusUnhealthy
 	}
 }
 

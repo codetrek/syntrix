@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"sync"
@@ -40,14 +41,15 @@ func newMockPullerService() *mockPullerService {
 	}
 }
 
-func (m *mockPullerService) Subscribe(ctx context.Context, consumerID string, after string) <-chan *puller.Event {
+func (m *mockPullerService) Subscribe(ctx context.Context, opts puller.SubscribeOptions) (puller.Subscription, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	ch := make(chan *puller.Event, 100)
 	m.subscribers = append(m.subscribers, mockSubscription{
-		consumerID: consumerID,
-		after:      after,
+		consumerID: opts.ConsumerID,
+		after:      opts.After,
 		ch:         ch,
 	})
 
@@ -73,7 +75,7 @@ func (m *mockPullerService) Subscribe(ctx context.Context, consumerID string, af
 		}
 	}()
 
-	return ch
+	return &channelSubscription{ctx: ctx, cancel: cancel, events: ch}, nil
 }
 
 func (m *mockPullerService) SendEvent(evt *puller.Event) {
@@ -694,99 +696,51 @@ func TestService_StopWithTimeout(t *testing.T) {
 	})
 }
 
-// slowPullerService is a mock that blocks on Subscribe
 type slowPullerService struct{}
 
-func (s *slowPullerService) Subscribe(ctx context.Context, consumerID string, after string) <-chan *puller.Event {
-	ch := make(chan *puller.Event)
-	go func() {
-		// Block until context is done
-		<-ctx.Done()
-		// Wait a bit before closing to simulate slow cleanup
-		time.Sleep(100 * time.Millisecond)
-		close(ch)
-	}()
-	return ch
+func (s *slowPullerService) Subscribe(ctx context.Context, opts puller.SubscribeOptions) (puller.Subscription, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	return &channelSubscription{ctx: ctx, cancel: cancel, events: make(chan *puller.Event)}, nil
 }
 
-func TestService_SubscriptionReconnect(t *testing.T) {
-	t.Run("reconnects on channel close", func(t *testing.T) {
-		reconnectPuller := &reconnectablePullerService{
-			reconnectCount: 0,
+func TestService_SubscriptionTermination(t *testing.T) {
+	mock := newMockPullerService()
+	svc := newTestService(config.Config{}, mock, testLogger())
+	require.NoError(t, svc.Start(context.Background()))
+	defer svc.Stop(context.Background())
+	mock.Close()
+	require.Eventually(t, func() bool {
+		health, err := svc.Health(context.Background())
+		return health.Status == HealthUnhealthy && errors.Is(err, io.EOF)
+	}, time.Second, time.Millisecond)
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	require.Len(t, mock.subscribers, 1, "terminal closure must not silently open a fresh subscription")
+}
+
+type channelSubscription struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	events <-chan *puller.Event
+}
+
+func (s *channelSubscription) Next(ctx context.Context) (*puller.Event, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	case event, ok := <-s.events:
+		if !ok {
+			return nil, io.EOF
 		}
-		svc := newTestService(config.Config{}, reconnectPuller, testLogger())
-		s := svc.(*service)
-
-		templateYAML := `
-templates:
-  - name: test_template
-    collectionPattern: users/{uid}/docs
-    fields:
-      - { field: timestamp, order: desc }
-`
-		err := s.manager.LoadTemplatesFromBytes([]byte(templateYAML))
-		require.NoError(t, err)
-
-		err = svc.Start(context.Background())
-		require.NoError(t, err)
-
-		// Give subscription loop time to start
-		time.Sleep(50 * time.Millisecond)
-
-		// Close the first channel to trigger reconnect
-		reconnectPuller.CloseCurrentChannel()
-
-		// Wait for reconnect (1 second backoff + some margin)
-		time.Sleep(1200 * time.Millisecond)
-
-		// Verify reconnect happened
-		reconnectPuller.mu.Lock()
-		count := reconnectPuller.reconnectCount
-		reconnectPuller.mu.Unlock()
-		assert.GreaterOrEqual(t, count, 2, "should have reconnected at least once")
-
-		svc.Stop(context.Background())
-	})
-}
-
-// reconnectablePullerService tracks reconnection attempts
-type reconnectablePullerService struct {
-	mu             sync.Mutex
-	reconnectCount int
-	currentCh      chan *puller.Event
-}
-
-func (r *reconnectablePullerService) Subscribe(ctx context.Context, consumerID string, after string) <-chan *puller.Event {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.reconnectCount++
-	ch := make(chan *puller.Event, 10)
-	r.currentCh = ch
-
-	go func() {
-		<-ctx.Done()
-		r.mu.Lock()
-		if r.currentCh == ch {
-			close(ch)
-		}
-		r.mu.Unlock()
-	}()
-
-	return ch
-}
-
-func (r *reconnectablePullerService) CloseCurrentChannel() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.currentCh != nil {
-		close(r.currentCh)
-		r.currentCh = nil
+		return event, nil
 	}
 }
+func (s *channelSubscription) Close() error { s.cancel(); return nil }
 
 func TestService_ApplyEventWithUnsupportedType(t *testing.T) {
-	t.Run("unsupported field type logs error", func(t *testing.T) {
+	t.Run("unsupported field type returns error", func(t *testing.T) {
 		svc := newTestService(config.Config{}, nil, testLogger())
 		s := svc.(*service)
 
@@ -819,9 +773,8 @@ templates:
 			},
 		}
 
-		// Should not return error (error is logged, not returned)
 		err = svc.ApplyEvent(context.Background(), evt, "")
-		require.NoError(t, err)
+		require.ErrorContains(t, err, "failed to build order key")
 
 		// But the document should not be indexed
 		st := s.manager.Store().(*mem_store.Store)
@@ -966,61 +919,6 @@ templates:
 	orderKey, found := st.Get("testdb", "users", tmpl.Identity(), "user123")
 	assert.True(t, found, "document should be indexed with ID extracted from Fullpath")
 	assert.NotNil(t, orderKey)
-}
-
-func TestService_SubscriptionReconnect_ContextCanceled(t *testing.T) {
-	t.Run("context canceled during reconnect backoff", func(t *testing.T) {
-		// Create a puller that closes channel immediately
-		closingPuller := &immediateClosePullerService{}
-		svc := newTestService(config.Config{}, closingPuller, testLogger())
-
-		ctx, cancel := context.WithCancel(context.Background())
-		err := svc.Start(ctx)
-		require.NoError(t, err)
-
-		// Give subscription loop time to start and hit the reconnect path
-		time.Sleep(50 * time.Millisecond)
-
-		// Cancel context while in the reconnect backoff
-		cancel()
-
-		// Wait for the subscription loop to exit
-		time.Sleep(100 * time.Millisecond)
-
-		// Clean up
-		svc.Stop(context.Background())
-	})
-}
-
-// immediateClosePullerService closes the channel immediately to trigger reconnect
-type immediateClosePullerService struct {
-	mu        sync.Mutex
-	callCount int
-}
-
-func (p *immediateClosePullerService) Subscribe(ctx context.Context, consumerID string, after string) <-chan *puller.Event {
-	p.mu.Lock()
-	p.callCount++
-	count := p.callCount
-	p.mu.Unlock()
-
-	ch := make(chan *puller.Event)
-
-	// First call: close immediately to trigger reconnect
-	// Subsequent calls: wait for context
-	if count == 1 {
-		go func() {
-			time.Sleep(10 * time.Millisecond)
-			close(ch)
-		}()
-	} else {
-		go func() {
-			<-ctx.Done()
-			close(ch)
-		}()
-	}
-
-	return ch
 }
 
 // ============================================================================
@@ -1347,4 +1245,121 @@ func TestService_InvalidateDatabase_StoreError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to delete database indexes")
 	assert.Contains(t, err.Error(), "mock delete database error")
+}
+
+func TestSubscriptionDoesNotAdvancePastFailedApply(t *testing.T) {
+	mock := newMockPullerService()
+	svc := newTestService(config.Config{}, mock, testLogger())
+	s := svc.(*service)
+	require.NoError(t, s.manager.LoadTemplatesFromBytes([]byte(`
+templates:
+  - name: docs_by_value
+    collectionPattern: docs
+    fields:
+      - { field: value, order: asc }
+`)))
+	require.NoError(t, svc.Start(context.Background()))
+	defer svc.Stop(context.Background())
+	mock.SendEvent(&puller.Event{Progress: "p1"})
+	mock.SendEvent(&puller.Event{Change: &events.StoreChangeEvent{
+		EventID: "bad", Database: "db", FullDocument: &storage.StoredDoc{
+			Collection: "docs", Fullpath: "docs/bad", Data: map[string]any{"id": "bad", "value": []string{"unsupported"}},
+		},
+	}, Progress: "p2"})
+	mock.SendEvent(&puller.Event{Progress: "p3"})
+	require.Eventually(t, func() bool {
+		health, err := svc.Health(context.Background())
+		return health.Status == HealthUnhealthy && err != nil
+	}, time.Second, time.Millisecond)
+	s.mu.RLock()
+	progress := s.progress
+	s.mu.RUnlock()
+	require.Equal(t, "p1", progress)
+	persisted, err := s.store.LoadProgress()
+	require.NoError(t, err)
+	require.Equal(t, "p1", persisted)
+}
+
+type failingStore struct {
+	store.Store
+	failure error
+	failed  chan struct{}
+}
+
+func (s *failingStore) Failed() <-chan struct{}                                     { return s.failed }
+func (s *failingStore) Err() error                                                  { return s.failure }
+func (s *failingStore) Upsert(string, string, string, string, []byte, string) error { return s.failure }
+func (s *failingStore) Delete(string, string, string, string, string) error         { return s.failure }
+func (s *failingStore) LoadProgress() (string, error)                               { return "", s.failure }
+
+func TestStartRejectsCheckpointReadFailure(t *testing.T) {
+	s := newTestService(config.Config{}, nil, testLogger()).(*service)
+	cause := errors.New("checkpoint read failed")
+	s.store = &failingStore{Store: s.store, failure: cause}
+	require.ErrorIs(t, s.Start(context.Background()), cause)
+	require.NoError(t, s.Stop(context.Background()))
+}
+
+func TestApplyPropagatesStoreMutationErrors(t *testing.T) {
+	for _, deleted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("deleted=%v", deleted), func(t *testing.T) {
+			s := newTestService(config.Config{}, nil, testLogger()).(*service)
+			cause := errors.New("write failed")
+			st := &failingStore{Store: s.store, failure: cause}
+			s.manager = manager.New(st)
+			require.NoError(t, s.manager.LoadTemplatesFromBytes([]byte(`
+templates:
+  - name: docs_by_value
+    collectionPattern: docs
+    fields:
+      - { field: value, order: asc }
+`)))
+			event := &events.StoreChangeEvent{Database: "db", FullDocument: &storage.StoredDoc{
+				Collection: "docs", Fullpath: "docs/one", Deleted: deleted, Data: map[string]any{"id": "one", "value": "a"},
+			}}
+			require.ErrorIs(t, s.ApplyEvent(context.Background(), event, "later"), cause)
+			progress, err := s.store.LoadProgress()
+			require.NoError(t, err)
+			require.Empty(t, progress)
+			require.NoError(t, s.Stop(context.Background()))
+		})
+	}
+}
+
+type asyncFailingStore struct {
+	store.Store
+	cause  error
+	failed chan struct{}
+}
+
+func (s *asyncFailingStore) Failed() <-chan struct{} { return s.failed }
+func (s *asyncFailingStore) Err() error {
+	select {
+	case <-s.failed:
+		return s.cause
+	default:
+		return nil
+	}
+}
+
+func TestStorageFailureCancelsBlockedSubscription(t *testing.T) {
+	mock := newMockPullerService()
+	s := newTestService(config.Config{}, mock, testLogger()).(*service)
+	cause := errors.New("asynchronous commit failed")
+	st := &asyncFailingStore{Store: s.store, cause: cause, failed: make(chan struct{})}
+	s.store = st
+	s.manager = manager.New(st)
+	require.NoError(t, s.Start(context.Background()))
+	close(st.failed)
+	done := make(chan struct{})
+	go func() { s.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("storage failure did not interrupt Next")
+	}
+	health, err := s.Health(context.Background())
+	require.Equal(t, HealthUnhealthy, health.Status)
+	require.ErrorIs(t, err, cause)
+	require.NoError(t, s.Stop(context.Background()))
 }

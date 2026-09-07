@@ -2,422 +2,191 @@ package grpc
 
 import (
 	"context"
-	"sync"
+	"errors"
+	"net"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	pullerv1 "github.com/syntrixbase/syntrix/api/gen/puller/v1"
+	"github.com/syntrixbase/syntrix/internal/core/storage"
 	"github.com/syntrixbase/syntrix/internal/puller/config"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
-	"google.golang.org/grpc"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	grpcapi "google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
-// --- Mocks ---
-
-type mockStream struct {
-	mock.Mock
-	grpc.ServerStream
-	ctx context.Context
-	t   *testing.T
-}
-
-func (m *mockStream) Context() context.Context {
-	if m.ctx != nil {
-		return m.ctx
-	}
-	return context.Background()
-}
-
-func (m *mockStream) Send(event *pullerv1.PullerEvent) error {
-	if m.t != nil {
-		m.t.Logf("MockStream.Send called with event: %s", event.ChangeEvent.EventId)
-	}
-	args := m.Called(event)
-	return args.Error(0)
-}
-
-func (m *mockStream) SetHeader(md metadata.MD) error {
-	return nil
-}
-
-func (m *mockStream) SendHeader(md metadata.MD) error {
-	return nil
-}
-
-func (m *mockStream) SetTrailer(md metadata.MD) {
-}
-
-type controllableIterator struct {
-	events []*events.StoreChangeEvent
-	idx    int
-}
-
-func (m *controllableIterator) Next() bool {
-	m.idx++
-	return m.idx <= len(m.events)
-}
-
-func (m *controllableIterator) Event() *events.StoreChangeEvent {
-	if m.idx > 0 && m.idx <= len(m.events) {
-		return m.events[m.idx-1]
-	}
-	return nil
-}
-
-func (m *controllableIterator) Err() error {
-	return nil
-}
-
-func (m *controllableIterator) Close() error {
-	return nil
-}
-
-type controllableEventSource struct {
-	replayFunc func(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error)
-	handler    func(ctx context.Context, backendName string, event *events.StoreChangeEvent) error
-}
-
-func (m *controllableEventSource) SetEventHandler(handler func(ctx context.Context, backendName string, event *events.StoreChangeEvent) error) {
-	m.handler = handler
-}
-
-func (m *controllableEventSource) EmitEvent(ctx context.Context, backendName string, event *events.StoreChangeEvent) error {
-	if m.handler != nil {
-		return m.handler(ctx, backendName, event)
-	}
-	return nil
-}
-
-func (m *controllableEventSource) Replay(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error) {
-	if m.replayFunc != nil {
-		return m.replayFunc(ctx, after, coalesce)
-	}
-	return &controllableIterator{events: nil}, nil
-}
-
-// --- Tests ---
-
-func TestServer_StateMachine_HappyPath(t *testing.T) {
-	// Scenario: Replay finishes -> Switch to Live -> Receive events
-
-	// Setup
-	cfg := config.GRPCConfig{ChannelSize: 100}
-	replayEvt := &events.StoreChangeEvent{
-		EventID:     "replay-1",
-		ClusterTime: events.ClusterTime{T: 100, I: 1},
-	}
-
-	source := &controllableEventSource{
-		replayFunc: func(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error) {
-			return &controllableIterator{events: []*events.StoreChangeEvent{replayEvt}}, nil
-		},
-	}
-	server := NewServer(cfg, source, nil)
-
-	// Init the server to start the event loop
-	server.Init()
-	defer server.Shutdown()
-
-	// Mock Stream
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+func TestServerHeartbeatDoesNotReadAheadProgress(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	stream := &mockStream{ctx: ctx, t: t}
-
-	// Expectation:
-	// 1. Send replay event (NOT ANYMORE - we start in live mode if no cursor)
-	// 2. Send live event
-
-	done := make(chan struct{})
-
-	// stream.On("Send", mock.MatchedBy(func(event *pullerv1.PullerEvent) bool {
-	// 	// Check if it's the replay event
-	// 	if event.ChangeEvent.EventId == "replay-1" {
-	// 		return true
-	// 	}
-	// 	return false
-	// })).Return(nil).Once()
-
-	stream.On("Send", mock.MatchedBy(func(event *pullerv1.PullerEvent) bool {
-		// Check if it's the live event
-		if event.ChangeEvent.EventId == "live-1" {
-			close(done) // Signal completion
-			return true
-		}
-		return false
-	})).Return(nil).Once()
-
-	// Run Subscribe in a goroutine
+	waiting := make(chan struct{})
+	sub := &subscriptionFixture{initialProgress: "last-delivered", next: func(ctx context.Context) (*events.PullerEvent, error) {
+		close(waiting)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	cfg := config.DefaultConfig().GRPC
+	cfg.HeartbeatInterval = time.Millisecond
+	server := NewServer(cfg, sourceFunc(func(context.Context, events.SubscribeOptions) (events.Subscription, error) { return sub, nil }), nil)
+	defer server.Shutdown()
+	sent := make(chan *pullerv1.PullerEvent, 1)
+	sends := 0
+	done := make(chan error, 1)
 	go func() {
-		req := &pullerv1.SubscribeRequest{
-			ConsumerId: "test-consumer",
-			// After: "some-cursor", // If we wanted replay
-		}
-		server.Subscribe(req, stream)
+		done <- server.Subscribe(&pullerv1.SubscribeRequest{After: "last-delivered"}, &streamFixture{ctx: ctx, send: func(evt *pullerv1.PullerEvent) error {
+			sends++
+			if sends == 1 {
+				return nil
+			}
+			select {
+			case sent <- evt:
+			case <-ctx.Done():
+			}
+			return context.Canceled
+		}})
 	}()
-
-	// Wait for replay to finish (it happens immediately in this mock)
-	// We need to wait a bit for the server to switch to live mode and register the subscriber
-	time.Sleep(100 * time.Millisecond)
-
-	// Broadcast a live event via source
-	liveEvt := &events.StoreChangeEvent{
-		EventID:     "live-1",
-		ClusterTime: events.ClusterTime{T: 200, I: 1},
+	select {
+	case <-waiting:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
 	}
-	source.EmitEvent(context.Background(), "db1", liveEvt)
-
-	// Wait for test completion
+	select {
+	case evt := <-sent:
+		assert.Nil(t, evt.ChangeEvent)
+		assert.Equal(t, "last-delivered", evt.Progress)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
 	select {
 	case <-done:
-	// Success
-	case <-time.After(2 * time.Second):
-		t.Fatal("Timeout waiting for live event")
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
 	}
-
-	stream.AssertExpectations(t)
 }
 
-func TestServer_StateMachine_LiveDowngrade(t *testing.T) {
-	// Scenario: Live mode -> Channel overflow -> Switch to Catch-up -> Replay -> Switch back to Live
-
-	// Setup with small channel size to force overflow
-	cfg := config.GRPCConfig{ChannelSize: 1}
-
-	var replayCount int
-	var mu sync.Mutex
-
-	replayEvt2 := &events.StoreChangeEvent{
-		EventID:     "replay-2",
-		ClusterTime: events.ClusterTime{T: 103, I: 1}, // Newer than overflow events
+func TestServerDomainFailuresHaveStableDetails(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		code   events.ErrorCode
+		status codes.Code
+	}{
+		{events.CodeInvalidCursor, codes.InvalidArgument}, {events.CodeUnknownSource, codes.InvalidArgument},
+		{events.CodeGenerationMismatch, codes.FailedPrecondition}, {events.CodeHistoryExpired, codes.FailedPrecondition},
+		{events.CodePositionAhead, codes.InvalidArgument}, {events.CodeStorageFailure, codes.Internal},
+		{events.CodeSourceUnavailable, codes.Unavailable}, {events.CodeContinuityLost, codes.FailedPrecondition},
+		{events.CodeUnsupportedFormat, codes.FailedPrecondition}, {events.CodeOverloaded, codes.ResourceExhausted},
 	}
-
-	source := &controllableEventSource{
-		replayFunc: func(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error) {
-			mu.Lock()
-			defer mu.Unlock()
-			replayCount++
-			t.Logf("Replay called. Count: %d", replayCount)
-			// Return the event, assuming only overflow triggers replay (or if initial replay happens, it gets this too, which is fine)
-			return &controllableIterator{events: []*events.StoreChangeEvent{replayEvt2}}, nil
-		},
+	for _, tt := range cases {
+		t.Run(string(tt.code), func(t *testing.T) {
+			failure := &events.Error{Code: tt.code, Backend: "backend", SourceID: "source", Generation: "generation", DiscardedThrough: 8, CommittedThrough: 10, Cause: errors.New("private disk path")}
+			server := NewServer(config.DefaultConfig().GRPC, sourceFunc(func(context.Context, events.SubscribeOptions) (events.Subscription, error) { return nil, failure }), nil)
+			defer server.Shutdown()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			err := server.Subscribe(&pullerv1.SubscribeRequest{}, &streamFixture{ctx: ctx, header: func(metadata.MD) error { t.Error("must not acknowledge rejected subscription"); return nil }})
+			st := status.Convert(err)
+			assert.Equal(t, tt.status, st.Code())
+			assert.NotContains(t, st.Message(), "private disk path")
+			require.Len(t, st.Details(), 1)
+			detail, ok := st.Details()[0].(*errdetails.ErrorInfo)
+			require.True(t, ok)
+			assert.Equal(t, "syntrix.puller", detail.Domain)
+			assert.Equal(t, string(tt.code), detail.Reason)
+			assert.Equal(t, map[string]string{"backend": "backend", "source_id": "source", "generation": "generation", "discarded_through": "8", "committed_through": "10"}, detail.Metadata)
+		})
 	}
-	server := NewServer(cfg, source, nil)
+}
 
-	// Init the server to start the event loop
-	server.Init()
-	defer server.Shutdown()
+type sendObservedServer struct {
+	pullerv1.UnimplementedPullerServiceServer
+	adapter  *Server
+	entered  chan struct{}
+	returned chan struct{}
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+func (s *sendObservedServer) Subscribe(req *pullerv1.SubscribeRequest, stream pullerv1.PullerService_SubscribeServer) error {
+	return s.adapter.Subscribe(req, &sendObservedStream{PullerService_SubscribeServer: stream, entered: s.entered, returned: s.returned})
+}
+
+type sendObservedStream struct {
+	pullerv1.PullerService_SubscribeServer
+	entered    chan struct{}
+	returned   chan struct{}
+	largeSends int
+}
+
+func (s *sendObservedStream) Send(event *pullerv1.PullerEvent) error {
+	if event.ChangeEvent == nil {
+		return s.PullerService_SubscribeServer.Send(event)
+	}
+	s.largeSends++
+	// The first message spends the initial write quota; the second waits for reads.
+	blocked := s.largeSends == 2
+	if blocked {
+		close(s.entered)
+	}
+	err := s.PullerService_SubscribeServer.Send(event)
+	if blocked {
+		close(s.returned)
+	}
+	return err
+}
+
+func TestShutdownReleasesFlowControlledSend(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	stream := &mockStream{ctx: ctx, t: t}
-
-	// 1. Initial connection (empty replay -> live)
-
-	// Run Subscribe
-	go func() {
-		req := &pullerv1.SubscribeRequest{
-			ConsumerId: "overflow-consumer",
-			// After:      "cursor", // Force catchup mode if needed, but here we test live downgrade
-		}
-		server.Subscribe(req, stream)
-	}()
-
-	time.Sleep(100 * time.Millisecond) // Wait for live mode
-
-	// 2. Fill the channel (size 1)
-	evt1 := &events.StoreChangeEvent{EventID: "evt-1", ClusterTime: events.ClusterTime{T: 100}}
-
-	// Let's make stream.Send block for the first event
-	sendBlock := make(chan struct{})
-	stream.On("Send", mock.MatchedBy(func(event *pullerv1.PullerEvent) bool {
-		return event.ChangeEvent.EventId == "evt-1"
-	})).Run(func(args mock.Arguments) {
-		t.Log("Blocking Send(evt-1)")
-		<-sendBlock // Block here
-		t.Log("Unblocking Send(evt-1)")
-	}).Return(nil).Once()
-
-	// Broadcast evt-1. It will be picked up and stuck in Send.
-	t.Log("Emitting evt-1")
-	source.EmitEvent(context.Background(), "db1", evt1)
-	time.Sleep(50 * time.Millisecond)
-
-	// Now channel is empty (item picked up), but consumer is blocked.
-	// Broadcast evt-2. It goes to channel (size 1). Channel full.
-	t.Log("Emitting evt-2")
-	evt2 := &events.StoreChangeEvent{EventID: "evt-2", ClusterTime: events.ClusterTime{T: 101}}
-	source.EmitEvent(context.Background(), "db1", evt2)
-	time.Sleep(50 * time.Millisecond)
-
-	// Broadcast evt-3. Channel full -> Overflow!
-	t.Log("Emitting evt-3")
-	evt3 := &events.StoreChangeEvent{EventID: "evt-3", ClusterTime: events.ClusterTime{T: 102}}
-	source.EmitEvent(context.Background(), "db1", evt3)
-	time.Sleep(50 * time.Millisecond)
-
-	// Expect evt-2 to be sent as well (it was in the channel)
-	stream.On("Send", mock.MatchedBy(func(event *pullerv1.PullerEvent) bool {
-		return event.ChangeEvent.EventId == "evt-2"
-	})).Return(nil).Once()
-
-	// Expect the second replay event to be sent eventually
-	replayDone := make(chan struct{})
-	stream.On("Send", mock.MatchedBy(func(event *pullerv1.PullerEvent) bool {
-		if event.ChangeEvent.EventId == "replay-2" {
-			close(replayDone)
-			return true
-		}
-		return false
-	})).Return(nil).Once()
-
-	// Now unblock Send
-	t.Log("Closing sendBlock")
-	close(sendBlock)
-
-	// The server should:
-	// 1. Finish sending evt-1.
-	// 2. Detect overflow (evt-3 caused it).
-	// 3. Switch to Catch-up mode.
-	// 4. Call Replay again (replayCount becomes 2).
-	// 5. Send replay-2.
-
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	large := &events.PullerEvent{Change: &events.StoreChangeEvent{EventID: "large", FullDocument: &storage.StoredDoc{Data: map[string]any{"payload": strings.Repeat("x", 8<<20)}}}, Progress: "p1"}
+	sub := &subscriptionFixture{next: func(context.Context) (*events.PullerEvent, error) { return large, nil }}
+	adapter := NewServer(config.DefaultConfig().GRPC, sourceFunc(func(context.Context, events.SubscribeOptions) (events.Subscription, error) { return sub, nil }), nil)
+	observed := &sendObservedServer{adapter: adapter, entered: make(chan struct{}), returned: make(chan struct{})}
+	server := grpcapi.NewServer()
+	pullerv1.RegisterPullerServiceServer(server, observed)
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(listener) }()
+	defer func() { adapter.Shutdown(); server.Stop(); require.NoError(t, <-serveDone) }()
+	connection, err := grpcapi.NewClient(listener.Addr().String(), grpcapi.WithTransportCredentials(insecure.NewCredentials()), grpcapi.WithStaticStreamWindowSize(65535), grpcapi.WithStaticConnWindowSize(65535))
+	require.NoError(t, err)
+	defer connection.Close()
+	stream, err := pullerv1.NewPullerServiceClient(connection).Subscribe(ctx, &pullerv1.SubscribeRequest{})
+	require.NoError(t, err)
+	_, err = stream.Header()
+	require.NoError(t, err)
 	select {
-	case <-replayDone:
-	// Success
-	case <-time.After(2 * time.Second):
-		t.Fatal("Timeout waiting for replay event after overflow")
+	case <-observed.entered:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
 	}
-
-	mu.Lock()
-	if replayCount < 1 {
-		t.Errorf("Expected at least 1 replay, got %d", replayCount)
-	}
-	mu.Unlock()
-}
-
-func TestServer_Boundary_EmptyReplay(t *testing.T) {
-	// Scenario: Replay returns no events -> Immediate switch to Live
-
-	cfg := config.GRPCConfig{ChannelSize: 100}
-	source := &controllableEventSource{
-		replayFunc: func(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error) {
-			return &controllableIterator{events: []*events.StoreChangeEvent{}}, nil
-		},
-	}
-	server := NewServer(cfg, source, nil)
-	server.Init()
-	defer server.Shutdown()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	stream := &mockStream{ctx: ctx, t: t}
-
-	done := make(chan struct{})
-	stream.On("Send", mock.MatchedBy(func(event *pullerv1.PullerEvent) bool {
-		if event.ChangeEvent.EventId == "live-1" {
-			close(done)
-			return true
-		}
-		return false
-	})).Return(nil).Once()
-
-	go func() {
-		req := &pullerv1.SubscribeRequest{ConsumerId: "empty-replay"}
-		server.Subscribe(req, stream)
-	}()
-
-	time.Sleep(50 * time.Millisecond)
-
-	// Emit live event
-	liveEvt := &events.StoreChangeEvent{EventID: "live-1", ClusterTime: events.ClusterTime{T: 200}}
-	source.EmitEvent(context.Background(), "db1", liveEvt)
-
 	select {
-	case <-done:
-	case <-time.After(1 * time.Second):
-		t.Fatal("Timeout waiting for live event")
+	case <-observed.returned:
+		t.Fatal("large send unexpectedly completed without reads")
+	default:
 	}
-	stream.AssertExpectations(t)
-}
-
-func TestServer_Boundary_ImmediateCancel(t *testing.T) {
-	// Scenario: Context cancelled before Replay starts
-
-	cfg := config.GRPCConfig{ChannelSize: 100}
-	source := &controllableEventSource{}
-	server := NewServer(cfg, source, nil)
-	server.Init()
-	defer server.Shutdown()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	cancel() // Cancel immediately
-
-	stream := &mockStream{ctx: ctx, t: t}
-
-	req := &pullerv1.SubscribeRequest{ConsumerId: "cancel-consumer"}
-	err := server.Subscribe(req, stream)
-
-	// Subscribe returns nil on context cancellation (graceful disconnect)
-	if err != nil {
-		t.Errorf("Expected nil error on context cancellation, got: %v", err)
+	adapter.Shutdown()
+	gracefulDone := make(chan struct{})
+	go func() { server.GracefulStop(); close(gracefulDone) }()
+	select {
+	case <-observed.returned:
+	case <-ctx.Done():
+		t.Fatal("send worker did not terminate")
 	}
-}
-
-func TestServer_Boundary_SendError(t *testing.T) {
-	// Scenario: stream.Send returns error -> Should terminate subscription
-
-	cfg := config.GRPCConfig{ChannelSize: 100}
-	replayEvt := &events.StoreChangeEvent{EventID: "replay-1", ClusterTime: events.ClusterTime{T: 100}}
-
-	source := &controllableEventSource{
-		replayFunc: func(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error) {
-			return &controllableIterator{events: []*events.StoreChangeEvent{replayEvt}}, nil
-		},
-	}
-	server := NewServer(cfg, source, nil)
-	server.Init()
-	defer server.Shutdown()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	stream := &mockStream{ctx: ctx, t: t}
-
-	// Send returns error
-	stream.On("Send", mock.Anything).Return(context.Canceled).Once()
-
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		source.EmitEvent(context.Background(), "db1", &events.StoreChangeEvent{EventID: "live-1", ClusterTime: events.ClusterTime{T: 200}})
-	}()
-
-	req := &pullerv1.SubscribeRequest{ConsumerId: "error-consumer"}
-	err := server.Subscribe(req, stream)
-
-	if err == nil {
-		t.Error("Expected error from Subscribe when Send fails")
-	}
-	stream.AssertExpectations(t)
-}
-
-func TestServer_Boundary_InvalidMarker(t *testing.T) {
-	// Scenario: Subscribe with malformed after token
-
-	cfg := config.GRPCConfig{ChannelSize: 100}
-	server := NewServer(cfg, &controllableEventSource{}, nil)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	stream := &mockStream{ctx: ctx, t: t}
-
-	req := &pullerv1.SubscribeRequest{
-		ConsumerId: "invalid-marker",
-		After:      "invalid-base64-token",
-	}
-
-	err := server.Subscribe(req, stream)
-	if err == nil {
-		t.Error("Expected error for invalid marker")
+	assert.Zero(t, adapter.SubscriberCount())
+	assert.EqualValues(t, 1, sub.closed.Load())
+	// Transport drain still waits for unread DATA before trailers; the unified
+	// server's deadline may force Stop when a client does not release the socket.
+	require.NoError(t, connection.Close())
+	select {
+	case <-gracefulDone:
+	case <-ctx.Done():
+		t.Fatal("graceful stop did not finish after connection release")
 	}
 }

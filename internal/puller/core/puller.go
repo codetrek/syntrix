@@ -1,11 +1,17 @@
-// Package core implements the local puller service.
+// Package core owns durable source ingestion and local subscriptions.
 package core
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,8 +19,7 @@ import (
 	"github.com/syntrixbase/syntrix/internal/puller/config"
 	"github.com/syntrixbase/syntrix/internal/puller/cursor"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
-	"github.com/syntrixbase/syntrix/internal/puller/flowcontrol"
-	"github.com/syntrixbase/syntrix/internal/puller/metrics"
+	"github.com/syntrixbase/syntrix/internal/puller/health"
 	"github.com/syntrixbase/syntrix/internal/puller/normalizer"
 	"github.com/syntrixbase/syntrix/internal/puller/recovery"
 	"go.mongodb.org/mongo-driver/bson"
@@ -23,86 +28,48 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// EventHandler is a function that handles events from the change stream.
-// Note: This type must match the signature in grpc.EventSource interface.
-type EventHandler = func(ctx context.Context, backendName string, event *events.StoreChangeEvent) error
-
-// Backend represents a single MongoDB backend being watched.
 type Backend struct {
-	name            string
-	client          *mongo.Client
-	db              *mongo.Database
-	config          config.PullerBackendConfig
-	normalizer      *normalizer.Normalizer
-	buffer          *buffer.Buffer
-	gapDetector     *recovery.GapDetector
-	recoveryHandler *recovery.Handler
-	backpressure    *flowcontrol.BackpressureMonitor
-	cleaner         *buffer.Cleaner
-
-	// eventChan receives normalized events from the change stream
-	eventChan chan *events.StoreChangeEvent
+	name             string
+	client           *mongo.Client
+	db               *mongo.Database
+	config           config.PullerBackendConfig
+	normalizer       *normalizer.Normalizer
+	buffer           *buffer.Buffer
+	maxRetainedBytes int64
+	cancel           context.CancelFunc
+	ready            chan struct{}
+	readyOnce        sync.Once
+	err              error
 }
 
-// Puller is the main puller service that watches MongoDB change streams
-// and distributes events to consumers.
 type Puller struct {
-	cfg      config.Config
-	backends map[string]*Backend
-	logger   *slog.Logger
+	cfg    config.Config
+	logger *slog.Logger
+	health *health.Checker
 
-	// eventHandler is called for each normalized event
-	eventHandler EventHandler
+	// Registration cuts and post-sync publication share this coordinator lock.
+	mu               sync.Mutex
+	backends         map[string]*Backend
+	sources          map[string]*Backend
+	heads            *cursor.ProgressMarker
+	subscribers      map[uint64]*subscription
+	nextRegistration uint64
+	started          bool
+	stopping         bool
+	cancel           context.CancelFunc
+	stopOnce         sync.Once
+	stopDone         chan struct{}
+	failed           chan struct{}
+	stopErr          error
+	wg               sync.WaitGroup
 
-	// subs manages active subscribers
-	subs *SubscriberManager
-
-	// wg tracks running goroutines
-	wg sync.WaitGroup
-
-	// cancelMu protects cancel
-	cancelMu sync.Mutex
-
-	// cancel function to stop all backends
-	cancel context.CancelFunc
-
-	// watchFunc is the function used to watch the change stream.
-	// It can be replaced for testing purposes.
-	watchFunc func(ctx context.Context, backend *Backend, logger *slog.Logger) error
-
-	// openStream allows tests to inject a custom change stream implementation.
-	openStream func(ctx context.Context, db *mongo.Database, pipeline mongo.Pipeline, opts *options.ChangeStreamOptions) (changeStream, error)
-
-	// retryDelay is the time to wait before retrying after an error.
-	retryDelay time.Duration
-
-	// backpressureSlowDownDelay is the time to sleep when backpressure action is SlowDown.
-	backpressureSlowDownDelay time.Duration
-
-	// backpressurePauseDelay is the time to sleep when backpressure action is Pause.
-	backpressurePauseDelay time.Duration
+	watchFunc         func(context.Context, *Backend, *slog.Logger) error
+	openStream        func(context.Context, *mongo.Database, mongo.Pipeline, *options.ChangeStreamOptions) (changeStream, error)
+	earliestTimestamp func(context.Context, *mongo.Client) (primitive.Timestamp, error)
+	currentTimestamp  func(context.Context, *mongo.Client) (primitive.Timestamp, error)
+	retryDelay        time.Duration
 }
 
-// New creates a new Puller instance.
-func New(cfg config.Config, logger *slog.Logger) *Puller {
-	if logger == nil {
-		logger = slog.Default()
-	}
-	p := &Puller{
-		cfg:                       cfg,
-		backends:                  make(map[string]*Backend),
-		logger:                    logger.With("component", "puller"),
-		retryDelay:                time.Second,
-		backpressureSlowDownDelay: 100 * time.Millisecond,
-		backpressurePauseDelay:    1 * time.Second,
-	}
-	p.subs = NewSubscriberManager(p.logger)
-	p.watchFunc = p.watchChangeStream
-	p.openStream = openMongoChangeStream
-	return p
-}
-
-// changeStream defines the subset of mongo.ChangeStream used by the puller.
 type changeStream interface {
 	Next(context.Context) bool
 	Decode(any) error
@@ -110,480 +77,435 @@ type changeStream interface {
 	Close(context.Context) error
 }
 
+func New(cfg config.Config, logger *slog.Logger) *Puller {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	p := &Puller{
+		cfg: cfg, logger: logger.With("component", "puller"), health: health.NewChecker(logger),
+		backends: make(map[string]*Backend), sources: make(map[string]*Backend),
+		heads: cursor.NewProgressMarker(), subscribers: make(map[uint64]*subscription),
+		stopDone: make(chan struct{}), failed: make(chan struct{}), retryDelay: time.Second,
+		openStream: openMongoChangeStream, earliestTimestamp: oldestOplogTimestamp, currentTimestamp: currentOperationTime,
+	}
+	p.watchFunc = p.watchChangeStream
+	return p
+}
+
 func openMongoChangeStream(ctx context.Context, db *mongo.Database, pipeline mongo.Pipeline, opts *options.ChangeStreamOptions) (changeStream, error) {
 	return db.Watch(ctx, pipeline, opts)
 }
 
-// SetRetryDelay sets the retry delay for testing purposes.
-func (p *Puller) SetRetryDelay(d time.Duration) {
-	p.retryDelay = d
+func oldestOplogTimestamp(ctx context.Context, client *mongo.Client) (primitive.Timestamp, error) {
+	var row struct {
+		Timestamp primitive.Timestamp `bson:"ts"`
+	}
+	err := client.Database("local").Collection("oplog.rs").FindOne(ctx, bson.D{},
+		options.FindOne().SetSort(bson.D{{Key: "$natural", Value: 1}}).SetProjection(bson.D{{Key: "ts", Value: 1}})).Decode(&row)
+	if err != nil {
+		return primitive.Timestamp{}, fmt.Errorf("read earliest retained oplog entry: %w", err)
+	}
+	if row.Timestamp.T == 0 {
+		return primitive.Timestamp{}, errors.New("earliest oplog entry has no timestamp")
+	}
+	return row.Timestamp, nil
 }
 
-// SetBackpressureSlowDownDelay sets the slow down delay for testing purposes.
-func (p *Puller) SetBackpressureSlowDownDelay(d time.Duration) {
-	p.backpressureSlowDownDelay = d
+func currentOperationTime(ctx context.Context, client *mongo.Client) (primitive.Timestamp, error) {
+	session, err := client.StartSession()
+	if err != nil {
+		return primitive.Timestamp{}, err
+	}
+	defer session.EndSession(ctx)
+	if err := client.Database("admin").RunCommand(mongo.NewSessionContext(ctx, session), bson.D{{Key: "ping", Value: 1}}).Err(); err != nil {
+		return primitive.Timestamp{}, fmt.Errorf("capture initial source operation time: %w", err)
+	}
+	timestamp := session.OperationTime()
+	if timestamp == nil || timestamp.T == 0 {
+		return primitive.Timestamp{}, errors.New("source returned no initial operation time")
+	}
+	return *timestamp, nil
 }
 
-// SetBackpressurePauseDelay sets the pause delay for testing purposes.
-func (p *Puller) SetBackpressurePauseDelay(d time.Duration) {
-	p.backpressurePauseDelay = d
-}
+func (p *Puller) SetRetryDelay(d time.Duration) { p.retryDelay = d }
 
-// SetEventHandler sets the event handler for processing events.
-func (p *Puller) SetEventHandler(handler EventHandler) {
-	p.eventHandler = handler
-}
-
-// AddBackend adds a MongoDB backend to watch.
 func (p *Puller) AddBackend(name string, client *mongo.Client, dbName string, cfg config.PullerBackendConfig) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.started || p.stopping || p.nextRegistration != 0 {
+		return errors.New("backends must be configured before ingestion or subscriptions start")
+	}
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+		return fmt.Errorf("invalid backend name %q", name)
+	}
 	if _, exists := p.backends[name]; exists {
 		return fmt.Errorf("backend %q already exists", name)
 	}
-
-	logger := p.logger.With("backend", name)
-	db := client.Database(dbName)
-	buf, err := buffer.New(buffer.Options{
-		Path:          filepath.Join(p.cfg.Buffer.Path, name),
-		Logger:        logger,
-		BatchSize:     p.cfg.Buffer.BatchSize,
-		BatchInterval: p.cfg.Buffer.BatchInterval,
-		QueueSize:     p.cfg.Buffer.QueueSize,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create buffer: %w", err)
+	if cfg.SourceID == "" {
+		return errors.New("backend source_id is required")
 	}
-
-	gapDetector := recovery.NewGapDetector(recovery.GapDetectorOptions{
-		Logger: logger,
-	})
-
-	recoveryHandler := recovery.NewHandler(recovery.HandlerOptions{
-		Checkpoint:           buf,
-		MaxConsecutiveErrors: 10, // TODO: Make configurable
-		Logger:               logger,
-	})
-
+	if _, exists := p.sources[cfg.SourceID]; exists {
+		return fmt.Errorf("duplicate source_id %q", cfg.SourceID)
+	}
+	if client == nil || dbName == "" {
+		return errors.New("backend client and database are required")
+	}
 	maxSize, err := parseSize(p.cfg.Buffer.MaxSize)
 	if err != nil {
-		logger.Warn("invalid buffer max size, using unlimited", "error", err)
-		maxSize = 0
+		return err
 	}
-
-	cleaner := buffer.NewCleaner(buffer.CleanerOptions{
-		Buffer:    buf,
-		Retention: p.cfg.Cleaner.Retention,
-		MaxSize:   maxSize,
-		Interval:  p.cfg.Cleaner.Interval,
-		Logger:    logger,
-	})
-
-	bpMonitor := flowcontrol.NewBackpressureMonitor(flowcontrol.BackpressureOptions{
-		PublishLatency: metrics.PublishLatency,
-		QueueDepth:     metrics.QueueDepth,
-	})
-
-	p.backends[name] = &Backend{
-		name:            name,
-		client:          client,
-		db:              db,
-		config:          cfg,
-		normalizer:      normalizer.New(),
-		buffer:          buf,
-		gapDetector:     gapDetector,
-		recoveryHandler: recoveryHandler,
-		backpressure:    bpMonitor,
-		cleaner:         cleaner,
-		eventChan:       make(chan *events.StoreChangeEvent, 1000),
+	collections := slices.Clone(cfg.Collections)
+	slices.Sort(collections)
+	collections = slices.Compact(collections)
+	scope, err := json.Marshal(struct {
+		Database    string   `json:"database"`
+		Collections []string `json:"collections"`
+	}{dbName, collections})
+	if err != nil {
+		return err
 	}
-
-	p.logger.Info("added backend", "name", name, "database", dbName)
+	backend := &Backend{name: name, client: client, db: client.Database(dbName), config: cfg,
+		normalizer: normalizer.New(), maxRetainedBytes: maxSize, ready: make(chan struct{})}
+	buf, err := buffer.New(buffer.Options{
+		Path: filepath.Join(p.cfg.Buffer.Path, name), SourceID: cfg.SourceID, SourceScope: string(scope),
+		BatchSize: p.cfg.Buffer.BatchSize, BatchInterval: p.cfg.Buffer.BatchInterval,
+		QueueSize: p.cfg.Buffer.QueueSize, QueueBytes: p.cfg.Buffer.QueueBytes, BatchBytes: p.cfg.Buffer.BatchBytes,
+		Logger:   p.logger.With("backend", name),
+		OnCommit: func(batch buffer.CommittedBatch) { p.publish(name, batch) },
+		OnError:  func(err error) { p.failBackend(name, err) },
+	})
+	if err != nil {
+		return fmt.Errorf("open backend %q event log: %w", name, err)
+	}
+	state, err := buf.State()
+	if err != nil {
+		return errors.Join(err, buf.Close(context.Background()))
+	}
+	backend.buffer = buf
+	p.backends[name] = backend
+	p.sources[cfg.SourceID] = backend
+	p.heads.SetPosition(state.Position)
+	p.health.RegisterBackend(name)
 	return nil
 }
 
-// Start starts watching all backends.
+// Start returns after every source has opened its first change stream.
 func (p *Puller) Start(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	if p.started || p.stopping {
+		p.mu.Unlock()
+		return errors.New("puller has already started or stopped")
+	}
 	if len(p.backends) == 0 {
-		return fmt.Errorf("no backends configured")
+		p.mu.Unlock()
+		return errors.New("no backends configured")
 	}
-
-	p.cancelMu.Lock()
-	ctx, p.cancel = context.WithCancel(ctx)
-	p.cancelMu.Unlock()
-
-	for name, backend := range p.backends {
-		p.wg.Add(1)
-		go p.runBackend(ctx, name, backend)
-	}
-
-	p.logger.Info("puller started", "backends", len(p.backends))
-	return nil
-}
-
-// Stop stops all backends gracefully.
-func (p *Puller) Stop(ctx context.Context) error {
-	p.cancelMu.Lock()
-	cancel := p.cancel
-	p.cancelMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-
-	// Wait for all backends to stop
-	done := make(chan struct{})
-	go func() {
-		p.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		p.logger.Info("puller stopped gracefully")
-	case <-ctx.Done():
-		p.logger.Warn("puller stop timed out")
-	}
-
-	// Ensure all backend buffers are closed. This is safe because Buffer.Close is idempotent.
-	// This handles cases where AddBackend was called but Start wasn't (e.g. tests or early failure).
+	p.started = true
+	lifetime, cancel := context.WithCancel(ctx)
+	p.cancel = cancel
+	context.AfterFunc(lifetime, p.beginStop)
+	backends := make([]*Backend, 0, len(p.backends))
 	for _, backend := range p.backends {
-		if backend.buffer != nil {
-			_ = backend.buffer.Close()
+		backendCtx, backendCancel := context.WithCancel(lifetime)
+		backend.cancel = backendCancel
+		backends = append(backends, backend)
+		p.wg.Add(1)
+		go p.runBackend(backendCtx, backend)
+	}
+	p.mu.Unlock()
+	for _, backend := range backends {
+		select {
+		case <-backend.ready:
+		case <-p.failed:
+			err := p.Err()
+			p.beginStop()
+			return err
+		case <-lifetime.Done():
+			p.beginStop()
+			if err := p.Err(); err != nil {
+				return err
+			}
+			return lifetime.Err()
 		}
 	}
-
-	if ctx.Err() != nil {
-		return ctx.Err()
+	if err := p.Err(); err != nil {
+		p.beginStop()
+		return err
 	}
-
 	return nil
 }
 
-// runBackend runs the change stream consumer for a single backend.
-func (p *Puller) runBackend(ctx context.Context, name string, backend *Backend) {
+func (p *Puller) beginStop() {
+	p.stopOnce.Do(func() {
+		p.mu.Lock()
+		p.stopping = true
+		if p.cancel != nil {
+			p.cancel()
+		}
+		for _, sub := range p.subscribers {
+			p.terminateLocked(sub, context.Canceled)
+		}
+		backends := make([]*Backend, 0, len(p.backends))
+		for _, backend := range p.backends {
+			backends = append(backends, backend)
+		}
+		p.mu.Unlock()
+		// The drain owns each buffer until synchronization finishes, even if a caller times out.
+		go func() {
+			p.wg.Wait()
+			var closeErrors []error
+			for _, backend := range backends {
+				closeErrors = append(closeErrors, backend.buffer.Close(context.Background()))
+			}
+			p.mu.Lock()
+			p.stopErr = errors.Join(append(closeErrors, p.errLocked())...)
+			p.mu.Unlock()
+			close(p.stopDone)
+		}()
+	})
+}
+
+func (p *Puller) Stop(ctx context.Context) error {
+	p.beginStop()
+	select {
+	case <-p.stopDone:
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.stopErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (p *Puller) runBackend(ctx context.Context, backend *Backend) {
 	defer p.wg.Done()
-	defer backend.buffer.Close()
+	maintenanceCtx, stopMaintenance := context.WithCancel(ctx)
+	maintenanceDone := make(chan struct{})
+	go func() { defer close(maintenanceDone); p.maintain(maintenanceCtx, backend) }()
+	defer func() { stopMaintenance(); <-maintenanceDone }()
+	logger := p.logger.With("backend", backend.name)
+	for ctx.Err() == nil {
+		err := p.watchFunc(ctx, backend, logger)
+		if ctx.Err() != nil {
+			return
+		}
+		if err == nil {
+			err = io.EOF
+		}
+		if recovery.IsHistoryLost(err) {
+			terminal := p.backendError(backend, events.CodeContinuityLost, err)
+			p.failBackend(backend.name, terminal)
+			if markErr := backend.buffer.MarkDiscontinuous(context.Background(), terminal); markErr != nil {
+				var domain *events.Error
+				if !errors.As(markErr, &domain) || domain.Code != events.CodeContinuityLost {
+					p.recordAdditionalFailure(backend, markErr)
+				}
+			}
+			return
+		}
+		var domain *events.Error
+		if errors.As(err, &domain) || !recovery.IsRetryable(err) {
+			p.failBackend(backend.name, p.backendError(backend, events.CodeSourceUnavailable, err))
+			return
+		}
+		p.health.RecordError(backend.name)
+		logger.Warn("source interrupted; resuming from committed checkpoint", "error", err)
+		timer := time.NewTimer(p.retryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
 
-	logger := p.logger.With("backend", name)
-	logger.Info("starting backend")
-
-	backend.cleaner.Start(ctx)
-	defer backend.cleaner.Stop()
-
+func (p *Puller) maintain(ctx context.Context, backend *Backend) {
+	ticker := time.NewTicker(p.cfg.Cleaner.Interval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("backend stopped")
 			return
-		default:
-		}
-
-		err := p.watchFunc(ctx, backend, logger)
-		if err != nil {
-			if ctx.Err() != nil {
-				// Context cancelled, normal shutdown
-				return
-			}
-
-			action := backend.recoveryHandler.HandleError(err)
-			switch action {
-			case recovery.ActionRestart:
-				logger.Warn("restarting backend due to error", "error", err)
-				if recErr := backend.recoveryHandler.RecoverFromResumeTokenError(ctx); recErr != nil {
-					logger.Error("failed to recover from resume token error", "error", recErr)
-					// If recovery fails, we might want to stop or retry.
-					// For now, we'll retry which will likely trigger another error.
+		case now := <-ticker.C:
+			if err := backend.buffer.Retain(ctx, now.Add(-p.cfg.Cleaner.Retention), backend.maxRetainedBytes); err != nil {
+				if ctx.Err() == nil {
+					p.failBackend(backend.name, p.backendError(backend, events.CodeStorageFailure, err))
 				}
-				// Continue loop to restart watch
-				time.Sleep(p.retryDelay)
-			case recovery.ActionFatal:
-				logger.Error("fatal error, stopping backend", "error", err)
 				return
-			case recovery.ActionReconnect:
-				logger.Warn("transient error, reconnecting", "error", err)
-				time.Sleep(p.retryDelay) // Backoff before reconnect
-			case recovery.ActionNone:
-				// Should not happen if err != nil
-				logger.Warn("unknown error, reconnecting", "error", err)
-				time.Sleep(p.retryDelay)
 			}
-		} else {
-			// Reset error count on successful run (if watchChangeStream returns nil, it means it finished normally, e.g. context done)
-			backend.recoveryHandler.ResetErrorCount()
 		}
 	}
 }
 
-// watchChangeStream watches the MongoDB change stream for a backend.
-func (p *Puller) watchChangeStream(ctx context.Context, backend *Backend, logger *slog.Logger) error {
-	// Load resume token if exists
-	resumeToken, err := backend.buffer.LoadCheckpoint()
+func (p *Puller) watchChangeStream(ctx context.Context, backend *Backend, logger *slog.Logger) (result error) {
+	state, err := backend.buffer.Flush(ctx)
 	if err != nil {
-		logger.Warn("failed to load checkpoint from buffer", "error", err)
-		// Continue without resume token
+		return p.backendError(backend, events.CodeStorageFailure, err)
 	}
-
-	// Build watch pipeline for collection filtering
-	pipeline := p.buildWatchPipeline(backend.config)
-
-	// Configure watch options
-	opts := options.ChangeStream().
-		SetFullDocument(options.UpdateLookup)
-
-	if resumeToken != nil {
-		opts.SetResumeAfter(resumeToken)
-		logger.Info("resuming from checkpoint")
-	} else {
-		logger.Info("starting fresh (no checkpoint)")
+	if len(state.ResumeToken) == 0 && state.StartAt == nil {
+		timestampFunc := p.currentTimestamp
 		if p.cfg.Bootstrap.Mode == "from_beginning" {
-			opts.SetStartAtOperationTime(&primitive.Timestamp{T: 1, I: 1})
+			timestampFunc = p.earliestTimestamp
+		}
+		timestamp, err := timestampFunc(ctx, backend.client)
+		if err != nil {
+			return p.backendError(backend, events.CodeSourceUnavailable, fmt.Errorf("establish source boundary: %w", err))
+		}
+		if err := backend.buffer.InitializeBoundary(ctx, nil, &timestamp); err != nil {
+			return p.backendError(backend, events.CodeStorageFailure, err)
+		}
+		state, err = backend.buffer.State()
+		if err != nil {
+			return p.backendError(backend, events.CodeStorageFailure, err)
 		}
 	}
-
-	// Start watching at database level
-	stream, err := p.openStream(ctx, backend.db, pipeline, opts)
-	if err != nil {
-		return fmt.Errorf("failed to open change stream: %w", err)
+	opts := options.ChangeStream().SetFullDocument(options.UpdateLookup)
+	if len(state.ResumeToken) != 0 {
+		opts.SetResumeAfter(state.ResumeToken)
+	} else {
+		opts.SetStartAtOperationTime(state.StartAt)
 	}
-	defer stream.Close(ctx)
-
-	logger.Info("change stream opened")
-
-	// Process events
+	stream, err := p.openStream(ctx, backend.db, p.buildWatchPipeline(backend.config), opts)
+	if err != nil {
+		return fmt.Errorf("open change stream: %w", err)
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		result = errors.Join(result, stream.Close(closeCtx))
+	}()
+	backend.readyOnce.Do(func() { close(backend.ready) })
+	logger.Debug("change stream ready")
 	for stream.Next(ctx) {
 		var raw normalizer.RawEvent
 		if err := stream.Decode(&raw); err != nil {
-			logger.Error("failed to decode event", "error", err)
-			continue
+			return p.backendError(backend, events.CodeSourceUnavailable, fmt.Errorf("decode source event: %w", err))
 		}
-
-		// Normalize event
 		evt, err := backend.normalizer.Normalize(&raw)
 		if err != nil {
-			logger.Error("failed to normalize event", "error", err)
-			continue
+			return p.backendError(backend, events.CodeSourceUnavailable, fmt.Errorf("normalize source event: %w", err))
 		}
 		evt.Backend = backend.name
-
-		logger.Info("Puller: received event from mongo",
-			"eventID", evt.EventID,
-			"op", evt.OpType,
-			"mgoid", evt.MgoDocID,
-		)
-
-		// Check for gaps
-		backend.gapDetector.RecordEvent(evt)
-
-		if err := backend.buffer.Write(evt, raw.ResumeToken); err != nil {
-			logger.Error("failed to write event to buffer", "error", err)
-			continue
+		if err := backend.buffer.Enqueue(ctx, evt, raw.ResumeToken); err != nil {
+			return p.backendError(backend, events.CodeStorageFailure, err)
 		}
-		logger.Debug("Puller: buffered event", "eventID", evt.EventID)
-
-		// Handle event after it is persisted
-		p.invokeHandlerWithBackpressure(ctx, backend, evt)
 	}
-
 	if err := stream.Err(); err != nil {
-		return fmt.Errorf("change stream error: %w", err)
+		return fmt.Errorf("read change stream: %w", err)
 	}
-
-	return nil
+	return ctx.Err()
 }
 
-func (p *Puller) invokeHandlerWithBackpressure(ctx context.Context, backend *Backend, evt *events.StoreChangeEvent) {
-	p.logger.Debug("Puller: broadcasting event", "eventID", evt.EventID)
-
-	// Broadcast to subscribers
-	p.subs.Broadcast(evt)
-
-	if p.eventHandler != nil {
-		start := time.Now()
-		if err := p.eventHandler(ctx, backend.name, evt); err != nil {
-			p.logger.Error("failed to handle event", "error", err)
-			// Continue processing other events
-		}
-		latency := time.Since(start)
-
-		// Handle backpressure
-		action := backend.backpressure.HandleBackpressure(latency)
-		switch action {
-		case flowcontrol.ActionSlowDown:
-			time.Sleep(p.backpressureSlowDownDelay)
-		case flowcontrol.ActionPause:
-			p.logger.Warn("pausing due to high backpressure")
-			metrics.BackpressureEvents.WithLabelValues(backend.name, "pause").Inc()
-			time.Sleep(p.backpressurePauseDelay)
-		}
-	}
-}
-
-// buildWatchPipeline builds the MongoDB aggregation pipeline for collection filtering.
 func (p *Puller) buildWatchPipeline(cfg config.PullerBackendConfig) mongo.Pipeline {
 	if len(cfg.Collections) == 0 {
 		return nil
 	}
+	return mongo.Pipeline{{{Key: "$match", Value: bson.M{"ns.coll": bson.M{"$in": cfg.Collections}}}}}
+}
 
-	return mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{
-			"ns.coll": bson.M{"$in": cfg.Collections},
-		}}},
+func (p *Puller) backendError(backend *Backend, code events.ErrorCode, cause error) error {
+	var domain *events.Error
+	if errors.As(cause, &domain) {
+		return cause
+	}
+	p.mu.Lock()
+	head, _ := p.heads.GetPosition(backend.config.SourceID)
+	p.mu.Unlock()
+	return &events.Error{Code: code, Backend: backend.name, SourceID: backend.config.SourceID,
+		Generation: head.Generation, CommittedThrough: head.Sequence, Cause: cause}
+}
+
+func (p *Puller) failBackend(name string, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	backend := p.backends[name]
+	if backend == nil || backend.err != nil {
+		return
+	}
+	backend.err = err
+	select {
+	case <-p.failed:
+	default:
+		close(p.failed)
+	}
+	if backend.cancel != nil {
+		backend.cancel()
+	}
+	p.health.FailBackend(name)
+	for _, sub := range p.subscribers {
+		p.terminateLocked(sub, err)
 	}
 }
 
-// BackendNames returns the names of all configured backends.
+func (p *Puller) recordAdditionalFailure(backend *Backend, err error) {
+	p.mu.Lock()
+	backend.err = errors.Join(backend.err, err)
+	p.mu.Unlock()
+}
+
+func (p *Puller) Err() error { p.mu.Lock(); defer p.mu.Unlock(); return p.errLocked() }
+
+func (p *Puller) errLocked() error {
+	var errs []error
+	for _, backend := range p.backends {
+		if backend.err != nil {
+			errs = append(errs, backend.err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (p *Puller) HealthReport() health.Report {
+	p.mu.Lock()
+	stopping := p.stopping
+	p.mu.Unlock()
+	report := p.health.GetReport()
+	if stopping {
+		report.Status = health.StatusUnhealthy
+	}
+	return report
+}
+
 func (p *Puller) BackendNames() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	names := make([]string, 0, len(p.backends))
 	for name := range p.backends {
 		names = append(names, name)
 	}
+	slices.Sort(names)
 	return names
 }
 
-// Replay returns an iterator that replays events from the given progress marker.
-// If the marker is empty, it replays from the beginning of the buffer.
-func (p *Puller) Replay(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error) {
-	var iters []events.Iterator
-
-	p.logger.Info("Replay called", "after", after, "coalesce", coalesce)
-
-	for name, backend := range p.backends {
-		startID := ""
-		if after != nil {
-			eventID := after[name]
-			if eventID != "" {
-				ct, err := normalizer.ParseEventID(eventID)
-				if err != nil {
-					// Close already opened iterators
-					for _, it := range iters {
-						it.Close()
-					}
-					return nil, fmt.Errorf("invalid event ID %q for backend %q: %w", eventID, name, err)
-				}
-				startID = events.FormatBufferKey(ct, eventID)
-				p.logger.Debug("Replay backend", "backend", name, "eventID", eventID, "startID", startID)
-			}
-		}
-
-		// Debug: check buffer state before scan
-		count, _ := backend.buffer.Count()
-		first, _ := backend.buffer.First()
-		head, _ := backend.buffer.Head()
-		p.logger.Info("Buffer state before ScanFrom", "backend", name, "count", count, "first", first, "head", head, "startID", startID)
-
-		iter, err := backend.buffer.ScanFrom(startID)
-		if err != nil {
-			// Close already opened iterators
-			for _, it := range iters {
-				it.Close()
-			}
-			return nil, fmt.Errorf("failed to create iterator for backend %q: %w", name, err)
-		}
-		iters = append(iters, &backendInjectingIterator{
-			Iterator:    iter,
-			backendName: name,
-		})
-	}
-
-	iter := NewMergeIterator(iters)
-	if coalesce {
-		return NewCoalescingIterator(iter, 100), nil
-	}
-	return iter, nil
-}
-
-type backendInjectingIterator struct {
-	events.Iterator
-	backendName string
-}
-
-func (i *backendInjectingIterator) Event() *events.StoreChangeEvent {
-	evt := i.Iterator.Event()
-	if evt != nil && evt.Backend == "" {
-		evt.Backend = i.backendName
-	}
-	return evt
-}
-
-// Subscribe subscribes to events from the puller with the given progress marker.
-// Returns a channel of events that will be closed when the context is canceled.
-func (p *Puller) Subscribe(ctx context.Context, consumerID string, after string) <-chan *events.PullerEvent {
-	pm := cursor.NewProgressMarker()
-
-	// Initialize progress marker from 'after' if provided
-	if after != "" {
-		decoded, err := cursor.DecodeProgressMarker(after)
-		if err == nil {
-			pm = decoded
-		}
-	}
-
-	// Create subscriber
-	sub := NewSubscriber(consumerID, pm, false, 1000)
-	p.subs.Add(sub)
-
-	outCh := make(chan *events.PullerEvent, 1000)
-
-	go func() {
-		defer close(outCh)
-		defer p.subs.Remove(consumerID)
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-sub.Done():
-				return
-			case evt := <-sub.Events():
-				// Update subscriber's progress
-				sub.UpdatePosition(evt.Backend, evt.EventID, evt.ClusterTime)
-
-				wrapper := &events.PullerEvent{
-					Change:   evt,
-					Progress: sub.CurrentProgress().Encode(),
-				}
-
-				select {
-				case outCh <- wrapper:
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
-	}()
-
-	return outCh
-}
-
-func parseSize(s string) (int64, error) {
-	if s == "" {
+func parseSize(value string) (int64, error) {
+	if value == "" {
 		return 0, nil
 	}
-
-	var size int64
-	var unit string
-	// Try to parse number and unit
-	n, err := fmt.Sscanf(s, "%d%s", &size, &unit)
+	i := 0
+	for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+		i++
+	}
+	if i == 0 {
+		return 0, fmt.Errorf("invalid buffer max_size %q", value)
+	}
+	size, err := strconv.ParseInt(value[:i], 10, 64)
 	if err != nil {
-		// Try just number
-		_, err = fmt.Sscanf(s, "%d", &size)
-		if err != nil {
-			return 0, fmt.Errorf("invalid size format: %s", s)
+		return 0, fmt.Errorf("invalid buffer max_size %q: %w", value, err)
+	}
+	powers := map[string]int{"": 0, "B": 0, "KB": 1, "KiB": 1, "MB": 2, "MiB": 2, "GB": 3, "GiB": 3, "TB": 4, "TiB": 4}
+	power, ok := powers[strings.TrimSpace(value[i:])]
+	if !ok {
+		return 0, fmt.Errorf("invalid buffer max_size unit %q", value[i:])
+	}
+	for range power {
+		if size > (1<<63-1)/1024 {
+			return 0, fmt.Errorf("buffer max_size overflows: %q", value)
 		}
-		return size, nil
-	}
-
-	if n == 1 {
-		return size, nil
-	}
-
-	switch unit {
-	case "KB", "KiB":
 		size *= 1024
-	case "MB", "MiB":
-		size *= 1024 * 1024
-	case "GB", "GiB":
-		size *= 1024 * 1024 * 1024
-	case "TB", "TiB":
-		size *= 1024 * 1024 * 1024 * 1024
 	}
 	return size, nil
 }

@@ -115,27 +115,22 @@ func runServer(cfg *config.Config, opts services.Options) {
 		logging.Fatal("Failed to initialize services", "error", err)
 	}
 
-	// 3. Start Services
-	// Context for background tasks
-	bgCtx, bgCancel := context.WithCancel(context.Background())
+	bgCtx, bgCancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer bgCancel()
 
-	mgr.Start(bgCtx)
+	if err := mgr.Start(bgCtx); err != nil {
+		bgCancel()
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
+		mgr.Shutdown(cleanupCtx)
+		cleanupCancel()
+		logging.Fatal("Failed to start services", "error", err)
+		return
+	}
 
-	// 4. Wait for Shutdown
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	<-bgCtx.Done()
 	slog.Info("Shutting down services...")
-
-	// Graceful shutdown
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer shutdownCancel()
-
-	// Cancel background tasks first
-	bgCancel()
-
 	mgr.Shutdown(shutdownCtx)
-
 	slog.Info("All services stopped.")
 }

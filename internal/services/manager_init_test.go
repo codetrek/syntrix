@@ -284,7 +284,7 @@ func TestManager_initPullerService_Success(t *testing.T) {
 
 	cfg := config.LoadConfig()
 	cfg.Puller.Buffer.Path = t.TempDir()
-	cfg.Puller.Backends = []puller_config.PullerBackendConfig{{Name: "primary"}}
+	cfg.Puller.Backends = []puller_config.PullerBackendConfig{{Name: "primary", SourceID: "primary-mongo"}}
 
 	mgr := NewManager(cfg, Options{Mode: ModeDistributed, RunPuller: true})
 	defer mgr.Shutdown(context.Background())
@@ -312,7 +312,7 @@ func TestManager_initPullerService_GetMongoError(t *testing.T) {
 
 	cfg := config.LoadConfig()
 	cfg.Puller.Buffer.Path = t.TempDir()
-	cfg.Puller.Backends = []puller_config.PullerBackendConfig{{Name: "missing"}}
+	cfg.Puller.Backends = []puller_config.PullerBackendConfig{{Name: "missing", SourceID: "missing-mongo"}}
 
 	mgr := NewManager(cfg, Options{RunPuller: true})
 
@@ -759,7 +759,7 @@ func TestManager_Init_PullerServiceError(t *testing.T) {
 	cfg := config.LoadConfig()
 	cfg.Puller.Buffer.Path = t.TempDir()
 	// Configure a backend that will fail during initialization
-	cfg.Puller.Backends = []puller_config.PullerBackendConfig{{Name: "missing_backend"}}
+	cfg.Puller.Backends = []puller_config.PullerBackendConfig{{Name: "missing_backend", SourceID: "missing_backend-mongo"}}
 
 	mgr := NewManager(cfg, Options{
 		Mode:      ModeDistributed,
@@ -811,8 +811,9 @@ func TestManager_initDistributed_TriggerServicesError(t *testing.T) {
 // mockPullerService for streamer testing
 type mockPullerService struct{}
 
-func (m *mockPullerService) Subscribe(ctx context.Context, consumerID string, after string) <-chan *puller.Event {
-	return nil
+func (m *mockPullerService) Err() error { return nil }
+func (m *mockPullerService) Subscribe(ctx context.Context, opts puller.SubscribeOptions) (puller.Subscription, error) {
+	return idlePullerSubscription{}, nil
 }
 func (m *mockPullerService) AddBackend(name string, client *mongo.Client, dbName string, cfg puller_config.PullerBackendConfig) error {
 	return nil
@@ -820,11 +821,6 @@ func (m *mockPullerService) AddBackend(name string, client *mongo.Client, dbName
 func (m *mockPullerService) Start(context.Context) error { return nil }
 func (m *mockPullerService) Stop(context.Context) error  { return nil }
 func (m *mockPullerService) BackendNames() []string      { return nil }
-func (m *mockPullerService) SetEventHandler(handler func(ctx context.Context, backendName string, event *puller.ChangeEvent) error) {
-}
-func (m *mockPullerService) Replay(ctx context.Context, after map[string]string, streaming bool) (puller.Iterator, error) {
-	return nil, nil
-}
 
 // Note: TestManager_initStreamerService_Standalone was removed because
 // standalone mode Streamer initialization is now inlined in initStandalone().
@@ -1029,7 +1025,7 @@ func TestManager_initStandalone_WithPuller(t *testing.T) {
 	cfg.Identity.AuthZ.RulesPath = ""
 	cfg.Trigger.Evaluator.RulesPath = ""
 	cfg.Puller.Buffer.Path = t.TempDir()
-	cfg.Puller.Backends = []puller_config.PullerBackendConfig{{Name: "default"}}
+	cfg.Puller.Backends = []puller_config.PullerBackendConfig{{Name: "default", SourceID: "default-mongo"}}
 
 	mgr := NewManager(cfg, Options{
 		Mode:      ModeStandalone,
@@ -1055,7 +1051,7 @@ func TestManager_initStandalone_PullerError(t *testing.T) {
 
 	cfg := config.LoadConfig()
 	cfg.Server.HTTPPort = 0
-	cfg.Puller.Backends = []puller_config.PullerBackendConfig{{Name: "default"}}
+	cfg.Puller.Backends = []puller_config.PullerBackendConfig{{Name: "default", SourceID: "default-mongo"}}
 
 	mgr := NewManager(cfg, Options{
 		Mode:      ModeStandalone,
@@ -1167,7 +1163,7 @@ func TestManager_initStandalone_WithIndexer(t *testing.T) {
 	cfg.Identity.AuthZ.RulesPath = ""
 	cfg.Indexer.TemplatePath = ""
 	cfg.Puller.Buffer.Path = t.TempDir()
-	cfg.Puller.Backends = []puller_config.PullerBackendConfig{{Name: "default"}}
+	cfg.Puller.Backends = []puller_config.PullerBackendConfig{{Name: "default", SourceID: "default-mongo"}}
 	cfg.Trigger.Evaluator.RulesPath = "" // Mock factory handles this
 
 	mgr := NewManager(cfg, Options{
@@ -1204,7 +1200,7 @@ func TestManager_initDistributed_WithIndexer(t *testing.T) {
 	cfg.Server.GRPCPort = 0
 	cfg.Indexer.TemplatePath = ""
 	cfg.Puller.Buffer.Path = t.TempDir()
-	cfg.Puller.Backends = []puller_config.PullerBackendConfig{{Name: "default"}}
+	cfg.Puller.Backends = []puller_config.PullerBackendConfig{{Name: "default", SourceID: "default-mongo"}}
 
 	// Initialize the unified server first
 	server.InitDefault(cfg.Server, nil)

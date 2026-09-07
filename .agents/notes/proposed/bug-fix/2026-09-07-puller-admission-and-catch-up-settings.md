@@ -1,66 +1,62 @@
-# Agent Note: Enforce Puller Admission and Catch-Up Settings
+# Agent Note: Trigger Puller Catch-Up from Measured Lag
 
 Status: proposed
 
 ## Problem
 
-Operators can configure policies that do not govern subscriptions.
-[Configuration](../../../../internal/puller/config/puller.go) defines
-`MaxConnections`, `CatchUpThreshold`, and `Consumer.CoalesceOnCatchUp`, but
-production usage stops at configuration initialization and validation.
-[gRPC Subscribe](../../../../internal/puller/grpc/server.go#L158) passes
-`req.GetCoalesceOnCatchUp()` directly into the subscriber and admits it without
-consulting MaxConnections. Its existing overflow-driven replay works; the
-missing integration concerns the configured admission and lag policies.
+Active-subscription admission, unique registration identity, server/caller
+coalescing permission, and replay budgets are now enforced by the
+[shared subscription](../../../../internal/puller/core/subscriber.go).
+`catch_up_threshold` selects coalescing during replay. A live subscriber still
+switches to replay only after queue overflow or a detected sequence gap, so a
+configured lag threshold does not proactively move a buffered live backlog into
+catch-up. Operators cannot choose that earlier transition independently of queue
+capacity.
 
 ## Proposal
 
-Make the server limit active Puller subscriptions atomically, with capacity
-released on every termination path. Define explicitly whether `max_connections`
-retains its name as a subscription limit or is renamed with an operator config
-migration; transport connection count must not stand in for streaming RPC count.
-Use an internal registration identity so diagnostic consumer IDs neither replace
-another subscription nor cause its cleanup.
+Define how aggregate lag is measured across source-local committed positions and
+apply `catch_up_threshold` to proactive live-to-replay transition. Bound sampling
+frequency and cost; compute from sequence frontiers when possible without reading
+payloads or repeatedly scanning the log. Preserve overflow as an immediate trigger
+and preserve server permission plus request opt-in for coalescing.
 
-Apply `catch_up_threshold` to events behind the committed frontier across the
-subscription's backends. Specify a bounded measurement frequency and retain
-overflow as an immediate trigger. Server `coalesce_on_catch_up` permits
-coalescing; the individual subscription must also opt in. This avoids silently
-merging events for Trigger or other consumers needing each transition. Carry
-these policies into the shared local/remote subscription mechanism and document
-effective values and precedence.
+Keep the existing registration cut and last-delivered checkpoint as the handoff
+boundary. A threshold transition must not advance progress over queued but
+undelivered records. Document whether the setting is source-local or aggregate,
+its interaction with replay coalescing, and effective operator policy.
 
 ## Alternatives
 
-**Remove the unused settings.** This makes configuration honest but removes
-operator control over an existing memory and catch-up cost. Reconsider if load
-tests show threshold measurement is more expensive than overflow-only replay.
+**Keep overflow-only switching.** This avoids lag sampling and already bounds
+memory. It remains appropriate if load measurements show no material benefit
+from early replay; document the setting solely as a coalescing threshold in that
+case.
 
-**Coalesce every catch-up stream.** This reduces traffic but changes event
-semantics for consumers that require intermediate transitions.
+**Coalesce every replay.** This reduces backlog traffic but changes event
+semantics for consumers that require intermediate transitions. Existing dual
+permission remains mandatory.
 
 ## Acceptance Criteria
 
-- Concurrent admission accepts at most the configured number of subscriptions;
-  overflow returns an explicit resource-exhausted error and cancellation frees
-  capacity, including duplicate diagnostic consumer IDs.
-- A controlled backlog crosses the configured threshold and enters catch-up
-  without requiring channel overflow; backend progress remains independent.
-- Coalescing occurs only when both server policy and the caller permit it;
-  non-coalescing consumers retain every event in local and remote operation.
-- Invalid settings fail validation, and documented settings survive configuration
-  load through production service assembly to observable runtime behavior.
+- A controlled live backlog crosses the configured lag threshold and switches
+  to replay without requiring queue overflow or skipping undelivered records.
+- Sampling remains bounded with many subscribers and multiple source frontiers.
+- Exact consumers retain every event; coalescing requires both permissions.
+- Local and remote consumers have identical transitions and failure semantics.
 
 ## Risks
 
-Counting backlog can amplify disk reads across many consumers. Coalescing alters
-the number of delivered events and needs explicit operational diagnostics.
-Report admission rejection, effective policy, backlog, and transitions without
-raw cursor values or payloads.
+Sampling and extra replay can cost more than draining an existing memory queue.
+Deferral preserves correctness and admission bounds, but leaves queue size as the
+only operator control over early live backlog recovery. The shared coordinator,
+source-local sequence positions, and fixed replay cuts keep a future transition
+policy local to subscription selection rather than requiring a new delivery
+protocol.
 
 ## Dependencies
 
-[Local subscription replay](../architecture/2026-09-07-local-puller-subscription-replay.md)
-owns the shared state machine;
-[persist before publish](../architecture/2026-09-07-puller-persist-before-publish.md)
-defines the committed frontier used to measure lag.
+[Shared subscriptions](../../implemented/architecture/2026-09-07-local-puller-subscription-replay.md)
+own handoff and delivered admission policy;
+[durable publication](../../implemented/architecture/2026-09-07-puller-persist-before-publish.md)
+provides the committed frontier for lag measurement.

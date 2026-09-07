@@ -61,7 +61,7 @@ sensitive data. Retention and access policy must cover the complete event path.
 
 ## Dependencies
 
-[History-gap recovery](../architecture/2026-09-07-puller-history-gap-recovery.md)
+[History-gap recovery](../../implemented/architecture/2026-09-07-puller-history-gap-recovery.md)
 owns unavailable-history recovery;
 [delivery envelopes](../bug-fix/2026-09-07-trigger-delivery-event-envelope.md)
 own the webhook representation.

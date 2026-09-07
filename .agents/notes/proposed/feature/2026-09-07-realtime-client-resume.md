@@ -83,6 +83,6 @@ replication checkpoint stays separate from its realtime cursor, as required by
 
 [Durable Streamer progress](../architecture/2026-09-07-streamer-durable-progress.md)
 does not substitute for client replay.
-[History-gap recovery](../architecture/2026-09-07-puller-history-gap-recovery.md)
+[History-gap recovery](../../implemented/architecture/2026-09-07-puller-history-gap-recovery.md)
 propagates continuity loss, and the linked filtered snapshot proposal owns
 membership semantics and the complete-state recovery path.

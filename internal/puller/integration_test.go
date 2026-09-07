@@ -3,176 +3,115 @@ package puller
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"net"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	pullerv1 "github.com/syntrixbase/syntrix/api/gen/puller/v1"
-	"github.com/syntrixbase/syntrix/internal/puller/config"
-	"github.com/syntrixbase/syntrix/internal/puller/core"
-	pullergrpc "github.com/syntrixbase/syntrix/internal/puller/grpc"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"github.com/syntrixbase/syntrix/internal/puller/cursor"
+	"github.com/syntrixbase/syntrix/internal/puller/events"
 )
 
-func TestPuller_GRPC_Integration(t *testing.T) {
-	// 1. Setup MongoDB
-	mongoURI := os.Getenv("MONGO_URI")
-	if mongoURI == "" {
-		mongoURI = "mongodb://localhost:27017"
-	}
-	dbName := strings.ReplaceAll(t.Name(), "/", "_") + "_" + fmt.Sprintf("%d", time.Now().UnixNano())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
-	require.NoError(t, err)
-	defer func() {
-		_ = client.Database(dbName).Drop(ctx)
-		_ = client.Disconnect(context.Background())
-	}()
-
-	// Create collection
-	collName := "test_collection"
-	err = client.Database(dbName).CreateCollection(ctx, collName)
-	require.NoError(t, err)
-	coll := client.Database(dbName).Collection(collName)
-
-	// 2. Configure Puller
-	tmpDir := t.TempDir()
-	cfg := config.Config{
-		Buffer: config.BufferConfig{
-			Path:          filepath.Join(tmpDir, "buffer"),
-			BatchSize:     1, // Ensure immediate flush for testing
-			BatchInterval: 1 * time.Millisecond,
-			QueueSize:     100,
-			MaxSize:       "10MB",
-		},
-		Cleaner: config.CleanerConfig{
-			Retention: 1 * time.Hour,
-			Interval:  1 * time.Minute,
-		},
-		Bootstrap: config.BootstrapConfig{
-			Mode: "from_now",
-		},
+func TestPuller_Integration_ReplayToLiveAcrossTransports(t *testing.T) {
+	env := newPullerIntegrationEnv(t, nil)
+	observer := subscribeIntegration(t, env.ctx, env.local, "")
+	env.insert(1, 1)
+	anchor := nextIntegration(t, env.ctx, observer)
+	env.insert(2, 10)
+	for i := 2; i <= 11; i++ {
+		require.Equal(t, fmt.Sprintf("doc-%d", i), nextIntegration(t, env.ctx, observer).Change.MgoDocID)
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	pullerCore := core.New(cfg, logger)
-
-	// Add backend
-	backendCfg := config.PullerBackendConfig{
-		Name:        "backend1",
-		Collections: []string{collName},
+	local := subscribeIntegration(t, env.ctx, env.local, anchor.Progress)
+	remote := subscribeIntegration(t, env.ctx, env.remote, anchor.Progress)
+	// Both registrations capture history through 11. New commits accumulate
+	// while the local subscriber is still replaying its three-record pages.
+	env.insert(12, 10)
+	for i := 2; i <= 21; i++ {
+		localEvent := nextIntegration(t, env.ctx, local)
+		remoteEvent := nextIntegration(t, env.ctx, remote)
+		assert.Equal(t, fmt.Sprintf("doc-%d", i), localEvent.Change.MgoDocID)
+		assert.Equal(t, localEvent.Change.EventID, remoteEvent.Change.EventID)
+		assert.Equal(t, localEvent.Progress, remoteEvent.Progress)
+		assert.Equal(t, uint64(i), eventPosition(t, localEvent).Sequence)
 	}
-	err = pullerCore.AddBackend("backend1", client, dbName, backendCfg)
-	require.NoError(t, err)
-
-	// Start Puller Core
-	err = pullerCore.Start(context.Background())
-	require.NoError(t, err)
-	defer pullerCore.Stop(context.Background())
-
-	// 3. Start gRPC Server
-	grpcPort := getFreePort(t)
-	lis, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", grpcPort))
-	require.NoError(t, err)
-
-	grpcCfg := config.GRPCConfig{
-		MaxConnections: 10,
-	}
-	pullerServer := pullergrpc.NewServer(grpcCfg, pullerCore, logger)
-
-	grpcServer := grpc.NewServer()
-	pullerv1.RegisterPullerServiceServer(grpcServer, pullerServer)
-	pullerServer.Init()
-
-	go grpcServer.Serve(lis)
-	defer func() {
-		pullerServer.Shutdown()
-		grpcServer.GracefulStop()
-	}()
-
-	// 4. Connect gRPC Client
-	conn, err := grpc.NewClient(fmt.Sprintf("localhost:%d", grpcPort), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	require.NoError(t, err)
-	defer conn.Close()
-
-	grpcClient := pullerv1.NewPullerServiceClient(conn)
-
-	// 5. Test Live Streaming
-	t.Run("LiveStreaming", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		defer cancel()
-
-		stream, err := grpcClient.Subscribe(ctx, &pullerv1.SubscribeRequest{
-			ConsumerId: "consumer-1",
-		})
-		require.NoError(t, err)
-
-		// Insert document
-		_, err = coll.InsertOne(ctx, bson.M{"_id": "doc1", "val": 1})
-		require.NoError(t, err)
-
-		// Receive event
-		evt, err := stream.Recv()
-		require.NoError(t, err)
-		assert.Equal(t, "insert", evt.ChangeEvent.OpType)
-		assert.Equal(t, "doc1", evt.ChangeEvent.MgoDocId)
-
-		// Verify progress marker
-		assert.NotEmpty(t, evt.Progress)
-	})
-
-	// 6. Test Replay
-	t.Run("Replay", func(t *testing.T) {
-		// Wait for doc1 to be fully buffered
-		time.Sleep(100 * time.Millisecond)
-
-		// Insert another document
-		_, err = coll.InsertOne(ctx, bson.M{"_id": "doc2", "val": 2})
-		require.NoError(t, err)
-
-		// Wait for doc2 to be buffered
-		time.Sleep(100 * time.Millisecond)
-
-		replayCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		defer cancel()
-
-		// Subscribe from beginning (empty after)
-		stream, err := grpcClient.Subscribe(replayCtx, &pullerv1.SubscribeRequest{
-			ConsumerId: "consumer-2",
-			After:      "e30", // From beginning of buffer (empty JSON object)
-		})
-		require.NoError(t, err)
-
-		// Should receive doc1
-		evt1, err := stream.Recv()
-		require.NoError(t, err)
-		assert.Equal(t, "doc1", evt1.ChangeEvent.MgoDocId)
-
-		// Should receive doc2
-		evt2, err := stream.Recv()
-		require.NoError(t, err)
-		assert.Equal(t, "doc2", evt2.ChangeEvent.MgoDocId)
-	})
+	env.insert(22, 1)
+	assert.Equal(t, "doc-22", nextIntegration(t, env.ctx, local).Change.MgoDocID)
+	assert.Equal(t, "doc-22", nextIntegration(t, env.ctx, remote).Change.MgoDocID)
 }
 
-func getFreePort(t *testing.T) int {
-	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+func TestPuller_Integration_CursorFailuresMatchAcrossTransports(t *testing.T) {
+	env := newPullerIntegrationEnv(t, nil)
+	observer := subscribeIntegration(t, env.ctx, env.local, "")
+	env.insert(1, 1)
+	anchor := nextIntegration(t, env.ctx, observer)
+	position := eventPosition(t, anchor)
+	encode := func(position cursor.Position) string {
+		marker := cursor.NewProgressMarker()
+		marker.SetPosition(position)
+		value, err := marker.Encode()
+		require.NoError(t, err)
+		return value
+	}
+	unknown := position
+	unknown.SourceID = "another-source"
+	stale := position
+	stale.Generation = "another-generation"
+	ahead := position
+	ahead.Sequence++
+
+	cases := []struct {
+		name  string
+		after string
+		code  string
+	}{
+		{name: "Malformed", after: "!", code: "INVALID_CURSOR"},
+		{name: "UnknownSource", after: encode(unknown), code: "UNKNOWN_SOURCE"},
+		{name: "GenerationMismatch", after: encode(stale), code: "GENERATION_MISMATCH"},
+		{name: "PositionAhead", after: encode(ahead), code: "POSITION_AHEAD"},
+	}
+	for _, transport := range []struct {
+		name    string
+		service Service
+	}{{name: "local", service: env.local}, {name: "grpc", service: env.remote}} {
+		t.Run(transport.name, func(t *testing.T) {
+			for _, test := range cases {
+				t.Run(test.name, func(t *testing.T) {
+					ctx, cancel := context.WithTimeout(env.ctx, 3*time.Second)
+					defer cancel()
+					sub, err := transport.service.Subscribe(ctx, events.SubscribeOptions{ConsumerID: t.Name(), After: test.after})
+					if err == nil {
+						defer sub.Close()
+						_, err = sub.Next(ctx)
+					}
+					var domainError *events.Error
+					require.ErrorAs(t, err, &domainError)
+					assert.Equal(t, test.code, string(domainError.Code))
+					assert.NoError(t, ctx.Err(), "terminal cursor failures must surface before request timeout")
+				})
+			}
+		})
+	}
+}
+
+func TestPuller_Integration_ReconnectBeforeFirstDelivery(t *testing.T) {
+	env := newPullerIntegrationEnv(t, nil)
+	observer := subscribeIntegration(t, env.ctx, env.local, "")
+	remote, err := env.remote.Subscribe(env.ctx, events.SubscribeOptions{ConsumerID: t.Name()})
 	require.NoError(t, err)
-	l, err := net.ListenTCP("tcp", addr)
-	require.NoError(t, err)
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port
+	t.Cleanup(func() { assert.NoError(t, remote.Close()) })
+
+	// No Next call has delivered the starting cursor. Headers must retain that
+	// anchor so a transport restart cannot replace it with a newer live head.
+	env.stopTransport()
+	env.insert(1, 5)
+	for i := 1; i <= 5; i++ {
+		require.Equal(t, fmt.Sprintf("doc-%d", i), nextIntegration(t, env.ctx, observer).Change.MgoDocID)
+	}
+	env.startTransport(env.address)
+	for i := 1; i <= 5; i++ {
+		event := nextIntegration(t, env.ctx, remote)
+		assert.Equal(t, fmt.Sprintf("doc-%d", i), event.Change.MgoDocID)
+		assert.Equal(t, uint64(i), eventPosition(t, event).Sequence)
+	}
 }

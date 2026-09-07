@@ -1,319 +1,323 @@
-// Package buffer provides event buffering with PebbleDB persistence.
+// Package buffer owns a durable, ordered event log for one source.
 package buffer
 
 import (
 	"bytes"
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/google/uuid"
+	"github.com/syntrixbase/syntrix/internal/puller/cursor"
+	"github.com/syntrixbase/syntrix/internal/puller/events"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-// Buffer stores events in PebbleDB for durability and replay.
-type Buffer struct {
-	db       *pebble.DB
-	path     string
-	logger   *slog.Logger
-	newBatch func() pebbleBatch
+const formatVersion = 1
 
-	// pending is the queue of writes waiting to be batched
-	pending []*writeRequest
-	// flushing is the queue of writes currently being batched
-	flushing []*writeRequest
-	// notifyCh is used to wake up the batcher
-	notifyCh chan struct{}
+var stateKey = []byte("meta/state")
 
-	// mu protects pending, flushing, and closed
-	mu sync.RWMutex
-
-	// closed indicates if the buffer is closed
-	closed bool
-
-	// shutdownOnce ensures resources are fewer closed exactly once
-	shutdownOnce sync.Once
-
-	// batcher manages batched writes
-
-	batchSize     int
-	batchInterval time.Duration
-	queueSize     int
-	closeCh       chan struct{}
-	batcherWG     sync.WaitGroup
+type Options struct {
+	Path, SourceID, SourceScope string
+	BatchSize                   int
+	BatchInterval               time.Duration
+	QueueSize                   int
+	QueueBytes, BatchBytes      int64
+	Logger                      *slog.Logger
+	OnCommit                    func(CommittedBatch)
+	OnError                     func(error)
+	newBatch                    func(*pebble.DB) pebbleBatch
 }
 
-const checkpointKey = "!checkpoint/resume_token"
+type State struct {
+	Position         cursor.Position      `json:"position"`
+	DiscardedThrough uint64               `json:"discardedThrough"`
+	ResumeToken      bson.Raw             `json:"resumeToken"`
+	StartAt          *primitive.Timestamp `json:"startAt,omitempty"`
+	RetainedBytes    int64                `json:"retainedBytes"`
+	Discontinuous    bool                 `json:"discontinuous"`
+}
 
-var checkpointKeyBytes = []byte(checkpointKey)
+type Record struct {
+	Position     cursor.Position
+	Event        *events.StoreChangeEvent
+	EncodedBytes int64
+}
 
+type CommittedBatch struct {
+	Records []Record
+	State   State
+}
+type Page struct {
+	Records []Record
+	Through cursor.Position
+}
+
+type diskState struct {
+	Version     int    `json:"version"`
+	SourceScope string `json:"sourceScope"`
+	State       State  `json:"state"`
+}
+type diskRecord struct {
+	Sequence uint64          `json:"sequence"`
+	Token    bson.Raw        `json:"token"`
+	Event    json.RawMessage `json:"event"`
+}
+type identityRecord struct {
+	Sequence uint64   `json:"sequence"`
+	Token    bson.Raw `json:"token"`
+}
 type pebbleBatch interface {
-	Set(key, value []byte, opts *pebble.WriteOptions) error
-	Delete(key []byte, opts *pebble.WriteOptions) error
-	Commit(opts *pebble.WriteOptions) error
+	Set([]byte, []byte, *pebble.WriteOptions) error
+	Delete([]byte, *pebble.WriteOptions) error
+	Commit(*pebble.WriteOptions) error
 	Close() error
 }
 
-// Options configures the event buffer.
-type Options struct {
-	// Path is the directory to store the buffer.
-	Path string
-
-	// MaxSize is the maximum size in bytes (0 = unlimited).
-	MaxSize int64
-
-	// BatchSize is the max number of events per batch.
-	BatchSize int
-
-	// BatchInterval is the max time to wait before flushing a batch.
-	BatchInterval time.Duration
-
-	// QueueSize is the buffer for pending writes.
-	QueueSize int
-
-	// Logger for buffer operations.
-	Logger *slog.Logger
+type Buffer struct {
+	db       *pebble.DB
+	opts     Options
+	newBatch func() pebbleBatch
+	mu       sync.RWMutex
+	state    State
+	snapshot *pebble.Snapshot
+	pending  []*writeRequest
+	count    int
+	admitted uint64
+	bytes    int64
+	closing  bool
+	closed   bool
+	err      error
+	changed  chan struct{}
+	wake     chan struct{}
+	commands chan mutation
+	done     chan struct{}
 }
 
-// New creates a new event buffer.
 func New(opts Options) (*Buffer, error) {
-	if opts.Path == "" {
-		return nil, fmt.Errorf("buffer path is required")
+	if opts.Path == "" || opts.SourceID == "" || opts.SourceScope == "" {
+		return nil, fmt.Errorf("buffer path, source identity and scope are required")
 	}
-
-	logger := opts.Logger
-	if logger == nil {
-		logger = slog.Default()
+	if opts.BatchSize <= 0 || opts.BatchInterval <= 0 || opts.QueueSize <= 0 || opts.QueueBytes <= 0 || opts.BatchBytes <= 0 || opts.BatchBytes > opts.QueueBytes {
+		return nil, fmt.Errorf("buffer batching and queue budgets must be positive; batch bytes cannot exceed queue bytes")
 	}
-	logger = logger.With("component", "event-buffer")
-
-	// Ensure directory exists
-	if err := os.MkdirAll(opts.Path, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create buffer directory: %w", err)
-	}
-
-	// Open PebbleDB
-	dbOpts := &pebble.Options{
-		// Use default comparer for string ordering
-	}
-
-	db, err := pebble.Open(opts.Path, dbOpts)
+	db, err := pebble.Open(opts.Path, &pebble.Options{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to open pebble database: %w", err)
+		return nil, domain("STORAGE_FAILURE", State{}, opts.SourceID, err)
 	}
-
-	batchSize := opts.BatchSize
-	if batchSize <= 0 {
-		batchSize = 100
+	b := &Buffer{db: db, opts: opts, changed: make(chan struct{}), wake: make(chan struct{}, 1), commands: make(chan mutation), done: make(chan struct{})}
+	b.newBatch = func() pebbleBatch { return db.NewBatch() }
+	if opts.newBatch != nil {
+		b.newBatch = func() pebbleBatch { return opts.newBatch(db) }
 	}
-	batchInterval := opts.BatchInterval
-	if batchInterval <= 0 {
-		batchInterval = 10000 * time.Millisecond
+	if err := b.initialize(); err != nil {
+		return nil, errors.Join(err, db.Close())
 	}
-	queueSize := opts.QueueSize
-	if queueSize <= 0 {
-		queueSize = 10000
-	}
-
-	buf := &Buffer{
-		db:     db,
-		path:   opts.Path,
-		logger: logger,
-		newBatch: func() pebbleBatch {
-			return db.NewBatch()
-		},
-		batchSize:     batchSize,
-		batchInterval: batchInterval,
-		queueSize:     queueSize,
-		closeCh:       make(chan struct{}),
-		notifyCh:      make(chan struct{}, 1),
-	}
-	buf.startBatcher()
-
-	return buf, nil
+	b.snapshot = db.NewSnapshot()
+	go b.run()
+	return b, nil
 }
 
-// NewForBackend creates a buffer for a specific backend.
-func NewForBackend(basePath, backendName string, logger *slog.Logger) (*Buffer, error) {
-	path := filepath.Join(basePath, backendName)
-	return New(Options{
-		Path:   path,
-		Logger: logger,
-	})
+func domain(code string, s State, source string, cause error) error {
+	return &events.Error{Code: events.ErrorCode(code), SourceID: source, Generation: s.Position.Generation, DiscardedThrough: s.DiscardedThrough, CommittedThrough: s.Position.Sequence, Cause: cause}
 }
-
-// Close closes the buffer.
-func (b *Buffer) Close() error {
-	b.mu.Lock()
-	wasClosed := b.closed
-	b.closed = true
-	b.mu.Unlock()
-
-	if !wasClosed {
-		// Signal batcher to stop
-		close(b.closeCh)
+func cloneState(s State) State {
+	s.ResumeToken = bytes.Clone(s.ResumeToken)
+	if s.StartAt != nil {
+		startAt := *s.StartAt
+		s.StartAt = &startAt
 	}
-
-	// Wait for batcher to finish flushing all pending writes.
-	b.batcherWG.Wait()
-
-	var finalErr error
-	b.shutdownOnce.Do(func() {
-		var closeErr error
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					closeErr = fmt.Errorf("%v", r)
-				}
-			}()
-			closeErr = b.db.Close()
-		}()
-
-		if closeErr != nil {
-			finalErr = fmt.Errorf("failed to close pebble database: %w", closeErr)
+	return s
+}
+func decode(value []byte, target any) error {
+	d := json.NewDecoder(bytes.NewReader(value))
+	d.DisallowUnknownFields()
+	if err := d.Decode(target); err != nil {
+		return err
+	}
+	if err := d.Decode(new(any)); err != io.EOF {
+		if err != nil {
+			return fmt.Errorf("invalid trailing stored data: %w", err)
 		}
-	})
-
-	return finalErr
-}
-
-// Path returns the buffer storage path.
-func (b *Buffer) Path() string {
-	return b.path
-}
-
-// LoadCheckpoint returns the last saved checkpoint token.
-func (b *Buffer) LoadCheckpoint() (bson.Raw, error) {
-	b.mu.RLock()
-	if b.closed {
-		b.mu.RUnlock()
-		return nil, fmt.Errorf("buffer is closed")
-	}
-	b.mu.RUnlock()
-
-	value, closer, err := b.db.Get(checkpointKeyBytes)
-	if err != nil {
-		if err == pebble.ErrNotFound {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to read checkpoint: %w", err)
-	}
-	defer closer.Close()
-
-	copied := append([]byte(nil), value...)
-	return bson.Raw(copied), nil
-}
-
-// SaveCheckpoint writes the checkpoint token without an accompanying event.
-func (b *Buffer) SaveCheckpoint(token bson.Raw) error {
-	b.mu.RLock()
-	if b.closed {
-		b.mu.RUnlock()
-		return fmt.Errorf("buffer is closed")
-	}
-	b.mu.RUnlock()
-
-	if token == nil {
-		return nil
-	}
-
-	if err := b.applyBatch(func(batch pebbleBatch) error {
-		if err := batch.Set(checkpointKeyBytes, token, pebble.Sync); err != nil {
-			return fmt.Errorf("failed to batch write checkpoint: %w", err)
-		}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("failed to save checkpoint: %w", err)
-	}
-
-	return nil
-}
-
-// DeleteCheckpoint deletes the checkpoint token.
-func (b *Buffer) DeleteCheckpoint() error {
-	b.mu.RLock()
-	if b.closed {
-		b.mu.RUnlock()
-		return fmt.Errorf("buffer is closed")
-	}
-	b.mu.RUnlock()
-
-	if err := b.applyBatch(func(batch pebbleBatch) error {
-		if err := batch.Delete(checkpointKeyBytes, pebble.Sync); err != nil {
-			return fmt.Errorf("failed to batch delete checkpoint: %w", err)
-		}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("failed to delete checkpoint: %w", err)
-	}
-
-	return nil
-}
-
-// Delete removes an event from the buffer.
-func (b *Buffer) Delete(key string) error {
-	b.mu.RLock()
-	if b.closed {
-		b.mu.RUnlock()
-		return fmt.Errorf("buffer is closed")
-	}
-	b.mu.RUnlock()
-
-	if err := b.applyBatch(func(batch pebbleBatch) error {
-		if err := batch.Delete([]byte(key), pebble.Sync); err != nil {
-			return fmt.Errorf("failed to batch delete: %w", err)
-		}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("failed to delete event: %w", err)
+		return errors.New("unexpected trailing stored data")
 	}
 	return nil
 }
 
-// DeleteBefore deletes all events with keys before the given key.
-// Returns the number of events deleted.
-func (b *Buffer) DeleteBefore(beforeKey string) (int, error) {
-	b.mu.RLock()
-	if b.closed {
-		b.mu.RUnlock()
-		return 0, fmt.Errorf("buffer is closed")
+func (b *Buffer) initialize() error {
+	value, closer, err := b.db.Get(stateKey)
+	if errors.Is(err, pebble.ErrNotFound) {
+		iter, err := b.db.NewIter(nil)
+		if err != nil {
+			return b.storageError(err)
+		}
+		nonempty := iter.First()
+		iterErr := errors.Join(iter.Error(), iter.Close())
+		if iterErr != nil {
+			return b.storageError(iterErr)
+		}
+		if nonempty {
+			return domain("UNSUPPORTED_FORMAT", b.state, b.opts.SourceID, errors.New("nonempty event store has no versioned metadata; explicit reset or migration is required"))
+		}
+		generation, err := uuid.NewRandom()
+		if err != nil {
+			return err
+		}
+		b.state.Position = cursor.Position{SourceID: b.opts.SourceID, Generation: generation.String()}
+		if err := b.commit(func(batch pebbleBatch) error { return b.storeState(batch, b.state) }); err != nil {
+			return b.storageError(err)
+		}
+		return nil
 	}
-	b.mu.RUnlock()
-
-	count := 0
-	iter, err := b.db.NewIter(&pebble.IterOptions{
-		UpperBound: []byte(beforeKey),
-	})
 	if err != nil {
-		return 0, fmt.Errorf("failed to create iterator: %w", err)
+		return b.storageError(err)
 	}
-	defer iter.Close()
-
+	var persisted diskState
+	decodeErr := decode(value, &persisted)
+	closeErr := closer.Close()
+	if decodeErr != nil || persisted.Version != formatVersion {
+		return domain("UNSUPPORTED_FORMAT", b.state, b.opts.SourceID, errors.Join(decodeErr, closeErr, errors.New("unsupported event store metadata")))
+	}
+	if closeErr != nil {
+		return b.storageError(closeErr)
+	}
+	b.state = persisted.State
+	if b.state.Position.SourceID != b.opts.SourceID || persisted.SourceScope != b.opts.SourceScope {
+		return domain("UNKNOWN_SOURCE", b.state, b.opts.SourceID, errors.New("stored source identity or watched scope does not match configuration"))
+	}
+	if _, err := uuid.Parse(b.state.Position.Generation); err != nil {
+		return b.storageError(fmt.Errorf("invalid stored generation: %w", err))
+	}
+	if b.state.Discontinuous {
+		return domain("CONTINUITY_LOST", b.state, b.opts.SourceID, errors.New("event history requires explicit reset or rebuild"))
+	}
+	if b.state.DiscardedThrough > b.state.Position.Sequence || b.state.RetainedBytes < 0 || (b.state.Position.Sequence > 0 && len(b.state.ResumeToken) == 0) {
+		return b.storageError(errors.New("inconsistent stored event frontier"))
+	}
+	if len(b.state.ResumeToken) > 0 {
+		if err := b.state.ResumeToken.Validate(); err != nil {
+			return b.storageError(fmt.Errorf("invalid stored resume token: %w", err))
+		}
+	}
+	if b.state.StartAt != nil && (b.state.StartAt.T == 0 || len(b.state.ResumeToken) != 0 || b.state.Position.Sequence != 0) {
+		return b.storageError(errors.New("stored initial boundary conflicts with the event frontier"))
+	}
+	return b.verifyLog()
+}
+func eventKey(generation string, sequence uint64) []byte {
+	return binary.BigEndian.AppendUint64([]byte("event/"+generation+"/"), sequence)
+}
+func identityKey(generation, id string) []byte { return []byte("identity/" + generation + "/" + id) }
+func (b *Buffer) storeState(batch pebbleBatch, s State) error {
+	value, err := json.Marshal(diskState{Version: formatVersion, SourceScope: b.opts.SourceScope, State: s})
+	if err != nil {
+		return err
+	}
+	return batch.Set(stateKey, value, nil)
+}
+func (b *Buffer) commit(write func(pebbleBatch) error) error {
 	batch := b.newBatch()
-	defer batch.Close()
-
-	for iter.First(); iter.Valid(); iter.Next() {
-		if isCheckpointKey(iter.Key()) {
-			continue
-		}
-		if err := batch.Delete(iter.Key(), pebble.Sync); err != nil {
-			return 0, fmt.Errorf("failed to batch delete: %w", err)
-		}
-		count++
+	err := write(batch)
+	if err == nil {
+		err = batch.Commit(pebble.Sync)
 	}
-
-	if count > 0 {
-		if err := batch.Commit(pebble.Sync); err != nil {
-			return 0, fmt.Errorf("failed to commit deletes: %w", err)
-		}
-	}
-
-	return count, nil
+	return errors.Join(err, batch.Close())
 }
+func (b *Buffer) storageError(err error) error {
+	return domain("STORAGE_FAILURE", b.state, b.opts.SourceID, err)
+}
+func (b *Buffer) notifyLocked() {
+	close(b.changed)
+	b.changed = make(chan struct{})
+	select {
+	case b.wake <- struct{}{}:
+	default:
+	}
+}
+func (b *Buffer) State() (State, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.err != nil {
+		return State{}, b.err
+	}
+	if b.closed {
+		return State{}, errors.New("event buffer is closed")
+	}
+	return cloneState(b.state), nil
+}
+func (b *Buffer) LoadCheckpoint() (bson.Raw, error) { s, err := b.State(); return s.ResumeToken, err }
+func (b *Buffer) Path() string                      { return b.opts.Path }
+func (b *Buffer) Err() error                        { b.mu.RLock(); defer b.mu.RUnlock(); return b.err }
+func (b *Buffer) Done() <-chan struct{}             { return b.done }
 
-func isCheckpointKey(key []byte) bool {
-	return bytes.Equal(key, checkpointKeyBytes)
+// Close leaves the mutation worker responsible for an in-flight Sync even when
+// the caller stops waiting. Reopening the same path cannot race that worker.
+func (b *Buffer) Close(ctx context.Context) error {
+	b.mu.Lock()
+	b.closing = true
+	b.notifyLocked()
+	b.mu.Unlock()
+	select {
+	case <-b.done:
+		return b.Err()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (b *Buffer) fail(err error) {
+	b.mu.Lock()
+	if b.err != nil {
+		b.mu.Unlock()
+		return
+	}
+	b.err = err
+	b.closing = true
+	b.notifyLocked()
+	b.mu.Unlock()
+	if b.opts.OnError != nil {
+		b.opts.OnError(err)
+	}
+}
+func (b *Buffer) finish() {
+	b.mu.Lock()
+	var err error
+	if b.snapshot != nil {
+		err = b.snapshot.Close()
+		b.snapshot = nil
+	}
+	err = errors.Join(err, b.db.Close())
+	b.pending = nil
+	b.count, b.bytes = 0, 0
+	b.closed = true
+	b.notifyLocked()
+	b.mu.Unlock()
+	if err != nil {
+		b.fail(b.storageError(err))
+	}
+	close(b.done)
+}
+func (b *Buffer) publish(s State, records []Record) error {
+	snapshot := b.db.NewSnapshot()
+	b.mu.Lock()
+	previous := b.snapshot
+	b.snapshot = snapshot
+	b.state = cloneState(s)
+	// ReadPage holds the read lock until its bounded page has been copied.
+	err := previous.Close()
+	b.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if b.opts.OnCommit != nil {
+		b.opts.OnCommit(CommittedBatch{Records: records, State: cloneState(s)})
+	}
+	return nil
 }

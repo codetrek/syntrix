@@ -77,6 +77,8 @@ describes those services. SDK and console build scripts live in their own
 - [System Architecture](architecture.md)
 - [Design Documents](design/README.md)
 - [Server Design](design/server/)
+- [Puller Durability, Configuration, and Recovery](design/server/puller/01.architecture.md)
+- [Puller Local/gRPC Subscriptions](design/server/puller/02.adaptive-consumption.md)
 - [SDK Design](design/sdk/)
 - [Monitoring Design](design/monitor/)
 - [REST API](reference/api.md)
