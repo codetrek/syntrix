@@ -86,7 +86,7 @@ puller:
     path: "puller/events"      # Relative to data_dir
     max_size: "10GiB"
     batch_size: 100          # Maximum events per durable batch
-    batch_interval: 100ms    # Oldest admitted event batching deadline
+    batch_interval: 10ms     # Oldest admitted event batching deadline
     queue_size: 10000
     queue_bytes: 67108864    # 64 MiB across pending, committing, and publication
     batch_bytes: 16777216    # 16 MiB encoded batch maximum

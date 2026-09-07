@@ -31,8 +31,8 @@ func TestDefaultPullerConfig(t *testing.T) {
 		t.Errorf("Buffer.BatchSize = %d, want %d", cfg.Buffer.BatchSize, 100)
 	}
 
-	if cfg.Buffer.BatchInterval != 100*time.Millisecond {
-		t.Errorf("Buffer.BatchInterval = %v, want %v", cfg.Buffer.BatchInterval, 100*time.Millisecond)
+	if cfg.Buffer.BatchInterval != 10*time.Millisecond {
+		t.Errorf("Buffer.BatchInterval = %v, want %v", cfg.Buffer.BatchInterval, 10*time.Millisecond)
 	}
 
 	if cfg.Buffer.QueueSize != 10000 {
@@ -243,7 +243,7 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 					Path:          "data/puller/events",
 					MaxSize:       "10GiB",
 					BatchSize:     100,
-					BatchInterval: 100 * time.Millisecond,
+					BatchInterval: 10 * time.Millisecond,
 					QueueSize:     10000,
 				},
 				Consumer: ConsumerConfig{
@@ -368,7 +368,7 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 					Path:          "/my/path",
 					MaxSize:       "10GiB",
 					BatchSize:     100,
-					BatchInterval: 100 * time.Millisecond,
+					BatchInterval: 10 * time.Millisecond,
 					QueueSize:     10000,
 				},
 				Consumer: ConsumerConfig{

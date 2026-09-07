@@ -20,7 +20,7 @@ blocked producers cannot accumulate frozen payloads outside the queue budget.
 
 `batch_size` and `batch_bytes` are strict batch maxima, defaulting to 100 and
 16777216. The batching deadline is the oldest admitted event's time plus
-`batch_interval`, default 100ms; later arrivals cannot postpone it. An individual
+`batch_interval`, default 10ms; later arrivals cannot postpone it. An individual
 record exceeding the batch or queue byte budget fails explicitly. Encoded
 identity and key metadata are included in write credits.
 

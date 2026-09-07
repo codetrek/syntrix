@@ -53,8 +53,9 @@ memory live delivery and Pebble replay the same committed sequence.
 ## Consequences
 
 Batch waiting and synchronous storage latency are part of change-delivery
-latency. Defaults remain configurable at 100 events and 100ms. Additional
-identity and position metadata increases storage work. Delivery remains
+latency. Defaults are configurable at 100 events and 10ms to limit sparse-traffic
+batching delay. Shorter intervals can increase synchronizations per event.
+Additional identity and position metadata increases storage work. Delivery remains
 at-least-once; a consumer must save progress after its own successful processing.
 
 The stored format and opaque cursor semantics change together. Legacy nonempty

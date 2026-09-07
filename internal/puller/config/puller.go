@@ -142,7 +142,7 @@ func DefaultConfig() Config {
 			Path:          "data/puller/events",
 			MaxSize:       "10GiB",
 			BatchSize:     100,
-			BatchInterval: 100 * time.Millisecond,
+			BatchInterval: 10 * time.Millisecond,
 			QueueSize:     10000,
 			QueueBytes:    64 << 20,
 			BatchBytes:    16 << 20,
