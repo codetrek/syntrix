@@ -92,8 +92,10 @@ status and check the implementation before relying on a proposed capability.
 
 Execution plans live in `docs/plans/`; the [task board](tasks/BOARD.md) tracks
 ownership and status. [Agent Notes](../.agents/notes/README.md) preserve decisions,
-alternatives, consequences, and deferred proposals. Keep concise Why alongside
-How in design discussions and link to the owning note for detailed rationale.
+alternatives, and consequences. [Proposed notes](../.agents/notes/proposed/) record
+deferred work with its evidence, alternatives, acceptance criteria, and risks;
+proposal status does not imply an implementation commitment. Keep concise Why
+alongside How in design discussions and link to the owning note for rationale.
 
 [AGENTS.md](../AGENTS.md) defines the repository workflow and lists the skills in
 `.agents/skills/`. Claude discovers the same skills through `.claude/skills`.
