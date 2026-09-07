@@ -426,3 +426,88 @@ func TestPullerParseSize(t *testing.T) {
 		})
 	}
 }
+
+func TestPullerStartCancellationWhileOpening(t *testing.T) {
+	p := newTestPuller(t, newTestConfig(t), "primary")
+	entered := make(chan struct{})
+	p.openStream = func(ctx context.Context, _ *mongo.Database, _ mongo.Pipeline, _ *options.ChangeStreamOptions) (changeStream, error) {
+		close(entered)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(testContext(t))
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- p.Start(ctx) }()
+	select {
+	case <-entered:
+	case <-testContext(t).Done():
+		t.Fatal("source did not begin opening")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-testContext(t).Done():
+		t.Fatal("startup ignored cancellation")
+	}
+	require.NoError(t, p.Stop(testContext(t)))
+	require.Equal(t, health.StatusUnhealthy, p.HealthReport().Status)
+	_, err := p.backends["primary"].buffer.State()
+	require.ErrorContains(t, err, "closed")
+}
+
+func TestPullerRetentionFailureStopsBackend(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Cleaner.Interval = time.Millisecond
+	p := newTestPuller(t, cfg, "primary")
+	sub, _ := initialSubscription(t, p, events.SubscribeOptions{})
+	backend := p.backends["primary"]
+	ctx, cancel := context.WithCancel(testContext(t))
+	defer cancel()
+	backend.cancel = cancel
+	require.NoError(t, backend.buffer.Close(testContext(t)))
+	done := make(chan struct{})
+	go func() { defer close(done); p.maintain(ctx, backend) }()
+	select {
+	case <-done:
+	case <-testContext(t).Done():
+		t.Fatal("retention failure was not propagated")
+	}
+	_, err := sub.Next(testContext(t))
+	var domain *events.Error
+	require.ErrorAs(t, err, &domain)
+	require.Equal(t, events.CodeStorageFailure, domain.Code)
+	require.ErrorContains(t, err, "closing")
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	require.Equal(t, health.StatusUnhealthy, p.HealthReport().Status)
+}
+
+func TestPullerHistoryFailureRetainsMarkerWriteFailure(t *testing.T) {
+	p := newTestPuller(t, newTestConfig(t), "primary")
+	sub, _ := initialSubscription(t, p, events.SubscribeOptions{})
+	backend := p.backends["primary"]
+	historyErr := &mongo.CommandError{Code: 286, Message: "retained source history is gone"}
+	p.watchFunc = func(context.Context, *Backend, *slog.Logger) error { return historyErr }
+	require.NoError(t, backend.buffer.Close(testContext(t)))
+	ctx, cancel := context.WithCancel(testContext(t))
+	defer cancel()
+	backend.cancel = cancel
+	done := make(chan struct{})
+	p.wg.Add(1)
+	go func() { defer close(done); p.runBackend(ctx, backend) }()
+	select {
+	case <-done:
+	case <-testContext(t).Done():
+		t.Fatal("source failure did not terminate ingestion")
+	}
+	err := p.Stop(testContext(t))
+	require.ErrorIs(t, err, historyErr)
+	require.ErrorContains(t, err, "event buffer is closing")
+	var domain *events.Error
+	require.ErrorAs(t, err, &domain)
+	require.Equal(t, events.CodeContinuityLost, domain.Code)
+	_, err = sub.Next(testContext(t))
+	require.ErrorIs(t, err, historyErr)
+	require.Equal(t, health.StatusUnhealthy, p.HealthReport().Status)
+}

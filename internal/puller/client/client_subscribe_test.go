@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	pullerv1 "github.com/syntrixbase/syntrix/api/gen/puller/v1"
+	"github.com/syntrixbase/syntrix/internal/puller/cursor"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
 	grpcapi "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -364,4 +365,104 @@ func TestRegistrationAcceptsEquivalentCursorEncoding(t *testing.T) {
 	event, err := sub.Next(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, canonical, event.Progress)
+}
+
+func TestRegistrationRejectsInvalidOrChangedStartingPosition(t *testing.T) {
+	t.Parallel()
+	encode := func(positions ...cursor.Position) string {
+		marker := cursor.NewProgressMarker()
+		for _, position := range positions {
+			marker.SetPosition(position)
+		}
+		encoded, err := marker.Encode()
+		require.NoError(t, err)
+		return encoded
+	}
+	source := cursor.Position{SourceID: "source", Generation: "generation", Sequence: 10}
+	extra := cursor.Position{SourceID: "other", Generation: "other-generation", Sequence: 20}
+	requested := encode(source)
+	changedSource := source
+	changedSource.SourceID = "replacement"
+	changedGeneration := source
+	changedGeneration.Generation = "new-generation"
+	regressed := source
+	regressed.Sequence--
+	advanced := source
+	advanced.Sequence++
+	cases := []struct {
+		name      string
+		requested string
+		initial   string
+		code      events.ErrorCode
+	}{
+		{"empty initial position", requested, "", events.CodeUnsupportedFormat},
+		{"changed source", requested, encode(changedSource), events.CodeInvalidCursor},
+		{"changed generation", requested, encode(changedGeneration), events.CodeInvalidCursor},
+		{"regressed sequence", requested, encode(regressed), events.CodeInvalidCursor},
+		{"advanced sequence", requested, encode(advanced), events.CodeInvalidCursor},
+		{"missing source", encode(source, extra), requested, events.CodeInvalidCursor},
+		{"added source", requested, encode(source, extra), events.CodeInvalidCursor},
+		{"malformed requested cursor", "malformed-cursor", requested, events.CodeInvalidCursor},
+		{"malformed returned cursor", requested, "malformed-cursor", events.CodeInvalidCursor},
+		{"missing generation", requested, base64.RawURLEncoding.EncodeToString([]byte(`{"v":1,"positions":{"source":{"source":"source","sequence":10}}}`)), events.CodeInvalidCursor},
+		{"unsupported returned format", requested, base64.RawURLEncoding.EncodeToString([]byte(`{"v":2,"positions":{"source":{"source":"source","generation":"generation","sequence":10}}}`)), events.CodeUnsupportedFormat},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			calls, receives := 0, 0
+			c := testClient(t, rpcClientFunc(func(_ context.Context, req *pullerv1.SubscribeRequest) (pullerv1.PullerService_SubscribeClient, error) {
+				calls++
+				assert.Equal(t, test.requested, req.After)
+				return &rpcStream{
+					header: func() (metadata.MD, error) {
+						return metadata.Pairs("syntrix-puller-subscription", "ready", "syntrix-puller-initial-progress", test.initial), nil
+					},
+					recv: func() (*pullerv1.PullerEvent, error) { receives++; return nil, io.EOF },
+				}, nil
+			}))
+			sub, err := c.Subscribe(ctx, events.SubscribeOptions{After: test.requested})
+			require.Nil(t, sub)
+			var failure *events.Error
+			require.ErrorAs(t, err, &failure)
+			assert.Equal(t, test.code, failure.Code)
+			assert.Equal(t, 1, calls)
+			assert.Zero(t, receives)
+		})
+	}
+}
+
+func TestRejectedReconnectAnchorPreservesDeliveredPositionAndStops(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	initial := base64.RawURLEncoding.EncodeToString([]byte(`{"v":1,"positions":{"source":{"source":"source","generation":"g","sequence":10}}}`))
+	advanced := base64.RawURLEncoding.EncodeToString([]byte(`{"v":1,"positions":{"source":{"source":"source","generation":"g","sequence":11}}}`))
+	var requests []string
+	c := testClient(t, rpcClientFunc(func(_ context.Context, req *pullerv1.SubscribeRequest) (pullerv1.PullerService_SubscribeClient, error) {
+		requests = append(requests, req.After)
+		if len(requests) == 1 {
+			return &rpcStream{initial: initial, recv: func() (*pullerv1.PullerEvent, error) {
+				return nil, status.Error(codes.Unavailable, "connection lost before delivery")
+			}}, nil
+		}
+		return &rpcStream{initial: advanced, recv: func() (*pullerv1.PullerEvent, error) {
+			t.Error("invalid reconnect must not receive events")
+			return nil, io.EOF
+		}}, nil
+	}))
+	sub, err := c.Subscribe(ctx, events.SubscribeOptions{})
+	require.NoError(t, err)
+	defer sub.Close()
+	event, err := sub.Next(ctx)
+	require.Nil(t, event)
+	var failure *events.Error
+	require.ErrorAs(t, err, &failure)
+	assert.Equal(t, events.CodeInvalidCursor, failure.Code)
+	assert.Equal(t, initial, sub.(*subscription).progress)
+	assert.Equal(t, 1, sub.(*subscription).failures)
+	_, again := sub.Next(ctx)
+	assert.Same(t, err, again)
+	assert.Equal(t, []string{"", initial}, requests)
 }

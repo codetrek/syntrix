@@ -272,7 +272,7 @@ func (s *subscription) Next(callCtx context.Context) (*events.PullerEvent, error
 		if replay {
 			coalesce := s.coalesce && through.Sequence-after.Sequence >= uint64(p.cfg.Consumer.CatchUpThreshold)
 			p.mu.Unlock()
-			page, err := backend.buffer.ReadPage(ctx, after, through, p.cfg.Consumer.PageSize, p.cfg.Consumer.PageBytes)
+			page, err := backend.readPage(ctx, after, through, p.cfg.Consumer.PageSize, p.cfg.Consumer.PageBytes)
 			if err != nil {
 				err = p.readFailure(backend, err)
 				if ctx.Err() != nil {

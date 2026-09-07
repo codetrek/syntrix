@@ -216,13 +216,22 @@ func eventKey(generation string, sequence uint64) []byte {
 	return binary.BigEndian.AppendUint64([]byte("event/"+generation+"/"), sequence)
 }
 func identityKey(generation, id string) []byte { return []byte("identity/" + generation + "/" + id) }
-func (b *Buffer) storeState(batch pebbleBatch, s State) error {
-	value, err := json.Marshal(diskState{Version: formatVersion, SourceScope: b.opts.SourceScope, State: s})
+func storeJSON(batch pebbleBatch, key []byte, value any) (int64, error) {
+	encoded, err := json.Marshal(value)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return batch.Set(stateKey, value, nil)
+	if err := batch.Set(key, encoded, nil); err != nil {
+		return 0, err
+	}
+	return int64(len(encoded)), nil
 }
+
+func (b *Buffer) storeState(batch pebbleBatch, s State) error {
+	_, err := storeJSON(batch, stateKey, diskState{Version: formatVersion, SourceScope: b.opts.SourceScope, State: s})
+	return err
+}
+
 func (b *Buffer) commit(write func(pebbleBatch) error) error {
 	batch := b.newBatch()
 	err := write(batch)
@@ -254,7 +263,6 @@ func (b *Buffer) State() (State, error) {
 	return cloneState(b.state), nil
 }
 func (b *Buffer) LoadCheckpoint() (bson.Raw, error) { s, err := b.State(); return s.ResumeToken, err }
-func (b *Buffer) Path() string                      { return b.opts.Path }
 func (b *Buffer) Err() error                        { b.mu.RLock(); defer b.mu.RUnlock(); return b.err }
 func (b *Buffer) Done() <-chan struct{}             { return b.done }
 

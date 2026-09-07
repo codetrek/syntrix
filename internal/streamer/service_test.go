@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -639,6 +641,35 @@ func TestStop_PreservesSubscriptionCloseError(t *testing.T) {
 	defer cancel()
 	require.ErrorIs(t, s.Stop(ctx), upstream.closeErr)
 	require.ErrorIs(t, s.Stop(ctx), upstream.closeErr)
+}
+
+func TestStart_InvalidPullerAddressPreservesError(t *testing.T) {
+	s, err := NewService(ServerConfig{PullerAddr: "invalid%zz"}, slog.Default())
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err = s.Start(ctx)
+	require.ErrorContains(t, err, "create puller client")
+	var parseError *url.Error
+	require.ErrorAs(t, err, &parseError)
+	assert.Nil(t, getInternalService(s).pullerClient)
+	assert.False(t, getInternalService(s).started)
+	require.NoError(t, s.Stop(ctx))
+}
+
+func TestStart_OwnsRemotePullerClient(t *testing.T) {
+	address := "unix://" + filepath.Join(t.TempDir(), "missing-puller.sock")
+	s, err := NewService(ServerConfig{PullerAddr: address}, slog.Default())
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, s.Start(ctx))
+	client := getInternalService(s).pullerClient
+	require.NotNil(t, client)
+	require.NoError(t, s.Stop(ctx))
+	subscription, err := client.Subscribe(context.Background(), puller.SubscribeOptions{ConsumerID: "after-stop"})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, subscription)
 }
 
 func TestStart_StandaloneMode(t *testing.T) {

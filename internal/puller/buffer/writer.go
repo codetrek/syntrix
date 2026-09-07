@@ -259,22 +259,17 @@ func (b *Buffer) append(requests []*writeRequest) error {
 				return errors.New("event sequence exhausted; explicit generation reset is required")
 			}
 			state.Position.Sequence++
-			encoded, err := json.Marshal(diskRecord{Sequence: state.Position.Sequence, Token: req.token, Event: req.event})
-			if err != nil {
-				return err
-			}
-			identity, err := json.Marshal(identityRecord{Sequence: state.Position.Sequence, Token: req.token})
-			if err != nil {
-				return err
-			}
 			key := eventKey(state.Position.Generation, state.Position.Sequence)
-			if err := batch.Set(key, encoded, nil); err != nil {
+			recordBytes, err := storeJSON(batch, key, diskRecord{Sequence: state.Position.Sequence, Token: req.token, Event: req.event})
+			if err != nil {
 				return err
 			}
-			if err := batch.Set(ikey, identity, nil); err != nil {
+			identityBytes, err := storeJSON(batch, ikey, identityRecord{Sequence: state.Position.Sequence, Token: req.token})
+			if err != nil {
 				return err
 			}
-			state.RetainedBytes += int64(len(key) + len(encoded) + len(ikey) + len(identity))
+			state.RetainedBytes += int64(len(key)+len(ikey)) + recordBytes + identityBytes
+
 			state.ResumeToken = bytes.Clone(req.token)
 			state.StartAt = nil
 			var event events.StoreChangeEvent
@@ -369,18 +364,13 @@ func (b *Buffer) request(ctx context.Context, command mutation) (State, error) {
 	case <-b.done:
 		return State{}, b.terminalError()
 	}
+	// The worker owns an accepted command through its buffered reply, including
+	// shutdown and failure. Cancellation only releases this caller's wait.
 	select {
 	case result := <-command.result:
 		return result.state, result.err
 	case <-ctx.Done():
 		return State{}, ctx.Err()
-	case <-b.done:
-		select {
-		case result := <-command.result:
-			return result.state, result.err
-		default:
-			return State{}, b.terminalError()
-		}
 	}
 }
 

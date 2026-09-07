@@ -1026,3 +1026,327 @@ func TestBoundaryAndAdmissionRejectInvalidInputWithoutChangingState(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, before, after)
 }
+
+type injectedBatch struct {
+	pebbleBatch
+	set    func([]byte, []byte) error
+	delete func([]byte) error
+}
+
+func (batch *injectedBatch) Set(key, value []byte, options *pebble.WriteOptions) error {
+	if batch.set != nil {
+		if err := batch.set(key, value); err != nil {
+			return err
+		}
+	}
+	return batch.pebbleBatch.Set(key, value, options)
+}
+func (batch *injectedBatch) Delete(key []byte, options *pebble.WriteOptions) error {
+	if batch.delete != nil {
+		if err := batch.delete(key); err != nil {
+			return err
+		}
+	}
+	return batch.pebbleBatch.Delete(key, options)
+}
+
+func TestAppendBatchPreparationFailureDoesNotCommitPartialState(t *testing.T) {
+	for _, prefix := range []string{"event/", "identity/", "meta/"} {
+		t.Run(prefix, func(t *testing.T) {
+			opts := testOptions(t.TempDir())
+			opts.BatchSize = 100
+			opts.BatchInterval = time.Hour
+			failure := errors.New("injected batch preparation failure")
+			var enabled atomic.Bool
+			opts.newBatch = func(db *pebble.DB) pebbleBatch {
+				return &injectedBatch{pebbleBatch: db.NewBatch(), set: func(key, _ []byte) error {
+					if enabled.Load() && strings.HasPrefix(string(key), prefix) {
+						return failure
+					}
+					return nil
+				}}
+			}
+			b, err := New(opts)
+			require.NoError(t, err)
+			state, err := b.State()
+			require.NoError(t, err)
+			enabled.Store(true)
+			require.NoError(t, b.Enqueue(context.Background(), testEvent("uncommitted"), testToken(t, "uncommitted")))
+			_, err = b.Flush(context.Background())
+			require.ErrorIs(t, err, failure)
+			require.ErrorIs(t, b.Close(context.Background()), failure)
+			reopened, err := New(testOptions(opts.Path))
+			require.NoError(t, err)
+			defer closeBuffer(t, reopened)
+			recovered, err := reopened.State()
+			require.NoError(t, err)
+			require.Equal(t, state, recovered)
+		})
+	}
+}
+
+func TestRetentionMutationFailureKeepsEventsAndFloorTogether(t *testing.T) {
+	for _, stage := range []string{"event delete", "identity delete", "metadata set"} {
+		t.Run(stage, func(t *testing.T) {
+			opts := testOptions(t.TempDir())
+			failure := errors.New("injected retention mutation failure")
+			var enabled atomic.Bool
+			opts.newBatch = func(db *pebble.DB) pebbleBatch {
+				return &injectedBatch{pebbleBatch: db.NewBatch(), set: func(key, _ []byte) error {
+					if enabled.Load() && stage == "metadata set" && string(key) == string(stateKey) {
+						return failure
+					}
+					return nil
+				}, delete: func(key []byte) error {
+					if enabled.Load() && ((stage == "event delete" && strings.HasPrefix(string(key), "event/")) || (stage == "identity delete" && strings.HasPrefix(string(key), "identity/"))) {
+						return failure
+					}
+					return nil
+				}}
+			}
+			b, err := New(opts)
+			require.NoError(t, err)
+			for _, id := range []string{"one", "two"} {
+				require.NoError(t, b.Enqueue(context.Background(), testEvent(id), testToken(t, id)))
+			}
+			state, err := b.Flush(context.Background())
+			require.NoError(t, err)
+			enabled.Store(true)
+			require.ErrorIs(t, b.Retain(context.Background(), time.Time{}, 1), failure)
+			require.ErrorIs(t, b.Close(context.Background()), failure)
+			reopened, err := New(testOptions(opts.Path))
+			require.NoError(t, err)
+			defer closeBuffer(t, reopened)
+			recovered, err := reopened.State()
+			require.NoError(t, err)
+			require.Equal(t, state, recovered)
+			start := state.Position
+			start.Sequence = 0
+			page, err := reopened.ReadPage(context.Background(), start, state.Position, 10, 1<<16)
+			require.NoError(t, err)
+			require.Len(t, page.Records, 2)
+		})
+	}
+}
+
+// This context pauses select registration after the request has checked the
+// buffer state, making the admission-versus-shutdown race deterministic.
+type selectGateContext struct {
+	context.Context
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (ctx *selectGateContext) Done() <-chan struct{} {
+	close(ctx.entered)
+	<-ctx.release
+	return ctx.Context.Done()
+}
+
+func TestMutationWaitingForAdmissionObservesCompletedShutdown(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "normal close", true: "storage failure"}[failed], func(t *testing.T) {
+			opts := testOptions(t.TempDir())
+			failure := errors.New("injected closing commit failure")
+			commitEntered, commitRelease := make(chan struct{}), make(chan struct{})
+			if failed {
+				opts.newBatch = controlledFactory(func(pebbleBatch, *pebble.WriteOptions) error { close(commitEntered); <-commitRelease; return failure })
+			}
+			b, err := New(opts)
+			require.NoError(t, err)
+			if failed {
+				require.NoError(t, b.Enqueue(context.Background(), testEvent("failing"), testToken(t, "failing")))
+				select {
+				case <-commitEntered:
+				case <-time.After(5 * time.Second):
+					t.Fatal("commit did not start")
+				}
+			}
+			ctx := &selectGateContext{Context: context.Background(), entered: make(chan struct{}), release: make(chan struct{})}
+			reply := make(chan error, 1)
+			go func() { _, err := b.Flush(ctx); reply <- err }()
+			select {
+			case <-ctx.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("request did not reach admission select")
+			}
+			if failed {
+				close(commitRelease)
+				require.ErrorIs(t, b.Close(context.Background()), failure)
+			} else {
+				closeBuffer(t, b)
+			}
+			close(ctx.release)
+			select {
+			case err := <-reply:
+				if failed {
+					require.ErrorIs(t, err, failure)
+				} else {
+					require.ErrorContains(t, err, "closed")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("request did not observe terminal buffer state")
+			}
+		})
+	}
+}
+
+func TestCancelAcceptedFlushDoesNotAbandonOwnedCommit(t *testing.T) {
+	opts := testOptions(t.TempDir())
+	opts.BatchSize = 100
+	opts.BatchInterval = time.Hour
+	entered, release := make(chan struct{}), make(chan struct{})
+	opts.newBatch = controlledFactory(func(batch pebbleBatch, options *pebble.WriteOptions) error {
+		close(entered)
+		<-release
+		return batch.Commit(options)
+	})
+	b, err := New(opts)
+	require.NoError(t, err)
+	require.NoError(t, b.Enqueue(context.Background(), testEvent("owned"), testToken(t, "owned")))
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { _, err := b.Flush(ctx); result <- err }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("barrier did not acquire pending commit")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled waiter did not return")
+	}
+	close(release)
+	state, err := b.Flush(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), state.Position.Sequence)
+	closeBuffer(t, b)
+	reopened, err := New(testOptions(opts.Path))
+	require.NoError(t, err)
+	defer closeBuffer(t, reopened)
+	recovered, err := reopened.State()
+	require.NoError(t, err)
+	require.Equal(t, state, recovered)
+}
+
+func TestCanceledMutationBeforeAdmissionDoesNotReachCommitter(t *testing.T) {
+	opts := testOptions(t.TempDir())
+	opts.BatchSize = 1
+	entered, release := make(chan struct{}), make(chan struct{})
+	opts.OnCommit = func(CommittedBatch) { close(entered); <-release }
+	b, err := New(opts)
+	require.NoError(t, err)
+	require.NoError(t, b.Enqueue(context.Background(), testEvent("held"), testToken(t, "held")))
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("publication did not start")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	require.ErrorIs(t, b.MarkDiscontinuous(ctx, errors.New("must not be applied")), context.DeadlineExceeded)
+	cancel()
+	close(release)
+	state, err := b.Flush(context.Background())
+	require.NoError(t, err)
+	require.False(t, state.Discontinuous)
+	closeBuffer(t, b)
+}
+
+func TestReadPageRejectsReversedAndUnboundedRequests(t *testing.T) {
+	opts := testOptions(t.TempDir())
+	b, err := New(opts)
+	require.NoError(t, err)
+	defer closeBuffer(t, b)
+	for _, id := range []string{"one", "two"} {
+		require.NoError(t, b.Enqueue(context.Background(), testEvent(id), testToken(t, id)))
+	}
+	state, err := b.Flush(context.Background())
+	require.NoError(t, err)
+	earlier := state.Position
+	earlier.Sequence = 1
+	_, err = b.ReadPage(context.Background(), state.Position, earlier, 10, 1<<16)
+	assertCode(t, err, events.CodeInvalidCursor)
+	_, err = b.ReadPage(context.Background(), earlier, state.Position, 0, 1<<16)
+	require.Error(t, err)
+	_, err = b.ReadPage(context.Background(), earlier, state.Position, 10, 0)
+	require.Error(t, err)
+	page, err := b.ReadPage(context.Background(), earlier, state.Position, 10, 1<<16)
+	require.NoError(t, err)
+	require.Len(t, page.Records, 1)
+}
+
+func TestDiscontinuityMarkerCommitFailurePreservesExistingHistory(t *testing.T) {
+	opts := testOptions(t.TempDir())
+	failure := errors.New("cannot persist continuity marker")
+	var enabled atomic.Bool
+	opts.newBatch = func(db *pebble.DB) pebbleBatch {
+		return &injectedBatch{pebbleBatch: db.NewBatch(), set: func(key, _ []byte) error {
+			if enabled.Load() && string(key) == string(stateKey) {
+				return failure
+			}
+			return nil
+		}}
+	}
+	b, err := New(opts)
+	require.NoError(t, err)
+	require.NoError(t, b.Enqueue(context.Background(), testEvent("known"), testToken(t, "known")))
+	state, err := b.Flush(context.Background())
+	require.NoError(t, err)
+	enabled.Store(true)
+	require.ErrorIs(t, b.MarkDiscontinuous(context.Background(), errors.New("source history lost")), failure)
+	require.ErrorIs(t, b.Close(context.Background()), failure)
+	reopened, err := New(testOptions(opts.Path))
+	require.NoError(t, err)
+	defer closeBuffer(t, reopened)
+	recovered, err := reopened.State()
+	require.NoError(t, err)
+	require.Equal(t, state, recovered)
+}
+
+func TestStoreJSONRejectsMalformedRecordBeforeMutatingBatch(t *testing.T) {
+	opts := testOptions(t.TempDir())
+	db, err := pebble.Open(opts.Path, &pebble.Options{})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, db.Close()) }()
+	batch := db.NewBatch()
+	defer func() { require.NoError(t, batch.Close()) }()
+	var writes int
+	guarded := &injectedBatch{pebbleBatch: batch, set: func(_, _ []byte) error { writes++; return nil }}
+	key := eventKey("generation", 1)
+	count, err := storeJSON(guarded, key, diskRecord{Sequence: 1, Event: json.RawMessage("{")})
+	require.Error(t, err)
+	require.Zero(t, writes)
+	require.Zero(t, count)
+	require.True(t, batch.Empty())
+
+	value := identityRecord{Sequence: 1, Token: testToken(t, "valid")}
+	count, err = storeJSON(guarded, key, value)
+	require.NoError(t, err)
+	expected, err := json.Marshal(value)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(expected)), count)
+	require.Equal(t, 1, writes)
+	require.NoError(t, batch.Commit(pebble.Sync))
+	stored, closer, err := db.Get(key)
+	require.NoError(t, err)
+	require.Equal(t, expected, stored)
+	require.NoError(t, closer.Close())
+}
+
+func TestStoreJSONPreservesWriteFailureWithoutReportingStoredBytes(t *testing.T) {
+	opts := testOptions(t.TempDir())
+	db, err := pebble.Open(opts.Path, &pebble.Options{})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, db.Close()) }()
+	batch := db.NewBatch()
+	defer func() { require.NoError(t, batch.Close()) }()
+	failure := errors.New("batch record rejected")
+	rejected := &injectedBatch{pebbleBatch: batch, set: func(_, _ []byte) error { return failure }}
+	size, err := storeJSON(rejected, stateKey, diskState{Version: formatVersion})
+	require.ErrorIs(t, err, failure)
+	require.Zero(t, size)
+	require.True(t, batch.Empty())
+}

@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/syntrixbase/syntrix/internal/puller/buffer"
+	"github.com/syntrixbase/syntrix/internal/puller/cursor"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
 )
 
@@ -144,4 +146,56 @@ func TestSubscriptionDeadlineIsSticky(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	_, err = sub.Next(testContext(t))
 	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestReplayCancellationDuringPageReadPreservesCheckpoint(t *testing.T) {
+	for _, owner := range []string{"caller", "subscription"} {
+		t.Run(owner, func(t *testing.T) {
+			p := newTestPuller(t, newTestConfig(t), "primary")
+			original, after := initialSubscription(t, p, events.SubscribeOptions{})
+			require.NoError(t, original.Close())
+			enqueueEvents(t, p, "primary", testEvent(1), testEvent(2))
+			parentCtx, cancelParent := context.WithCancel(testContext(t))
+			defer cancelParent()
+			sub, err := p.Subscribe(parentCtx, events.SubscribeOptions{After: after})
+			require.NoError(t, err)
+			initial := nextEnvelope(t, sub)
+			require.Equal(t, after, initial.Progress)
+			backend := p.backends["primary"]
+			entered := make(chan struct{})
+			backend.readPage = func(ctx context.Context, after, through cursor.Position, maxEvents int, maxBytes int64) (buffer.Page, error) {
+				close(entered)
+				<-ctx.Done()
+				return backend.buffer.ReadPage(ctx, after, through, maxEvents, maxBytes)
+			}
+			callerCtx, cancelCaller := context.WithCancel(testContext(t))
+			defer cancelCaller()
+			result := make(chan error, 1)
+			go func() { _, err := sub.Next(callerCtx); result <- err }()
+			select {
+			case <-entered:
+			case <-testContext(t).Done():
+				t.Fatal("replay did not start reading")
+			}
+			if owner == "caller" {
+				cancelCaller()
+			} else {
+				cancelParent()
+			}
+			select {
+			case err := <-result:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-testContext(t).Done():
+				t.Fatal("replay did not cancel")
+			}
+			require.NoError(t, p.Err(), "a canceled read does not damage the source")
+			_, err = sub.Next(testContext(t))
+			require.ErrorIs(t, err, context.Canceled)
+			resumed, _ := initialSubscription(t, p, events.SubscribeOptions{After: after})
+			backend.readPage = backend.buffer.ReadPage
+			event := nextEnvelope(t, resumed)
+			require.Equal(t, "1", event.Change.MgoDocID)
+			require.Equal(t, uint64(1), sequence(t, event.Progress, "primary-source"))
+		})
+	}
 }

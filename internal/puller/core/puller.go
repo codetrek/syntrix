@@ -35,6 +35,7 @@ type Backend struct {
 	config           config.PullerBackendConfig
 	normalizer       *normalizer.Normalizer
 	buffer           *buffer.Buffer
+	readPage         func(context.Context, cursor.Position, cursor.Position, int, int64) (buffer.Page, error)
 	maxRetainedBytes int64
 	cancel           context.CancelFunc
 	ready            chan struct{}
@@ -182,6 +183,7 @@ func (p *Puller) AddBackend(name string, client *mongo.Client, dbName string, cf
 		return errors.Join(err, buf.Close(context.Background()))
 	}
 	backend.buffer = buf
+	backend.readPage = buf.ReadPage
 	p.backends[name] = backend
 	p.sources[cfg.SourceID] = backend
 	p.heads.SetPosition(state.Position)

@@ -468,21 +468,32 @@ func TestStore_GetStateAllStates(t *testing.T) {
 	}
 }
 
-func TestStore_LoadProgress(t *testing.T) {
+func TestStore_ProgressOnlyCheckpointPreservesIndexState(t *testing.T) {
 	s := New()
-
-	// Initially empty
 	progress, err := s.LoadProgress()
 	require.NoError(t, err)
-	assert.Empty(t, progress)
+	require.Empty(t, progress)
 
-	// After saving progress via Upsert
-	err = s.Upsert("testdb", "users/*", "tmpl1", "doc1", []byte{0x01}, "event-123")
-	require.NoError(t, err)
-
+	orderKey := []byte{0x01}
+	require.NoError(t, s.Upsert("testdb", "users/*", "tmpl1", "doc1", orderKey, "event-123"))
 	progress, err = s.LoadProgress()
 	require.NoError(t, err)
-	assert.Equal(t, "event-123", progress)
+	require.Equal(t, "event-123", progress)
+
+	// A completed no-output replay window advances progress without creating,
+	// replacing, or deleting any index entries.
+	require.NoError(t, s.SaveProgress("empty-window-124"))
+	require.NoError(t, s.Flush())
+	progress, err = s.LoadProgress()
+	require.NoError(t, err)
+	require.Equal(t, "empty-window-124", progress)
+	got, found := s.Get("testdb", "users/*", "tmpl1", "doc1")
+	require.True(t, found)
+	require.Equal(t, orderKey, got)
+	indexes, err := s.ListIndexes("testdb")
+	require.NoError(t, err)
+	require.Len(t, indexes, 1)
+	require.Equal(t, 1, indexes[0].DocCount)
 }
 
 func TestStore_Flush(t *testing.T) {
@@ -493,16 +504,29 @@ func TestStore_Flush(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestStore_Close(t *testing.T) {
+func TestStore_NoAsynchronousFailureLifecycle(t *testing.T) {
 	s := New()
-
-	// Close is a no-op for memory store
-	err := s.Close()
+	for _, action := range []struct {
+		name string
+		run  func() error
+	}{
+		{"new", func() error { return nil }},
+		{"checkpoint", func() error { return s.SaveProgress("completed-window") }},
+		{"flush", s.Flush},
+		{"close", s.Close},
+		{"close again", s.Close},
+	} {
+		t.Run(action.name, func(t *testing.T) {
+			require.NoError(t, action.run())
+			require.NoError(t, s.Err())
+			// No background writer owns memory-store operations. A consumer's
+			// failure select remains disabled throughout the store's lifecycle.
+			require.Nil(t, s.Failed())
+		})
+	}
+	progress, err := s.LoadProgress()
 	require.NoError(t, err)
-
-	// Can close multiple times
-	err = s.Close()
-	require.NoError(t, err)
+	require.Equal(t, "completed-window", progress)
 }
 
 func TestStore_ListDatabases(t *testing.T) {

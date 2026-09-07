@@ -546,3 +546,25 @@ func TestGRPCServerAdapter_UpstreamFailureIsTerminal(t *testing.T) {
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 	require.ErrorContains(t, err, failure.Error())
 }
+
+func TestGRPCAdapter_RejectsSubscribeAfterIngestionFailure(t *testing.T) {
+	s, err := NewService(ServerConfig{}, slog.Default())
+	require.NoError(t, err)
+	internal := getInternalService(s)
+	transport := &mockBidiStream{ctx: context.Background()}
+	adapter := newGRPCStreamAdapter(transport.ctx, "gateway", transport, internal)
+	defer adapter.localStream.close()
+	failure := errors.New("upstream history expired")
+	internal.terminate(failure)
+	err = adapter.handleProtoMessage(&pb.GatewayMessage{
+		Payload: &pb.GatewayMessage_Subscribe{
+			Subscribe: &pb.SubscribeRequest{
+				SubscriptionId: "after-failure", Database: "database1", Collection: "users",
+			},
+		},
+	})
+	require.ErrorIs(t, err, failure)
+	_, registered := internal.manager.GetSubscription("after-failure")
+	assert.False(t, registered)
+	assert.Empty(t, transport.sentMsgs)
+}
