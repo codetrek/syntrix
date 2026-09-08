@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/syntrixbase/syntrix/internal/puller/checkpoint"
 	"github.com/syntrixbase/syntrix/internal/puller/config"
 	"github.com/syntrixbase/syntrix/internal/puller/cursor"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
@@ -213,11 +214,11 @@ func TestPuller_runBackend_RecoveryActions(t *testing.T) {
 	}
 
 	backend := p.backends["primary"]
-	backend.recoveryHandler = recovery.NewHandler(recovery.HandlerOptions{Checkpoint: backend.buffer, MaxConsecutiveErrors: 2})
+	backend.recoveryHandler = recovery.NewHandler(recovery.HandlerOptions{MaxConsecutiveErrors: 2})
 	p.retryDelay = 1 * time.Millisecond
 
 	errs := []error{
-		errors.New("resume token was not found"),
+		errors.New("connection reset by peer"),
 		nil,
 		errors.New("connection reset by peer"),
 		errors.New("unexpected failure"),
@@ -260,13 +261,17 @@ func TestPuller_watchChangeStream_WithResumeToken(t *testing.T) {
 	p := New(cfg, nil)
 	defer p.Stop(context.Background())
 
-	backendCfg := config.PullerBackendConfig{Name: "backend1"}
+	backendCfg := config.PullerBackendConfig{Name: "backend1", Collections: []string{"users"}}
 	if err := p.AddBackend("backend1", env.Client, env.DBName, backendCfg); err != nil {
 		t.Fatalf("AddBackend error: %v", err)
 	}
 	backend := p.backends["backend1"]
 
-	if err := backend.buffer.SaveCheckpoint(bson.Raw{0x05, 0x00, 0x00, 0x00, 0x00}); err != nil {
+	source, err := checkpoint.ReadMongoSource(context.Background(), backend.db, backend.name, backend.config.Collections)
+	require.NoError(t, err)
+	cp, err := checkpoint.EncodeMongo(source, captureTestToken(t, "invalid"))
+	require.NoError(t, err)
+	if err := backend.buffer.SaveCheckpoint(cp); err != nil {
 		t.Fatalf("SaveCheckpoint error: %v", err)
 	}
 
@@ -285,7 +290,7 @@ func TestPuller_watchChangeStream_FromBeginning(t *testing.T) {
 	p := New(cfg, nil)
 	defer p.Stop(context.Background())
 
-	backendCfg := config.PullerBackendConfig{Name: "backend1"}
+	backendCfg := config.PullerBackendConfig{Name: "backend1", Collections: []string{"users"}}
 	if err := p.AddBackend("backend1", env.Client, env.DBName, backendCfg); err != nil {
 		t.Fatalf("AddBackend error: %v", err)
 	}
@@ -350,7 +355,7 @@ func TestPuller_watchChangeStream_BufferErrorAndOpenFail(t *testing.T) {
 	cfg := newTestConfig(t)
 	p := New(cfg, nil)
 
-	backendCfg := config.PullerBackendConfig{Name: "backend1"}
+	backendCfg := config.PullerBackendConfig{Name: "backend1", Collections: []string{"users"}}
 	client, err := mongo.NewClient(options.Client().ApplyURI(testMongoURI))
 	require.NoError(t, err)
 	require.NoError(t, p.AddBackend("backend1", client, env.DBName, backendCfg))
@@ -371,11 +376,11 @@ func TestPuller_watchChangeStream_StreamErr(t *testing.T) {
 	p := New(cfg, nil)
 	defer p.Stop(context.Background())
 
-	backendCfg := config.PullerBackendConfig{Name: "backend1"}
+	backendCfg := config.PullerBackendConfig{Name: "backend1", Collections: []string{"users"}}
 	require.NoError(t, p.AddBackend("backend1", env.Client, env.DBName, backendCfg))
 	backend := p.backends["backend1"]
 
-	fakeStream := &fakeChangeStream{err: errors.New("stream error")}
+	fakeStream := &fakeChangeStream{err: errors.New("stream error"), token: captureTestToken(t, "initial")}
 	p.openStream = func(ctx context.Context, db *mongo.Database, pipeline mongo.Pipeline, opts *options.ChangeStreamOptions) (changeStream, error) {
 		return fakeStream, nil
 	}
@@ -391,17 +396,17 @@ func TestPuller_watchChangeStream_DecodeError(t *testing.T) {
 	p := New(cfg, nil)
 	defer p.Stop(context.Background())
 
-	backendCfg := config.PullerBackendConfig{Name: "backend1"}
+	backendCfg := config.PullerBackendConfig{Name: "backend1", Collections: []string{"users"}}
 	require.NoError(t, p.AddBackend("backend1", env.Client, env.DBName, backendCfg))
 	backend := p.backends["backend1"]
 
-	scripted := &decodeErrorStream{}
+	scripted := &decodeErrorStream{token: captureTestToken(t, "initial")}
 	p.openStream = func(ctx context.Context, db *mongo.Database, pipeline mongo.Pipeline, opts *options.ChangeStreamOptions) (changeStream, error) {
 		return scripted, nil
 	}
 
 	err := p.watchChangeStream(context.Background(), backend, p.logger)
-	require.NoError(t, err)
+	require.Error(t, err)
 	assert.True(t, scripted.closed.Load(), "expected stream.Close to be called")
 	assert.Equal(t, int32(1), scripted.nextCalls.Load(), "expected a single Next call")
 }
@@ -540,11 +545,14 @@ func TestPuller_Replay_IteratorErrorClosesExisting(t *testing.T) {
 }
 
 type fakeChangeStream struct {
+	token  bson.Raw
 	err    error
 	closed atomic.Bool
 }
 
-func (f *fakeChangeStream) Next(context.Context) bool { return false }
+func (f *fakeChangeStream) TryNext(context.Context) bool { return false }
+func (f *fakeChangeStream) ResumeToken() bson.Raw        { return f.token }
+func (f *fakeChangeStream) ID() int64                    { return 0 }
 
 func (f *fakeChangeStream) Decode(any) error { return nil }
 
@@ -556,17 +564,21 @@ func (f *fakeChangeStream) Close(context.Context) error {
 }
 
 type decodeErrorStream struct {
+	token     bson.Raw
 	nextCalls atomic.Int32
 	closed    atomic.Bool
 }
 
-func (d *decodeErrorStream) Next(context.Context) bool {
+func (d *decodeErrorStream) TryNext(context.Context) bool {
 	if d.nextCalls.Load() > 0 {
 		return false
 	}
 	d.nextCalls.Add(1)
 	return true
 }
+
+func (d *decodeErrorStream) ResumeToken() bson.Raw { return d.token }
+func (d *decodeErrorStream) ID() int64             { return 0 }
 
 func (d *decodeErrorStream) Decode(any) error { return errors.New("decode fail") }
 

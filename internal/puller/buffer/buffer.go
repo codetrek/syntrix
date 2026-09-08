@@ -3,6 +3,7 @@ package buffer
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,7 +12,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
-	"go.mongodb.org/mongo-driver/bson"
+	"github.com/syntrixbase/syntrix/internal/puller/checkpoint"
 )
 
 // Buffer stores events in PebbleDB for durability and replay.
@@ -28,13 +29,14 @@ type Buffer struct {
 	// notifyCh is used to wake up the batcher
 	notifyCh chan struct{}
 
-	// mu protects pending, flushing, and closed
+	// mu protects pending, flushing, and lifecycle state
 	mu sync.RWMutex
 
-	// closed indicates if the buffer is closed
-	closed bool
+	closed   bool
+	failure  error
+	closeErr error
 
-	// shutdownOnce ensures resources are fewer closed exactly once
+	// shutdownOnce retains the result for concurrent and repeated Close calls.
 	shutdownOnce sync.Once
 
 	// batcher manages batched writes
@@ -46,9 +48,16 @@ type Buffer struct {
 	batcherWG     sync.WaitGroup
 }
 
-const checkpointKey = "!checkpoint/resume_token"
+const (
+	checkpointKey      = "!checkpoint/resume_token"
+	formatKey          = "!format/version"
+	cacheFormatVersion = "1"
+)
 
-var checkpointKeyBytes = []byte(checkpointKey)
+var (
+	checkpointKeyBytes = []byte(checkpointKey)
+	formatKeyBytes     = []byte(formatKey)
+)
 
 type pebbleBatch interface {
 	Set(key, value []byte, opts *pebble.WriteOptions) error
@@ -105,6 +114,10 @@ func New(opts Options) (*Buffer, error) {
 		return nil, fmt.Errorf("failed to open pebble database: %w", err)
 	}
 
+	if err := initializeFormat(db); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+
 	batchSize := opts.BatchSize
 	if batchSize <= 0 {
 		batchSize = 100
@@ -145,23 +158,20 @@ func NewForBackend(basePath, backendName string, logger *slog.Logger) (*Buffer, 
 	})
 }
 
-// Close closes the buffer.
+// Close drains admitted writes and closes storage. A batch failure is retained
+// and returned by this and every later Close call.
 func (b *Buffer) Close() error {
 	b.mu.Lock()
-	wasClosed := b.closed
-	b.closed = true
-	b.mu.Unlock()
-
-	if !wasClosed {
-		// Signal batcher to stop
+	if !b.closed {
+		b.closed = true
 		close(b.closeCh)
 	}
-
-	// Wait for batcher to finish flushing all pending writes.
+	b.mu.Unlock()
 	b.batcherWG.Wait()
 
-	var finalErr error
 	b.shutdownOnce.Do(func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
 		var closeErr error
 		func() {
 			defer func() {
@@ -171,13 +181,14 @@ func (b *Buffer) Close() error {
 			}()
 			closeErr = b.db.Close()
 		}()
-
 		if closeErr != nil {
-			finalErr = fmt.Errorf("failed to close pebble database: %w", closeErr)
+			closeErr = fmt.Errorf("failed to close pebble database: %w", closeErr)
 		}
+		b.closeErr = errors.Join(b.failure, closeErr)
 	})
-
-	return finalErr
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.closeErr
 }
 
 // Path returns the buffer storage path.
@@ -185,82 +196,72 @@ func (b *Buffer) Path() string {
 	return b.path
 }
 
-// LoadCheckpoint returns the last saved checkpoint token.
-func (b *Buffer) LoadCheckpoint() (bson.Raw, error) {
+// LoadCheckpoint returns the last committed source checkpoint. An empty result
+// means no source checkpoint has been saved in this fresh-format cache.
+func (b *Buffer) LoadCheckpoint() (checkpoint.Checkpoint, error) {
 	b.mu.RLock()
-	if b.closed {
-		b.mu.RUnlock()
-		return nil, fmt.Errorf("buffer is closed")
+	defer b.mu.RUnlock()
+	if err := b.stateError(); err != nil {
+		return "", err
 	}
-	b.mu.RUnlock()
-
 	value, closer, err := b.db.Get(checkpointKeyBytes)
 	if err != nil {
-		if err == pebble.ErrNotFound {
-			return nil, nil
+		if errors.Is(err, pebble.ErrNotFound) {
+			return "", nil
 		}
-		return nil, fmt.Errorf("failed to read checkpoint: %w", err)
+		return "", fmt.Errorf("failed to read checkpoint: %w", err)
 	}
 	defer closer.Close()
-
-	copied := append([]byte(nil), value...)
-	return bson.Raw(copied), nil
+	cp := checkpoint.Checkpoint(value)
+	if err := checkpoint.Validate(cp); err != nil {
+		return "", &checkpoint.Error{Code: checkpoint.IncompatibleState, Message: "invalid persisted buffer checkpoint", Cause: err}
+	}
+	return cp, nil
 }
 
-// SaveCheckpoint writes the checkpoint token without an accompanying event.
-func (b *Buffer) SaveCheckpoint(token bson.Raw) error {
-	b.mu.RLock()
-	if b.closed {
-		b.mu.RUnlock()
-		return fmt.Errorf("buffer is closed")
+// SaveCheckpoint queues a source progress boundary after earlier admitted events
+// and waits for its batch to commit. Event writes and checkpoint saves share
+// the same ordered queue.
+func (b *Buffer) SaveCheckpoint(cp checkpoint.Checkpoint) error {
+	b.mu.Lock()
+	if err := b.stateError(); err != nil {
+		b.mu.Unlock()
+		return err
 	}
-	b.mu.RUnlock()
-
-	if token == nil {
-		return nil
+	if err := checkpoint.Validate(cp); err != nil {
+		b.mu.Unlock()
+		return err
 	}
-
-	if err := b.applyBatch(func(batch pebbleBatch) error {
-		if err := batch.Set(checkpointKeyBytes, token, pebble.Sync); err != nil {
-			return fmt.Errorf("failed to batch write checkpoint: %w", err)
-		}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("failed to save checkpoint: %w", err)
-	}
-
-	return nil
+	receipt := make(chan error, 1)
+	b.pending = append(b.pending, &writeRequest{checkpoint: cp, receipt: receipt})
+	b.mu.Unlock()
+	b.notifyBatcher()
+	return <-receipt
 }
 
-// DeleteCheckpoint deletes the checkpoint token.
-func (b *Buffer) DeleteCheckpoint() error {
-	b.mu.RLock()
+// stateError requires mu to be held by the caller.
+func (b *Buffer) stateError() error {
+	if b.failure != nil {
+		return b.failure
+	}
 	if b.closed {
-		b.mu.RUnlock()
 		return fmt.Errorf("buffer is closed")
 	}
-	b.mu.RUnlock()
-
-	if err := b.applyBatch(func(batch pebbleBatch) error {
-		if err := batch.Delete(checkpointKeyBytes, pebble.Sync); err != nil {
-			return fmt.Errorf("failed to batch delete checkpoint: %w", err)
-		}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("failed to delete checkpoint: %w", err)
-	}
-
 	return nil
 }
 
 // Delete removes an event from the buffer.
 func (b *Buffer) Delete(key string) error {
 	b.mu.RLock()
-	if b.closed {
+	if err := b.stateError(); err != nil {
 		b.mu.RUnlock()
-		return fmt.Errorf("buffer is closed")
+		return err
 	}
 	b.mu.RUnlock()
+
+	if isMetadataKey([]byte(key)) {
+		return fmt.Errorf("cannot delete buffer metadata as an event")
+	}
 
 	if err := b.applyBatch(func(batch pebbleBatch) error {
 		if err := batch.Delete([]byte(key), pebble.Sync); err != nil {
@@ -277,9 +278,9 @@ func (b *Buffer) Delete(key string) error {
 // Returns the number of events deleted.
 func (b *Buffer) DeleteBefore(beforeKey string) (int, error) {
 	b.mu.RLock()
-	if b.closed {
+	if err := b.stateError(); err != nil {
 		b.mu.RUnlock()
-		return 0, fmt.Errorf("buffer is closed")
+		return 0, err
 	}
 	b.mu.RUnlock()
 
@@ -296,7 +297,7 @@ func (b *Buffer) DeleteBefore(beforeKey string) (int, error) {
 	defer batch.Close()
 
 	for iter.First(); iter.Valid(); iter.Next() {
-		if isCheckpointKey(iter.Key()) {
+		if isMetadataKey(iter.Key()) {
 			continue
 		}
 		if err := batch.Delete(iter.Key(), pebble.Sync); err != nil {
@@ -314,6 +315,37 @@ func (b *Buffer) DeleteBefore(beforeKey string) (int, error) {
 	return count, nil
 }
 
-func isCheckpointKey(key []byte) bool {
-	return bytes.Equal(key, checkpointKeyBytes)
+func isMetadataKey(key []byte) bool {
+	return bytes.Equal(key, checkpointKeyBytes) || bytes.Equal(key, formatKeyBytes)
+}
+
+// initializeFormat never assigns a new format to existing unversioned data.
+func initializeFormat(db *pebble.DB) error {
+	value, closer, err := db.Get(formatKeyBytes)
+	if err == nil {
+		defer closer.Close()
+		if string(value) != cacheFormatVersion {
+			return &checkpoint.Error{Code: checkpoint.IncompatibleState, Message: "unsupported buffer cache format"}
+		}
+		return nil
+	}
+	if !errors.Is(err, pebble.ErrNotFound) {
+		return fmt.Errorf("failed to read buffer format: %w", err)
+	}
+	iter, err := db.NewIter(nil)
+	if err != nil {
+		return fmt.Errorf("failed to inspect buffer format: %w", err)
+	}
+	nonempty := iter.First()
+	err = errors.Join(iter.Error(), iter.Close())
+	if err != nil {
+		return fmt.Errorf("failed to inspect buffer format: %w", err)
+	}
+	if nonempty {
+		return &checkpoint.Error{Code: checkpoint.IncompatibleState, Message: "unversioned buffer cache requires explicit replacement"}
+	}
+	if err := db.Set(formatKeyBytes, []byte(cacheFormatVersion), pebble.Sync); err != nil {
+		return fmt.Errorf("failed to initialize buffer format: %w", err)
+	}
+	return nil
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/syntrixbase/syntrix/internal/puller/buffer"
+	"github.com/syntrixbase/syntrix/internal/puller/checkpoint"
 	"github.com/syntrixbase/syntrix/internal/puller/config"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
 )
@@ -84,9 +85,14 @@ func TestPuller_Replay(t *testing.T) {
 		MgoDocID:    "doc2",
 	}
 
-	err = buf.Write(evt1, []byte("token1"))
+	source := checkpoint.MongoSource{ID: backendName, Database: "database", Collections: []checkpoint.MongoCollection{{Name: "coll1", UUID: "00112233445566778899aabbccddeeff"}}}
+	firstCheckpoint, err := checkpoint.EncodeMongo(source, captureTestToken(t, "token1"))
 	require.NoError(t, err)
-	err = buf.Write(evt2, []byte("token2"))
+	secondCheckpoint, err := checkpoint.EncodeMongo(source, captureTestToken(t, "token2"))
+	require.NoError(t, err)
+	err = buf.Write(evt1, firstCheckpoint)
+	require.NoError(t, err)
+	err = buf.Write(evt2, secondCheckpoint)
 	require.NoError(t, err)
 
 	// Wait for flush

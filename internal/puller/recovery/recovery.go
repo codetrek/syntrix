@@ -3,12 +3,16 @@ package recovery
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"io"
 	"log/slog"
+	"net"
 	"strings"
 	"time"
 
+	"github.com/syntrixbase/syntrix/internal/puller/checkpoint"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 // GapThreshold is the default time gap that triggers a gap detection alert.
@@ -99,16 +103,8 @@ func (g *GapDetector) Reset() {
 type Action int
 
 const (
-	// ActionNone means no action is needed.
 	ActionNone Action = iota
-
-	// ActionReconnect means reconnect the change stream.
 	ActionReconnect
-
-	// ActionRestart means restart from fresh (no checkpoint).
-	ActionRestart
-
-	// ActionFatal means a fatal error that cannot be recovered.
 	ActionFatal
 )
 
@@ -118,8 +114,6 @@ func (a Action) String() string {
 		return "none"
 	case ActionReconnect:
 		return "reconnect"
-	case ActionRestart:
-		return "restart"
 	case ActionFatal:
 		return "fatal"
 	default:
@@ -127,181 +121,148 @@ func (a Action) String() string {
 	}
 }
 
-// CheckpointManager defines the interface for managing checkpoints.
-type CheckpointManager interface {
-	DeleteCheckpoint() error
-}
-
-// Handler handles change stream errors and determines recovery action.
+// Handler retries transient failures while retaining the last admitted source position.
 type Handler struct {
-	checkpoint CheckpointManager
-	logger     *slog.Logger
-
-	// consecutiveErrors counts consecutive errors
-	consecutiveErrors int
-
-	// maxConsecutiveErrors before giving up
+	logger               *slog.Logger
+	consecutiveErrors    int
 	maxConsecutiveErrors int
-
-	// resumeTokenErrors counts resume token related errors
-	resumeTokenErrors int
+	resumeTokenErrors    int
 }
 
 // HandlerOptions configures the recovery handler.
 type HandlerOptions struct {
-	Checkpoint           CheckpointManager
 	MaxConsecutiveErrors int
 	Logger               *slog.Logger
 }
 
-// NewHandler creates a new recovery handler.
 func NewHandler(opts HandlerOptions) *Handler {
 	maxErrors := opts.MaxConsecutiveErrors
 	if maxErrors == 0 {
 		maxErrors = 10
 	}
-
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-
 	return &Handler{
-		checkpoint:           opts.Checkpoint,
 		logger:               logger.With("component", "recovery-handler"),
 		maxConsecutiveErrors: maxErrors,
 	}
 }
 
-// HandleError analyzes an error and determines the recovery action.
+// ClassifyMongoError preserves the native cause and gives non-resumable positions
+// a stable failure code. No classified failure permits discarding a checkpoint.
+func ClassifyMongoError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var sourceErr *checkpoint.Error
+	if errors.As(err, &sourceErr) {
+		return err
+	}
+	var serverErr mongo.ServerError
+	if errors.As(err, &serverErr) {
+		switch {
+		case serverErr.HasErrorCode(286):
+			return &checkpoint.Error{Code: checkpoint.HistoryUnavailable, Message: "MongoDB change stream history is unavailable", Cause: err}
+		case serverErr.HasErrorCode(260):
+			return &checkpoint.Error{Code: checkpoint.InvalidCheckpoint, Message: "MongoDB rejected the resume token", Cause: err}
+		case serverErr.HasErrorCode(280), serverErr.HasErrorCode(26):
+			return &checkpoint.Error{Code: checkpoint.SourceMismatch, Message: "MongoDB change stream source is no longer resumable", Cause: err}
+		case serverErr.HasErrorLabel("NonResumableChangeStreamError"):
+			return &checkpoint.Error{Code: checkpoint.SourceUnavailable, Message: "MongoDB change stream cannot resume", Cause: err}
+		}
+		if !isNativeTransientError(err) {
+			return &checkpoint.Error{Code: checkpoint.SourceUnavailable, Message: "MongoDB rejected the change stream operation", Cause: err}
+		}
+	}
+	if isResumeTokenError(err) {
+		return &checkpoint.Error{Code: checkpoint.HistoryUnavailable, Message: "MongoDB change stream position is unavailable", Cause: err}
+	}
+	return err
+}
+
 func (h *Handler) HandleError(err error) Action {
 	if err == nil {
 		h.consecutiveErrors = 0
 		return ActionNone
 	}
-
 	h.consecutiveErrors++
-
-	// Check for resume token related errors
-	if isResumeTokenError(err) {
-		h.resumeTokenErrors++
-		h.logger.Error("resume token error",
-			"error", err,
-			"count", h.resumeTokenErrors,
-		)
-		return ActionRestart
-	}
-
-	// Check for transient errors that can be recovered with reconnect
-	if isTransientError(err) {
-		h.logger.Warn("transient error, will reconnect",
-			"error", err,
-			"consecutiveErrors", h.consecutiveErrors,
-		)
-		return ActionReconnect
-	}
-
-	// Check if we've exceeded max consecutive errors
-	if h.consecutiveErrors >= h.maxConsecutiveErrors {
-		h.logger.Error("max consecutive errors reached",
-			"error", err,
-			"count", h.consecutiveErrors,
-		)
+	err = ClassifyMongoError(err)
+	var sourceErr *checkpoint.Error
+	if errors.As(err, &sourceErr) {
+		if sourceErr.Code == checkpoint.SourceUnavailable && isNativeTransientError(sourceErr.Cause) {
+			return ActionReconnect
+		}
+		if sourceErr.Code == checkpoint.HistoryUnavailable || sourceErr.Code == checkpoint.InvalidCheckpoint {
+			h.resumeTokenErrors++
+		}
+		h.logger.Error("capture cannot resume", "error", err)
 		return ActionFatal
 	}
-
-	// Default to reconnect for unknown errors
-	h.logger.Warn("unknown error, will reconnect",
-		"error", err,
-		"consecutiveErrors", h.consecutiveErrors,
-	)
+	if isTransientError(err) {
+		return ActionReconnect
+	}
+	if h.consecutiveErrors >= h.maxConsecutiveErrors {
+		h.logger.Error("max consecutive errors reached", "error", err, "count", h.consecutiveErrors)
+		return ActionFatal
+	}
 	return ActionReconnect
 }
 
-// RecoverFromResumeTokenError deletes the checkpoint and prepares for fresh start.
-func (h *Handler) RecoverFromResumeTokenError(ctx context.Context) error {
-	if h.checkpoint == nil {
-		return nil
-	}
+func (h *Handler) ResetErrorCount()       { h.consecutiveErrors = 0 }
+func (h *Handler) ResumeTokenErrors() int { return h.resumeTokenErrors }
 
-	h.logger.Warn("deleting checkpoint due to resume token error")
-	if err := h.checkpoint.DeleteCheckpoint(); err != nil {
-		return fmt.Errorf("failed to delete checkpoint: %w", err)
-	}
-
-	h.logger.Info("checkpoint deleted, will restart from fresh")
-	return nil
-}
-
-// ResetErrorCount resets the consecutive error count.
-func (h *Handler) ResetErrorCount() {
-	h.consecutiveErrors = 0
-}
-
-// ResumeTokenErrors returns the number of resume token errors.
-func (h *Handler) ResumeTokenErrors() int {
-	return h.resumeTokenErrors
-}
-
-// isResumeTokenError checks if the error is related to an invalid resume token.
 func isResumeTokenError(err error) bool {
-	// MongoDB returns specific error codes for invalid resume tokens
-	errStr := err.Error()
-
-	// Common resume token error messages
-	resumeTokenErrors := []string{
+	for _, msg := range []string{
 		"resume token was not found",
-		"the resume token was not found",
 		"resume point may no longer be in the oplog",
 		"ChangeStreamHistoryLost",
 		"ChangeStreamFatalError",
-	}
-
-	for _, msg := range resumeTokenErrors {
-		if contains(errStr, msg) {
+	} {
+		if strings.Contains(strings.ToLower(err.Error()), strings.ToLower(msg)) {
 			return true
 		}
 	}
-
 	return false
 }
 
-// isTransientError checks if the error is transient and can be recovered.
+func isNativeTransientError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var serverErr mongo.ServerError
+	if errors.As(err, &serverErr) {
+		if serverErr.HasErrorLabel("NonResumableChangeStreamError") || serverErr.HasErrorCode(26) || serverErr.HasErrorCode(260) || serverErr.HasErrorCode(280) || serverErr.HasErrorCode(286) {
+			return false
+		}
+		if serverErr.HasErrorLabel("ResumableChangeStreamError") || serverErr.HasErrorCode(43) {
+			return true
+		}
+		// Metadata reads and initial aggregate failures need not carry a change-
+		// stream label. Preserve the driver's retryable-read code classification.
+		// https://github.com/mongodb/mongo-go-driver/blob/d2fa0ab6f3ba0579b7bca7912d30e23907ffec9a/x/mongo/driver/errors.go#L28
+		for _, code := range []int{11600, 11602, 10107, 13435, 13436, 189, 91, 7, 6, 89, 9001, 262} {
+			if serverErr.HasErrorCode(code) {
+				return true
+			}
+		}
+	}
+	if mongo.IsNetworkError(err) || mongo.IsTimeout(err) || errors.Is(err, io.EOF) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var networkErr net.Error
+	return errors.As(err, &networkErr)
+}
+
 func isTransientError(err error) bool {
-	errStr := err.Error()
-
-	// Common transient error messages
-	transientErrors := []string{
-		"connection reset",
-		"connection refused",
-		"broken pipe",
-		"EOF",
-		"timeout",
-		"context deadline exceeded",
-		"network",
-		"temporary failure",
+	if isNativeTransientError(err) {
+		return true
 	}
-
-	for _, msg := range transientErrors {
-		if contains(errStr, msg) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// contains checks if s contains substr (case insensitive).
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if equalsIgnoreCase(s[i:i+len(substr)], substr) {
+	for _, msg := range []string{"connection reset", "connection refused", "broken pipe", "EOF", "timeout", "context deadline exceeded", "network", "temporary failure"} {
+		if strings.Contains(strings.ToLower(err.Error()), strings.ToLower(msg)) {
 			return true
 		}
 	}
 	return false
-}
-
-// equalsIgnoreCase compares two strings ignoring case.
-func equalsIgnoreCase(a, b string) bool {
-	return strings.EqualFold(a, b)
 }

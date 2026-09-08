@@ -26,6 +26,12 @@ delivered.
 
 ## Proposal
 
+The [source checkpoint decision](../../implemented/architecture/2026-09-08-puller-source-checkpoints.md)
+partially supersedes this proposal: clauses below that use local cache
+generation/sequence state as consumer progress no longer apply. Shared
+local/gRPC replay and consumer recovery remain proposed and must preserve
+source-owned checkpoints across cache replacement.
+
 Give local and gRPC subscriptions one shared catch-up/live state machine, with
 transport adapters responsible for delivery and errors. A nonempty valid marker
 starts replay; an empty marker retains the protocol's current-head semantics.

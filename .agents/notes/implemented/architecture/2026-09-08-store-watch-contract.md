@@ -166,13 +166,14 @@ guarantee historical snapshots.
 This note owns the implemented Store API, Mongo adapter, routing, and associated
 validation. Puller ingestion still obtains Mongo clients through
 [`StorageFactory.GetMongoClient`](../../../../internal/services/manager_init.go)
-and bypasses `DocumentStore.Watch`. Its ingestion, batching, caches, pending
-writes, persisted buffers, and local/gRPC delivery are unchanged by this
-contract. The broader Puller design remains separate proposed work.
+and bypasses `DocumentStore.Watch`. The separate
+[Puller source checkpoint decision](2026-09-08-puller-source-checkpoints.md)
+owns its native backend-wide capture and versioned cache records. Consumer
+progress and local/gRPC recovery remain separate proposed work.
 
 | Deferred work and owner | Cost and constraint retained here |
 |---|---|
-| Puller ingestion through the Store, described by the [Puller architecture](../../../../docs/design/server/puller/01.architecture.md) | Requires replacing direct Mongo watcher wiring and mapping Store frames/errors into ingestion; source codecs and native types must remain inside Store implementations |
+| Convergence of Store Watch and [native Puller capture](2026-09-08-puller-source-checkpoints.md) | Remains a separate architecture decision: Store Watch selects a logical scope, while Puller captures a fixed physical scope per backend; neither checkpoint encoding can be substituted for the other |
 | Existing [Puller cache publication](../../proposed/architecture/2026-09-07-puller-persist-before-publish.md) and [admission](../../proposed/bug-fix/2026-09-07-puller-pending-write-bound.md) proposals | Changes to caching, batching, and admission require a separately confirmed Puller design; Store checkpoints must remain portable and source-owned, and cache completion cannot define consumer checkpoint validity |
 | [Local replay](../../proposed/architecture/2026-09-07-local-puller-subscription-replay.md) and [history-gap recovery](../../proposed/architecture/2026-09-07-puller-history-gap-recovery.md) | Requires durable continuity and retention boundaries plus consumer-visible failures; Store errors provide a source failure without implementing Puller generations or recovery |
 | Multi-source discovery and aggregation in Puller, and [dedicated read/write routing](../../proposed/architecture/2026-09-07-dedicated-backend-read-write-routing.md) | Requires source inventory, ownership, and progress aggregation; one Store watch remains explicitly scoped, and separate source checkpoints must not be compared or combined as a scalar |

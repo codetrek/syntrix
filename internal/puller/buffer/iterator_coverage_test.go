@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/syntrixbase/syntrix/internal/puller/checkpoint"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
 )
 
@@ -19,28 +20,33 @@ func TestSliceIterator_Coverage(t *testing.T) {
 		{EventID: "1"},
 		{EventID: "2"},
 	}
-	keys := []string{"k1", "k2"} // matching lengths normally
+	keys := []string{"k1", "k2"}
+	checkpoints := []checkpoint.Checkpoint{testCheckpoint(t, "first"), testCheckpoint(t, "second")}
 
 	it := &sliceIterator{
-		events: evts,
-		keys:   keys,
-		index:  -1,
+		events:      evts,
+		keys:        keys,
+		checkpoints: checkpoints,
+		index:       -1,
 	}
 
 	// Test Next/Event/Key sequence
 	// Initial state
 	assert.Nil(t, it.Event())
 	assert.Equal(t, "", it.Key())
+	assert.Empty(t, it.Checkpoint())
 
 	// First
 	assert.True(t, it.Next())
 	assert.Equal(t, "1", it.Event().EventID)
 	assert.Equal(t, "k1", it.Key())
+	assert.Equal(t, checkpoints[0], it.Checkpoint())
 
 	// Second
 	assert.True(t, it.Next())
 	assert.Equal(t, "2", it.Event().EventID)
 	assert.Equal(t, "k2", it.Key())
+	assert.Equal(t, checkpoints[1], it.Checkpoint())
 
 	// End
 	assert.False(t, it.Next())

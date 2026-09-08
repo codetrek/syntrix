@@ -2,10 +2,8 @@
 package buffer
 
 import (
-	"encoding/json"
-	"fmt"
-
 	"github.com/cockroachdb/pebble"
+	"github.com/syntrixbase/syntrix/internal/puller/checkpoint"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
 )
 
@@ -16,6 +14,9 @@ type Iterator interface {
 
 	// Event returns the current event.
 	Event() *events.StoreChangeEvent
+
+	// Checkpoint returns the source checkpoint associated with the current event.
+	Checkpoint() checkpoint.Checkpoint
 
 	// Key returns the current buffer key.
 	Key() string
@@ -28,11 +29,12 @@ type Iterator interface {
 }
 
 type bufferIterator struct {
-	iter  *pebble.Iterator
-	evt   *events.StoreChangeEvent
-	key   string
-	err   error
-	first bool
+	iter       *pebble.Iterator
+	evt        *events.StoreChangeEvent
+	checkpoint checkpoint.Checkpoint
+	key        string
+	err        error
+	first      bool
 }
 
 func (i *bufferIterator) Next() bool {
@@ -50,29 +52,34 @@ func (i *bufferIterator) Next() bool {
 		}
 
 		if !valid {
+			i.err = i.iter.Error()
 			return false
 		}
 
-		if isCheckpointKey(i.iter.Key()) {
+		if isMetadataKey(i.iter.Key()) {
 			continue
 		}
 
 		i.key = string(i.iter.Key())
 		value := i.iter.Value()
 
-		var evt events.StoreChangeEvent
-		if err := json.Unmarshal(value, &evt); err != nil {
-			i.err = fmt.Errorf("failed to unmarshal event: %w", err)
+		record, err := decodeRecord(value)
+		if err != nil {
+			i.err = err
 			return false
 		}
-
-		i.evt = &evt
+		i.evt = record.Event
+		i.checkpoint = record.Checkpoint
 		return true
 	}
 }
 
 func (i *bufferIterator) Event() *events.StoreChangeEvent {
 	return i.evt
+}
+
+func (i *bufferIterator) Checkpoint() checkpoint.Checkpoint {
+	return i.checkpoint
 }
 
 func (i *bufferIterator) Key() string {
@@ -99,6 +106,7 @@ func (b *Buffer) newSnapshotIterator(afterKey string) Iterator {
 
 	var evts []*events.StoreChangeEvent
 	var keys []string
+	var checkpoints []checkpoint.Checkpoint
 
 	// Helper to append matching events
 	appendEvents := func(reqs []*writeRequest) {
@@ -108,6 +116,7 @@ func (b *Buffer) newSnapshotIterator(afterKey string) Iterator {
 				if req.event != nil {
 					evts = append(evts, req.event)
 					keys = append(keys, k)
+					checkpoints = append(checkpoints, req.checkpoint)
 				}
 			}
 		}
@@ -118,16 +127,18 @@ func (b *Buffer) newSnapshotIterator(afterKey string) Iterator {
 	appendEvents(b.pending)
 
 	return &sliceIterator{
-		events: evts,
-		keys:   keys,
-		index:  -1,
+		events:      evts,
+		keys:        keys,
+		checkpoints: checkpoints,
+		index:       -1,
 	}
 }
 
 type sliceIterator struct {
-	events []*events.StoreChangeEvent
-	keys   []string
-	index  int
+	events      []*events.StoreChangeEvent
+	keys        []string
+	checkpoints []checkpoint.Checkpoint
+	index       int
 }
 
 func (i *sliceIterator) Next() bool {
@@ -143,6 +154,13 @@ func (i *sliceIterator) Event() *events.StoreChangeEvent {
 		return i.events[i.index]
 	}
 	return nil
+}
+
+func (i *sliceIterator) Checkpoint() checkpoint.Checkpoint {
+	if i.index >= 0 && i.index < len(i.checkpoints) {
+		return i.checkpoints[i.index]
+	}
+	return ""
 }
 
 func (i *sliceIterator) Key() string {
@@ -194,7 +212,10 @@ func (i *deduplicatingIterator) Next() bool {
 			return true
 		}
 
-		// Current iterator exhausted, move to next
+		if i.current.Err() != nil {
+			return false
+		}
+
 		i.current.Close()
 		i.current = nil
 	}
@@ -205,6 +226,13 @@ func (i *deduplicatingIterator) Event() *events.StoreChangeEvent {
 		return i.current.Event()
 	}
 	return nil
+}
+
+func (i *deduplicatingIterator) Checkpoint() checkpoint.Checkpoint {
+	if i.current != nil {
+		return i.current.Checkpoint()
+	}
+	return ""
 }
 
 func (i *deduplicatingIterator) Key() string {

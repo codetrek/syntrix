@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,7 +14,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/syntrixbase/syntrix/internal/core/storage/config"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/integration/mtest"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -36,11 +41,15 @@ func (m *mockMongoProvider) Close(ctx context.Context) error {
 var originalNewMongoProvider = newMongoProvider
 var originalNewPostgresDB = newPostgresDB
 
-func setupMockProvider() {
+func newMockMongoProvider(t *testing.T, dbName string) *mockMongoProvider {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock).ShareClient(true))
+	mt.AddMockResponses(mtest.CreateCursorResponse(0, dbName+".$cmd.listCollections", mtest.FirstBatch), mtest.CreateSuccessResponse(), mtest.CreateSuccessResponse())
+	return &mockMongoProvider{client: mt.Client, dbName: dbName}
+}
+
+func setupMockProvider(t *testing.T) {
 	newMongoProvider = func(ctx context.Context, uri, dbName string) (Provider, error) {
-		// Return a dummy client (won't connect but satisfies interface)
-		client, _ := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://mock"))
-		return &mockMongoProvider{client: client, dbName: dbName}, nil
+		return newMockMongoProvider(t, dbName), nil
 	}
 }
 
@@ -69,7 +78,7 @@ const (
 )
 
 func TestNewFactory(t *testing.T) {
-	setupMockProvider()
+	setupMockProvider(t)
 	setupMockPostgres()
 	defer teardownMockProvider()
 
@@ -128,7 +137,7 @@ func TestNewFactory(t *testing.T) {
 }
 
 func TestNewFactory_DatabaseConfig(t *testing.T) {
-	setupMockProvider()
+	setupMockProvider(t)
 	setupMockPostgres()
 	defer teardownMockProvider()
 
@@ -190,8 +199,7 @@ func TestNewFactory_ReadWriteSplit(t *testing.T) {
 	}()
 
 	newMongoProvider = func(ctx context.Context, uri, dbName string) (Provider, error) {
-		client, _ := mongo.Connect(ctx, options.Client().ApplyURI(uri))
-		return &mockMongoProvider{client: client, dbName: dbName}, nil
+		return newMockMongoProvider(t, dbName), nil
 	}
 
 	db, mock, _ := sqlmock.New()
@@ -285,8 +293,7 @@ func TestNewFactory_RouterErrors(t *testing.T) {
 	}()
 
 	newMongoProvider = func(ctx context.Context, uri, dbName string) (Provider, error) {
-		client, _ := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://mock"))
-		return &mockMongoProvider{client: client, dbName: dbName}, nil
+		return newMockMongoProvider(t, dbName), nil
 	}
 
 	ctx := context.Background()
@@ -430,8 +437,7 @@ func TestNewFactory_DatabaseErrors(t *testing.T) {
 	defer func() { newMongoProvider = origNewMongoProvider }()
 
 	newMongoProvider = func(ctx context.Context, uri, dbName string) (Provider, error) {
-		client, _ := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://mock"))
-		return &mockMongoProvider{client: client, dbName: dbName}, nil
+		return newMockMongoProvider(t, dbName), nil
 	}
 
 	ctx := context.Background()
@@ -454,7 +460,7 @@ func TestNewFactory_DatabaseErrors(t *testing.T) {
 }
 
 func TestNewFactory_DefaultDatabaseSkipped(t *testing.T) {
-	setupMockProvider()
+	setupMockProvider(t)
 	setupMockPostgres()
 	defer teardownMockProvider()
 
@@ -613,8 +619,7 @@ func TestNewFactory_PostgresErrors(t *testing.T) {
 	}()
 
 	newMongoProvider = func(ctx context.Context, uri, dbName string) (Provider, error) {
-		client, _ := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://mock"))
-		return &mockMongoProvider{client: client, dbName: dbName}, nil
+		return newMockMongoProvider(t, dbName), nil
 	}
 
 	ctx := context.Background()
@@ -683,7 +688,7 @@ func TestNewFactory_PostgresErrors(t *testing.T) {
 }
 
 func TestFactory_DatabaseAccessor(t *testing.T) {
-	setupMockProvider()
+	setupMockProvider(t)
 	mock := setupMockPostgres()
 	defer teardownMockProvider()
 
@@ -742,4 +747,159 @@ func TestFactory_DatabaseAccessor(t *testing.T) {
 
 	// Verify it's a PostgreSQL-backed store by checking its type
 	_ = mock // Use mock to avoid lint error
+}
+
+func TestFactory_PrepareDocumentCollections(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	for _, test := range []struct {
+		name      string
+		existing  []bson.D
+		responses []bson.D
+		commands  []string
+		errorCode int32
+	}{
+		{name: "fresh", commands: []string{"listCollections", "create", "create"}, responses: []bson.D{mtest.CreateSuccessResponse(), mtest.CreateSuccessResponse()}},
+		{name: "existing without create permission", existing: []bson.D{{{Key: "name", Value: "data_custom"}}, {{Key: "name", Value: "sys_custom"}}}, commands: []string{"listCollections"}},
+		{name: "concurrent creation", commands: []string{"listCollections", "create", "create"}, responses: []bson.D{mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 48, Name: "NamespaceExists"}), mtest.CreateSuccessResponse()}},
+		{name: "create error", commands: []string{"listCollections", "create"}, responses: []bson.D{mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 13, Name: "Unauthorized"})}, errorCode: 13},
+	} {
+		mt.Run(test.name, func(mt *mtest.T) {
+			cfg := config.DefaultConfig()
+			cfg.Topology.Document.DataCollection = "data_custom"
+			cfg.Topology.Document.SysCollection = "sys_custom"
+			f := &factory{providers: map[string]Provider{"default_mongo": &mockMongoProvider{client: mt.Client, dbName: "document_readiness"}}}
+			mt.AddMockResponses(mtest.CreateCursorResponse(0, "document_readiness.$cmd.listCollections", mtest.FirstBatch, test.existing...))
+			mt.AddMockResponses(test.responses...)
+			err := f.prepareDocumentCollections(context.Background(), cfg)
+			if test.errorCode != 0 {
+				var native mongo.CommandError
+				require.ErrorAs(t, err, &native)
+				require.Equal(t, test.errorCode, native.Code)
+				require.ErrorContains(t, err, "data_custom on backend default_mongo")
+			} else {
+				require.NoError(t, err)
+			}
+			var commands []string
+			for _, event := range mt.GetAllStartedEvents() {
+				commands = append(commands, event.CommandName)
+			}
+			require.Equal(t, test.commands, commands)
+		})
+	}
+	mt.Run("factory fails when namespace discovery fails", func(mt *mtest.T) {
+		defer teardownMockProvider()
+		setupMockPostgres()
+		newMongoProvider = func(context.Context, string, string) (Provider, error) {
+			return &mockMongoProvider{client: mt.Client, dbName: "document_readiness"}, nil
+		}
+		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 13, Name: "Unauthorized"}))
+		f, err := NewFactory(context.Background(), config.DefaultConfig())
+		require.Nil(t, f)
+		var native mongo.CommandError
+		require.ErrorAs(t, err, &native)
+		require.EqualValues(t, 13, native.Code)
+		require.ErrorContains(t, err, "failed to list document collections on backend default_mongo")
+	})
+	f := &factory{}
+	require.ErrorContains(t, f.prepareDocumentCollections(context.Background(), config.DefaultConfig()), "backend not found")
+}
+
+func TestNewFactory_DocumentNamespaceReadiness(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	uri := os.Getenv("MONGO_URI")
+	if uri == "" {
+		uri = testMongoURI
+	}
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri).SetServerSelectionTimeout(2*time.Second))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		require.NoError(t, client.Disconnect(cleanupCtx))
+	})
+	if err := client.Ping(ctx, nil); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal(err)
+		}
+		t.Skipf("MongoDB unavailable: %v", err)
+	}
+	prefix := fmt.Sprintf("factory_readiness_%d", time.Now().UnixNano())
+	cfg := config.DefaultConfig()
+	cfg.Topology.Document.Strategy = "read_write_split"
+	cfg.Topology.Document.Replica = "replica_only"
+	cfg.Topology.Document.DataCollection = "data_custom"
+	cfg.Topology.Document.SysCollection = "sys_custom"
+	for _, backend := range []string{"default_mongo", "tenant", "replica_only"} {
+		cfg.Backends[backend] = config.BackendConfig{Type: "mongo", Mongo: config.MongoConfig{DatabaseName: prefix + "_" + backend}}
+		db := client.Database(cfg.Backends[backend].Mongo.DatabaseName)
+		t.Cleanup(func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cleanupCancel()
+			require.NoError(t, db.Drop(cleanupCtx))
+		})
+	}
+	cfg.Databases["tenant_database"] = config.DatabaseConfig{Backend: "tenant"}
+	cfg.Databases["another_tenant_database"] = config.DatabaseConfig{Backend: "tenant"}
+	newMongoProvider = func(_ context.Context, _, dbName string) (Provider, error) {
+		return &mockMongoProvider{client: client, dbName: dbName}, nil
+	}
+	defer teardownMockProvider()
+	setupMockPostgres()
+	created, err := NewFactory(ctx, cfg)
+	require.NoError(t, err)
+	defer created.Close()
+	f := created.(*factory)
+	for _, backend := range []string{"default_mongo", "tenant"} {
+		db := client.Database(cfg.Backends[backend].Mongo.DatabaseName)
+		names, err := db.ListCollectionNames(ctx, bson.D{})
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{"data_custom", "sys_custom"}, names)
+		specs, err := db.ListCollectionSpecifications(ctx, bson.M{"name": "data_custom"})
+		require.NoError(t, err)
+		require.Len(t, specs, 1)
+		require.NotNil(t, specs[0].UUID)
+		_, err = db.Collection("data_custom").InsertOne(ctx, bson.M{"_id": "retained", "value": 7})
+		require.NoError(t, err)
+		require.NoError(t, f.prepareDocumentCollections(ctx, cfg))
+		after, err := db.ListCollectionSpecifications(ctx, bson.M{"name": "data_custom"})
+		require.NoError(t, err)
+		require.Equal(t, specs[0].UUID, after[0].UUID)
+		var retained bson.M
+		require.NoError(t, db.Collection("data_custom").FindOne(ctx, bson.M{"_id": "retained"}).Decode(&retained))
+		require.EqualValues(t, 7, retained["value"])
+		indexes, err := db.Collection("data_custom").Indexes().List(ctx)
+		require.NoError(t, err)
+		var indexDocs []bson.M
+		require.NoError(t, indexes.All(ctx, &indexDocs))
+		require.Len(t, indexDocs, 1)
+		require.Equal(t, "_id_", indexDocs[0]["name"])
+	}
+	replicaDB := client.Database(cfg.Backends["replica_only"].Mongo.DatabaseName)
+	names, err := replicaDB.ListCollectionNames(ctx, bson.D{})
+	require.NoError(t, err)
+	require.Empty(t, names)
+
+	for _, backend := range []string{"default_mongo", "tenant"} {
+		require.NoError(t, client.Database(cfg.Backends[backend].Mongo.DatabaseName).Drop(ctx))
+	}
+	var wg sync.WaitGroup
+	errors := make(chan error, 4)
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errors <- f.prepareDocumentCollections(ctx, cfg)
+		}()
+	}
+	wg.Wait()
+	close(errors)
+	for err := range errors {
+		require.NoError(t, err)
+	}
+	for _, backend := range []string{"default_mongo", "tenant"} {
+		names, err := client.Database(cfg.Backends[backend].Mongo.DatabaseName).ListCollectionNames(ctx, bson.D{})
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{"data_custom", "sys_custom"}, names)
+	}
 }

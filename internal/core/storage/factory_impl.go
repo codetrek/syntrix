@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/syntrixbase/syntrix/internal/core/storage/router"
 	"github.com/syntrixbase/syntrix/internal/core/storage/types"
 	"github.com/syntrixbase/syntrix/pkg/model"
+	"go.mongodb.org/mongo-driver/bson"
 	mongodriver "go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -144,9 +146,52 @@ func NewFactory(ctx context.Context, cfg config.Config) (StorageFactory, error) 
 		f.dbStore = dbpostgres.NewStore(f.postgresDB, "databases")
 	}
 
+	if err := f.prepareDocumentCollections(ctx, cfg); err != nil {
+		return nil, err
+	}
+
 	success = true
 
 	return f, nil
+}
+
+func (f *factory) prepareDocumentCollections(ctx context.Context, cfg config.Config) error {
+	backends := map[string]struct{}{cfg.Topology.Document.Primary: {}}
+	for name, databaseCfg := range cfg.Databases {
+		if name != model.DefaultDatabase {
+			backends[databaseCfg.Backend] = struct{}{}
+		}
+	}
+	for name := range backends {
+		provider, err := f.getMongoProvider(name)
+		if err != nil {
+			return err
+		}
+		db := provider.Client().Database(provider.DatabaseName())
+		collections := []string{cfg.Topology.Document.DataCollection, cfg.Topology.Document.SysCollection}
+		existing, err := db.ListCollectionNames(ctx, bson.M{"name": bson.M{"$in": collections}})
+		if err != nil {
+			return fmt.Errorf("failed to list document collections on backend %s: %w", name, err)
+		}
+		present := make(map[string]bool, len(existing))
+		for _, collection := range existing {
+			present[collection] = true
+		}
+		for _, collection := range collections {
+			if present[collection] {
+				continue
+			}
+			// Capture binds source positions to collection UUIDs before the first write.
+			// NamespaceExists preserves existing identities, including concurrent startup.
+			err := db.CreateCollection(ctx, collection)
+			var command mongodriver.CommandError
+			if err != nil && !(errors.As(err, &command) && command.Code == 48) {
+				return fmt.Errorf("failed to prepare document collection %s on backend %s: %w", collection, name, err)
+			}
+			present[collection] = true
+		}
+	}
+	return nil
 }
 
 func (f *factory) createDocumentRouter(cfg config.DocumentTopology) (types.DocumentRouter, error) {

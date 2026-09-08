@@ -51,7 +51,7 @@ func TestBuffer_Write_MarshalError(t *testing.T) {
 		},
 	}
 
-	if err := buf.Write(evt, testToken); err == nil {
+	if err := buf.Write(evt, testCheckpoint(t, "default")); err == nil {
 		t.Error("Expected error from Write with unserializable event")
 	}
 }
@@ -114,7 +114,7 @@ func TestBuffer_ScanFrom_AfterKey(t *testing.T) {
 		{EventID: "3", Timestamp: 300},
 	}
 	for _, e := range evts {
-		buf.Write(e, testToken)
+		buf.Write(e, testCheckpoint(t, "default"))
 	}
 
 	// Wait for batch flush
@@ -171,7 +171,7 @@ func TestBuffer_Write_Atomicity(t *testing.T) {
 		},
 		Timestamp: time.Now().UnixMilli(),
 	}
-	token := []byte("token-atomicity")
+	token := testCheckpoint(t, "atomicity")
 
 	if err := buf.Write(evt, token); err != nil {
 		t.Fatalf("Write() error = %v", err)
@@ -242,7 +242,7 @@ func TestBuffer_ScanFrom_Bounds(t *testing.T) {
 			},
 			Timestamp: time.Now().UnixMilli(),
 		}
-		if err := buf.Write(evts[i], testToken); err != nil {
+		if err := buf.Write(evts[i], testCheckpoint(t, "default")); err != nil {
 			t.Fatalf("Write(%d) error = %v", i, err)
 		}
 	}
@@ -294,7 +294,7 @@ func TestBuffer_DeleteBefore_NoMatch(t *testing.T) {
 		EventID:     "evt-high",
 		ClusterTime: events.ClusterTime{T: 2000, I: 1},
 	}
-	require.NoError(t, buf.Write(evt, testToken))
+	require.NoError(t, buf.Write(evt, testCheckpoint(t, "default")))
 
 	// Wait for flush
 	require.Eventually(t, func() bool {
@@ -322,7 +322,7 @@ func TestBuffer_First_SkipsCheckpoint(t *testing.T) {
 	defer buf.Close()
 
 	// Save checkpoint only
-	require.NoError(t, buf.SaveCheckpoint(testToken))
+	require.NoError(t, buf.SaveCheckpoint(testCheckpoint(t, "default")))
 
 	// First should return empty/error, not checkpoint key
 	key, err := buf.First()
@@ -341,7 +341,7 @@ func TestBuffer_Head_SkipsCheckpoint(t *testing.T) {
 	defer buf.Close()
 
 	// Save checkpoint only
-	require.NoError(t, buf.SaveCheckpoint(testToken))
+	require.NoError(t, buf.SaveCheckpoint(testCheckpoint(t, "default")))
 
 	// Head should return empty/error, not checkpoint key
 	key, err := buf.Head()
@@ -360,7 +360,7 @@ func TestBuffer_Count_SkipsCheckpoint(t *testing.T) {
 	defer buf.Close()
 
 	// Save checkpoint only
-	require.NoError(t, buf.SaveCheckpoint(testToken))
+	require.NoError(t, buf.SaveCheckpoint(testCheckpoint(t, "default")))
 
 	count, err := buf.Count()
 	require.NoError(t, err)
@@ -378,7 +378,7 @@ func TestBuffer_CountAfter_SkipsCheckpoint(t *testing.T) {
 	defer buf.Close()
 
 	// Save checkpoint only
-	require.NoError(t, buf.SaveCheckpoint(testToken))
+	require.NoError(t, buf.SaveCheckpoint(testCheckpoint(t, "default")))
 
 	count, err := buf.CountAfter("")
 	require.NoError(t, err)
@@ -396,7 +396,7 @@ func TestBuffer_ScanFrom_SkipsCheckpoint(t *testing.T) {
 	defer buf.Close()
 
 	// Save checkpoint only
-	require.NoError(t, buf.SaveCheckpoint(testToken))
+	require.NoError(t, buf.SaveCheckpoint(testCheckpoint(t, "default")))
 
 	iter, err := buf.ScanFrom("")
 	require.NoError(t, err)

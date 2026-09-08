@@ -5,12 +5,12 @@ import (
 	"log/slog"
 	"sync"
 
-	"go.mongodb.org/mongo-driver/bson"
+	"github.com/syntrixbase/syntrix/internal/puller/checkpoint"
 )
 
 // CheckpointLoader defines the interface for loading checkpoints.
 type CheckpointLoader interface {
-	LoadCheckpoint() (bson.Raw, error)
+	LoadCheckpoint() (checkpoint.Checkpoint, error)
 }
 
 // BootstrapMode defines how to start the change stream.
@@ -84,7 +84,7 @@ func (b *Bootstrap) Run(ctx context.Context) (bool, error) {
 			return false, err
 		}
 
-		b.isFirstRun = token == nil
+		b.isFirstRun = token == ""
 	} else {
 		b.isFirstRun = true
 	}

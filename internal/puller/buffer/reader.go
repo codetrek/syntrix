@@ -7,42 +7,72 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/syntrixbase/syntrix/internal/puller/checkpoint"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
 )
 
-// Read retrieves an event by its buffer key.
-func (b *Buffer) Read(key string) (*events.StoreChangeEvent, error) {
-	b.mu.RLock()
-	if b.closed {
-		b.mu.RUnlock()
-		return nil, fmt.Errorf("buffer is closed")
-	}
-	b.mu.RUnlock()
+const recordVersion = 1
 
+// Record retains the source checkpoint associated with a cached event. Its
+// checkpoint identifies source progress independently of the cache key.
+type Record struct {
+	Version    int                      `json:"version"`
+	Event      *events.StoreChangeEvent `json:"event"`
+	Checkpoint checkpoint.Checkpoint    `json:"checkpoint"`
+}
+
+// Read retrieves a committed event by its buffer key, or nil if absent.
+func (b *Buffer) Read(key string) (*events.StoreChangeEvent, error) {
+	record, err := b.ReadRecord(key)
+	if err != nil || record == nil {
+		return nil, err
+	}
+	return record.Event, nil
+}
+
+// ReadRecord retrieves a committed event with its source checkpoint, or nil if
+// absent. Unsupported or corrupt persisted records fail explicitly.
+func (b *Buffer) ReadRecord(key string) (*Record, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if err := b.stateError(); err != nil {
+		return nil, err
+	}
+	if isMetadataKey([]byte(key)) {
+		return nil, nil
+	}
 	value, closer, err := b.db.Get([]byte(key))
 	if err != nil {
 		if err == pebble.ErrNotFound {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("failed to read event: %w", err)
+		return nil, fmt.Errorf("failed to read buffer record: %w", err)
 	}
 	defer closer.Close()
+	return decodeRecord(value)
+}
 
-	var evt events.StoreChangeEvent
-	if err := json.Unmarshal(value, &evt); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal event: %w", err)
+func decodeRecord(value []byte) (*Record, error) {
+	var record Record
+	if err := json.Unmarshal(value, &record); err != nil {
+		return nil, &checkpoint.Error{Code: checkpoint.IncompatibleState, Message: "invalid buffer record encoding", Cause: err}
 	}
-
-	return &evt, nil
+	if record.Version != recordVersion || record.Event == nil {
+		return nil, &checkpoint.Error{Code: checkpoint.IncompatibleState, Message: "unsupported or incomplete buffer record"}
+	}
+	if err := checkpoint.Validate(record.Checkpoint); err != nil {
+		return nil, &checkpoint.Error{Code: checkpoint.IncompatibleState, Message: "invalid buffer record checkpoint", Cause: err}
+	}
+	return &record, nil
 }
 
 // ScanFrom returns an iterator starting from the given key (exclusive).
 // If afterKey is empty, starts from the beginning.
 func (b *Buffer) ScanFrom(afterKey string) (Iterator, error) {
 	b.mu.RLock()
-	if b.closed {
+	if err := b.stateError(); err != nil {
 		b.mu.RUnlock()
-		return nil, fmt.Errorf("buffer is closed")
+		return nil, err
 	}
 	b.mu.RUnlock()
 
@@ -72,9 +102,9 @@ func (b *Buffer) ScanFrom(afterKey string) (Iterator, error) {
 // Head returns the most recent event key.
 func (b *Buffer) Head() (string, error) {
 	b.mu.RLock()
-	if b.closed {
+	if err := b.stateError(); err != nil {
 		b.mu.RUnlock()
-		return "", fmt.Errorf("buffer is closed")
+		return "", err
 	}
 	b.mu.RUnlock()
 
@@ -85,7 +115,7 @@ func (b *Buffer) Head() (string, error) {
 	defer iter.Close()
 
 	for iter.Last(); iter.Valid(); iter.Prev() {
-		if isCheckpointKey(iter.Key()) {
+		if isMetadataKey(iter.Key()) {
 			continue
 		}
 		return string(iter.Key()), nil
@@ -96,9 +126,9 @@ func (b *Buffer) Head() (string, error) {
 // First returns the oldest event key.
 func (b *Buffer) First() (string, error) {
 	b.mu.RLock()
-	if b.closed {
+	if err := b.stateError(); err != nil {
 		b.mu.RUnlock()
-		return "", fmt.Errorf("buffer is closed")
+		return "", err
 	}
 	b.mu.RUnlock()
 
@@ -109,7 +139,7 @@ func (b *Buffer) First() (string, error) {
 	defer iter.Close()
 
 	for iter.First(); iter.Valid(); iter.Next() {
-		if isCheckpointKey(iter.Key()) {
+		if isMetadataKey(iter.Key()) {
 			continue
 		}
 		return string(iter.Key()), nil
@@ -121,8 +151,8 @@ func (b *Buffer) First() (string, error) {
 func (b *Buffer) Size() (int64, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	if b.closed {
-		return 0, fmt.Errorf("buffer is closed")
+	if err := b.stateError(); err != nil {
+		return 0, err
 	}
 	// DiskSpaceUsage includes WAL and SSTables
 	return int64(b.db.Metrics().DiskSpaceUsage()), nil
@@ -131,9 +161,9 @@ func (b *Buffer) Size() (int64, error) {
 // Count returns the approximate number of events in the buffer.
 func (b *Buffer) Count() (int, error) {
 	b.mu.RLock()
-	if b.closed {
+	if err := b.stateError(); err != nil {
 		b.mu.RUnlock()
-		return 0, fmt.Errorf("buffer is closed")
+		return 0, err
 	}
 	b.mu.RUnlock()
 
@@ -145,7 +175,7 @@ func (b *Buffer) Count() (int, error) {
 	defer iter.Close()
 
 	for iter.First(); iter.Valid(); iter.Next() {
-		if isCheckpointKey(iter.Key()) {
+		if isMetadataKey(iter.Key()) {
 			continue
 		}
 		count++
@@ -157,9 +187,9 @@ func (b *Buffer) Count() (int, error) {
 // CountAfter returns the number of events after the given key.
 func (b *Buffer) CountAfter(afterKey string) (int, error) {
 	b.mu.RLock()
-	if b.closed {
+	if err := b.stateError(); err != nil {
 		b.mu.RUnlock()
-		return 0, fmt.Errorf("buffer is closed")
+		return 0, err
 	}
 	b.mu.RUnlock()
 
@@ -176,7 +206,7 @@ func (b *Buffer) CountAfter(afterKey string) (int, error) {
 	defer iter.Close()
 
 	for iter.First(); iter.Valid(); iter.Next() {
-		if isCheckpointKey(iter.Key()) {
+		if isMetadataKey(iter.Key()) {
 			continue
 		}
 		count++

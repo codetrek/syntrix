@@ -23,6 +23,12 @@ saved replay cursor and can be excluded after restart.
 
 ## Proposal
 
+The [source checkpoint decision](../../implemented/architecture/2026-09-08-puller-source-checkpoints.md)
+partially supersedes this proposal: clauses below that make local cache
+generation/sequence state the consumer checkpoint authority no longer apply.
+Cache ordering and publication work remain proposed; any private cache position
+must remain separate from source-owned progress.
+
 Assign a monotonically increasing position in observed ingestion order within
 each backend and continuity generation. Atomically sync the event, its position,
 the new committed frontier, and MongoDB resume token in one batch before

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"go.mongodb.org/mongo-driver/bson"
+	"github.com/syntrixbase/syntrix/internal/puller/checkpoint"
 )
 
 func TestBootstrapMode(t *testing.T) {
@@ -18,17 +18,17 @@ func TestBootstrapMode(t *testing.T) {
 }
 
 type mockCheckpointForBootstrap struct {
-	token bson.Raw
+	token checkpoint.Checkpoint
 	err   error
 }
 
-func (m *mockCheckpointForBootstrap) LoadCheckpoint() (bson.Raw, error) {
+func (m *mockCheckpointForBootstrap) LoadCheckpoint() (checkpoint.Checkpoint, error) {
 	return m.token, m.err
 }
 
 func TestBootstrap_FirstRun(t *testing.T) {
 	t.Parallel()
-	mock := &mockCheckpointForBootstrap{token: nil}
+	mock := &mockCheckpointForBootstrap{token: ""}
 	b := NewBootstrap(BootstrapOptions{
 		Mode:       BootstrapFromNow,
 		Checkpoint: mock,
@@ -51,7 +51,7 @@ func TestBootstrap_FirstRun(t *testing.T) {
 
 func TestBootstrap_Resume(t *testing.T) {
 	t.Parallel()
-	mock := &mockCheckpointForBootstrap{token: bson.Raw{1, 2, 3}}
+	mock := &mockCheckpointForBootstrap{token: checkpoint.Checkpoint("opaque-position")}
 	b := NewBootstrap(BootstrapOptions{
 		Mode:       BootstrapFromNow,
 		Checkpoint: mock,
@@ -95,7 +95,7 @@ func TestBootstrap_NilCheckpoint(t *testing.T) {
 
 func TestBootstrap_RunTwice(t *testing.T) {
 	t.Parallel()
-	mock := &mockCheckpointForBootstrap{token: nil}
+	mock := &mockCheckpointForBootstrap{token: ""}
 	b := NewBootstrap(BootstrapOptions{
 		Checkpoint: mock,
 	})
@@ -104,7 +104,7 @@ func TestBootstrap_RunTwice(t *testing.T) {
 	isFirst1, _ := b.Run(context.Background())
 
 	// Second run should return same result without calling checkpoint again
-	mock.token = bson.Raw{1, 2, 3} // Change the token
+	mock.token = checkpoint.Checkpoint("opaque-position") // Change the token
 	isFirst2, _ := b.Run(context.Background())
 
 	if isFirst1 != isFirst2 {

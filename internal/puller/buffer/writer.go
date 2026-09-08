@@ -3,78 +3,72 @@ package buffer
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/syntrixbase/syntrix/internal/puller/checkpoint"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 type writeRequest struct {
-	key   []byte
-	value []byte
-	token bson.Raw
-	event *events.StoreChangeEvent
+	key        []byte
+	value      []byte
+	checkpoint checkpoint.Checkpoint
+	event      *events.StoreChangeEvent
+	receipt    chan error
 }
 
-// Write stores an event and updates the checkpoint in the same batch.
-func (b *Buffer) Write(evt *events.StoreChangeEvent, token bson.Raw) error {
+// Write admits an event and its validated source checkpoint to the batch queue.
+// The record and source frontier commit atomically; admission does not wait for
+// durability. ScanFrom retains visibility of admitted in-memory events.
+func (b *Buffer) Write(evt *events.StoreChangeEvent, cp checkpoint.Checkpoint) error {
 	b.mu.Lock()
-	if b.closed {
+	if err := b.stateError(); err != nil {
 		b.mu.Unlock()
-		return fmt.Errorf("buffer is closed")
+		return err
 	}
-
-	if len(token) == 0 {
+	if err := checkpoint.Validate(cp); err != nil {
 		b.mu.Unlock()
-		return fmt.Errorf("checkpoint token is required")
+		return err
 	}
-
-	// Key is the buffer key for ordering
-	key := []byte(evt.BufferKey())
-
-	// Value is the JSON-encoded event
-	value, err := json.Marshal(evt)
+	if evt == nil {
+		b.mu.Unlock()
+		return fmt.Errorf("buffer event is required")
+	}
+	value, err := json.Marshal(Record{Version: recordVersion, Event: evt, Checkpoint: cp})
 	if err != nil {
 		b.mu.Unlock()
-		return fmt.Errorf("failed to marshal event: %w", err)
+		return fmt.Errorf("failed to marshal buffer record: %w", err)
 	}
-
-	req := &writeRequest{
-		key:   key,
-		value: value,
-		token: append([]byte(nil), token...),
-		event: evt,
-	}
-
-	b.pending = append(b.pending, req)
+	b.pending = append(b.pending, &writeRequest{
+		key: []byte(evt.BufferKey()), value: value, checkpoint: cp, event: evt,
+	})
 	shouldNotify := len(b.pending) >= b.batchSize
 	b.mu.Unlock()
-
 	if shouldNotify {
-		// Notify batcher, non-blocking
-		select {
-		case b.notifyCh <- struct{}{}:
-		default:
-		}
+		b.notifyBatcher()
 	}
-
 	return nil
+}
+
+func (b *Buffer) notifyBatcher() {
+	select {
+	case b.notifyCh <- struct{}{}:
+	default:
+	}
 }
 
 func (b *Buffer) applyBatch(apply func(batch pebbleBatch) error) error {
 	batch := b.newBatch()
 	defer batch.Close()
-
 	if err := apply(batch); err != nil {
 		return err
 	}
-
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return fmt.Errorf("failed to commit batch: %w", err)
 	}
-
 	return nil
 }
 
@@ -85,85 +79,69 @@ func (b *Buffer) startBatcher() {
 
 func (b *Buffer) runBatcher() {
 	defer b.batcherWG.Done()
-
 	ticker := time.NewTicker(b.batchInterval)
 	defer ticker.Stop()
-
-	flush := func() {
-		// Swap pending to flushing under lock
-		b.mu.Lock()
-		if len(b.pending) == 0 {
-			b.mu.Unlock()
-			return
-		}
-		b.flushing = b.pending
-		b.pending = nil
-		b.mu.Unlock()
-
-		if len(b.flushing) == 0 {
-			return
-		}
-
-		batch := b.newBatch()
-		var commitErr error
-		var checkpointToken []byte
-
-		for _, req := range b.flushing {
-			if err := batch.Set(req.key, req.value, pebble.Sync); err != nil {
-				commitErr = fmt.Errorf("failed to batch write event: %w", err)
-				break
-			}
-			if req.token != nil {
-				checkpointToken = append([]byte(nil), req.token...)
-			}
-		}
-
-		if commitErr == nil && checkpointToken != nil {
-			if err := batch.Set(checkpointKeyBytes, checkpointToken, pebble.Sync); err != nil {
-				commitErr = fmt.Errorf("failed to batch write checkpoint: %w", err)
-			}
-		}
-
-		if commitErr == nil {
-			if err := batch.Commit(pebble.Sync); err != nil {
-				commitErr = fmt.Errorf("failed to commit batch: %w", err)
-			}
-		}
-
-		_ = batch.Close()
-
-		// Clear flushing queue
-		b.mu.Lock()
-		b.flushing = nil
-		b.mu.Unlock()
-
-		if commitErr != nil {
-			b.logger.Error("failed to flush batch, stopping batcher", "error", commitErr)
-			b.mu.Lock()
-			if !b.closed {
-				b.closed = true
-				// Note: closeCh might be already closed if Close() was called
-				select {
-				case <-b.closeCh:
-				default:
-					close(b.closeCh)
-				}
-			}
-			b.mu.Unlock()
-			return
-		}
-	}
-
 	for {
 		select {
 		case <-b.notifyCh:
-			flush()
 		case <-ticker.C:
-			flush()
 		case <-b.closeCh:
-			// One last flush to drain pending events
-			flush()
+			b.flushPending()
+			return
+		}
+		if err := b.flushPending(); err != nil {
 			return
 		}
 	}
+}
+
+func (b *Buffer) flushPending() error {
+	b.mu.Lock()
+	if len(b.pending) == 0 {
+		b.mu.Unlock()
+		return nil
+	}
+	requests := b.pending
+	b.pending = nil
+	b.flushing = requests
+	b.mu.Unlock()
+
+	err := b.commitRequests(requests)
+	b.mu.Lock()
+	b.flushing = nil
+	if err != nil {
+		b.failure = err
+		requests = append(requests, b.pending...)
+		b.pending = nil
+	}
+	b.mu.Unlock()
+	for _, req := range requests {
+		if req.receipt != nil {
+			req.receipt <- err
+		}
+	}
+	if err != nil {
+		b.logger.Error("failed to flush buffer batch", "error", err)
+	}
+	return err
+}
+
+func (b *Buffer) commitRequests(requests []*writeRequest) (err error) {
+	batch := b.newBatch()
+	defer func() { err = errors.Join(err, batch.Close()) }()
+	for _, req := range requests {
+		if req.event != nil {
+			if err := batch.Set(req.key, req.value, pebble.Sync); err != nil {
+				return fmt.Errorf("failed to batch write event: %w", err)
+			}
+		}
+	}
+	cp := requests[len(requests)-1].checkpoint
+	if err := batch.Set(checkpointKeyBytes, []byte(cp), pebble.Sync); err != nil {
+		return fmt.Errorf("failed to batch write checkpoint: %w", err)
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return fmt.Errorf("failed to commit batch: %w", err)
+	}
+	return nil
 }

@@ -1,7 +1,6 @@
 package recovery
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -109,7 +108,6 @@ func TestRecoveryAction_String(t *testing.T) {
 	}{
 		{ActionNone, "none"},
 		{ActionReconnect, "reconnect"},
-		{ActionRestart, "restart"},
 		{ActionFatal, "fatal"},
 		{Action(99), "unknown"},
 	}
@@ -137,8 +135,8 @@ func TestHandler_HandleError_ResumeToken(t *testing.T) {
 
 	err := errors.New("resume token was not found")
 	action := h.HandleError(err)
-	if action != ActionRestart {
-		t.Errorf("HandleError() = %s, want restart", action)
+	if action != ActionFatal {
+		t.Errorf("HandleError() = %s, want fatal", action)
 	}
 	if h.ResumeTokenErrors() != 1 {
 		t.Errorf("ResumeTokenErrors() = %d, want 1", h.ResumeTokenErrors())
@@ -192,41 +190,5 @@ func TestHandler_ResetErrorCount(t *testing.T) {
 	action := h.HandleError(err)
 	if action != ActionReconnect {
 		t.Errorf("HandleError() = %s after reset, want reconnect", action)
-	}
-}
-
-type mockCheckpoint struct {
-	deleted   bool
-	deleteErr error
-}
-
-func (m *mockCheckpoint) DeleteCheckpoint() error {
-	m.deleted = true
-	return m.deleteErr
-}
-
-func TestHandler_RecoverFromResumeTokenError(t *testing.T) {
-	mock := &mockCheckpoint{}
-	h := NewHandler(HandlerOptions{
-		Checkpoint: mock,
-	})
-
-	err := h.RecoverFromResumeTokenError(context.Background())
-	if err != nil {
-		t.Errorf("RecoverFromResumeTokenError() error = %v", err)
-	}
-	if !mock.deleted {
-		t.Error("checkpoint.Delete() should have been called")
-	}
-}
-
-func TestHandler_RecoverFromResumeTokenError_NilCheckpoint(t *testing.T) {
-	h := NewHandler(HandlerOptions{
-		Checkpoint: nil,
-	})
-
-	err := h.RecoverFromResumeTokenError(context.Background())
-	if err != nil {
-		t.Errorf("RecoverFromResumeTokenError() error = %v", err)
 	}
 }

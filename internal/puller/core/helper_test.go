@@ -86,6 +86,12 @@ func setupTestEnv(t *testing.T) *TestEnv {
 		_ = client.Database(dbName).Drop(ctx)
 	})
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Database(dbName).CreateCollection(ctx, "users"); err != nil {
+		t.Fatalf("create capture collection: %v", err)
+	}
+
 	return &TestEnv{
 		Client: client,
 		DBName: dbName,

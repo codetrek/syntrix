@@ -5,9 +5,9 @@ Status: proposed
 ## Problem
 
 Consumers cannot distinguish a complete resume from a stream whose history is
-unavailable. [Recovery](../../../../internal/puller/recovery/recovery.go#L222)
-calls `h.checkpoint.DeleteCheckpoint()` after resume-token errors; the backend
-then opens a fresh watch. Meanwhile,
+unavailable. Capture now stops on unusable native history and retains its
+checkpoint under the [source checkpoint decision](../../implemented/architecture/2026-09-08-puller-source-checkpoints.md).
+Consumer-visible history failure and recovery remain unimplemented. Meanwhile,
 [Replay](../../../../internal/puller/core/puller.go#L443) scans after the supplied
 key without checking a durable retention boundary, although the
 [cleaner](../../../../internal/puller/buffer/cleaner.go) evicts history.
@@ -19,6 +19,12 @@ the same interval as lost history. Its warning alone cannot establish loss.
 These findings come from static inspection.
 
 ## Proposal
+
+The [source checkpoint decision](../../implemented/architecture/2026-09-08-puller-source-checkpoints.md)
+partially supersedes this proposal: clauses below that derive consumer progress
+or validity from local cache generations and sequences no longer apply.
+Retention, consumer-visible history failures, and rebuild coordination remain
+proposed; a cache miss must not invalidate retained native source progress.
 
 Persist a continuity generation and replayable lower boundary per backend using
 the monotonically increasing committed positions owned by

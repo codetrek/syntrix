@@ -86,7 +86,7 @@ func TestPuller_WatchAndCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCheckpoint failed: %v", err)
 	}
-	if ckpt == nil {
+	if ckpt == "" {
 		t.Fatal("Expected checkpoint to be saved")
 	}
 }
@@ -152,7 +152,7 @@ func TestPuller_ResumeFromCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCheckpoint failed: %v", err)
 	}
-	if ckpt == nil {
+	if ckpt == "" {
 		t.Fatal("Failed to create initial checkpoint")
 	}
 
@@ -209,7 +209,7 @@ func TestPuller_ChangeStreamError_Reconnect(t *testing.T) {
 	t.Parallel()
 	// Create a dedicated client to avoid affecting global shared client
 	ctx := context.Background()
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(testMongoURI))
 	if err != nil {
 		t.Fatal("Failed to connect to MongoDB")
 	}
@@ -226,7 +226,7 @@ func TestPuller_ChangeStreamError_Reconnect(t *testing.T) {
 		// Reconnect to drop db? No, client is closed.
 		// We can use a fresh client to drop it, or just ignore it (it's a test db)
 		// Ideally we should clean up.
-		cleanClient, _ := mongo.Connect(context.Background(), options.Client().ApplyURI("mongodb://localhost:27017"))
+		cleanClient, _ := mongo.Connect(context.Background(), options.Client().ApplyURI(testMongoURI))
 		if cleanClient != nil {
 			_ = cleanClient.Database(dbName).Drop(context.Background())
 			_ = cleanClient.Disconnect(context.Background())
@@ -272,7 +272,7 @@ func TestPuller_WatchChangeStream_LoadError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start should succeed (logs warning)
+	// Start launches the worker; checkpoint load failure terminates that backend.
 	err := p.Start(ctx)
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
@@ -293,7 +293,7 @@ func TestPuller_WatchChangeStream_WatchError(t *testing.T) {
 	// Close client to force Watch error
 	// We use a separate client to avoid breaking other tests
 	ctx := context.Background()
-	client, _ := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
+	client, _ := mongo.Connect(ctx, options.Client().ApplyURI(testMongoURI))
 	defer client.Disconnect(ctx)
 
 	p.backends["backend1"].client = client
@@ -327,12 +327,6 @@ func TestPuller_WatchChangeStream_Invalidate(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	// Drop collection to trigger invalidate event
-	// This causes:
-	// 1. 'invalidate' event received
-	// 2. Normalize fails (OperationType 'invalidate' is not valid) -> Covers Normalize error
-	// 3. Stream closes
-	// 4. Loop exits -> Covers final return
 	err := env.DB.Collection("users").Drop(ctx)
 	if err != nil {
 		t.Fatalf("Failed to drop collection: %v", err)

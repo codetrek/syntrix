@@ -3,6 +3,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/syntrixbase/syntrix/internal/puller/buffer"
+	"github.com/syntrixbase/syntrix/internal/puller/checkpoint"
 	"github.com/syntrixbase/syntrix/internal/puller/config"
 	"github.com/syntrixbase/syntrix/internal/puller/cursor"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
@@ -39,6 +41,11 @@ type Backend struct {
 	recoveryHandler *recovery.Handler
 	backpressure    *flowcontrol.BackpressureMonitor
 	cleaner         *buffer.Cleaner
+
+	// Queued writes may be newer than the durable checkpoint during a reconnect.
+	checkpointLoaded   bool
+	admittedCheckpoint checkpoint.Checkpoint
+	streamCloseErr     error
 
 	// eventChan receives normalized events from the change stream
 	eventChan chan *events.StoreChangeEvent
@@ -73,6 +80,8 @@ type Puller struct {
 	// openStream allows tests to inject a custom change stream implementation.
 	openStream func(ctx context.Context, db *mongo.Database, pipeline mongo.Pipeline, opts *options.ChangeStreamOptions) (changeStream, error)
 
+	readSource func(context.Context, *mongo.Database, string, []string) (checkpoint.MongoSource, error)
+
 	// retryDelay is the time to wait before retrying after an error.
 	retryDelay time.Duration
 
@@ -99,12 +108,15 @@ func New(cfg config.Config, logger *slog.Logger) *Puller {
 	p.subs = NewSubscriberManager(p.logger)
 	p.watchFunc = p.watchChangeStream
 	p.openStream = openMongoChangeStream
+	p.readSource = checkpoint.ReadMongoSource
 	return p
 }
 
 // changeStream defines the subset of mongo.ChangeStream used by the puller.
 type changeStream interface {
-	Next(context.Context) bool
+	TryNext(context.Context) bool
+	ResumeToken() bson.Raw
+	ID() int64
 	Decode(any) error
 	Err() error
 	Close(context.Context) error
@@ -158,7 +170,6 @@ func (p *Puller) AddBackend(name string, client *mongo.Client, dbName string, cf
 	})
 
 	recoveryHandler := recovery.NewHandler(recovery.HandlerOptions{
-		Checkpoint:           buf,
 		MaxConsecutiveErrors: 10, // TODO: Make configurable
 		Logger:               logger,
 	})
@@ -240,27 +251,33 @@ func (p *Puller) Stop(ctx context.Context) error {
 		p.logger.Info("puller stopped gracefully")
 	case <-ctx.Done():
 		p.logger.Warn("puller stop timed out")
+		return ctx.Err()
 	}
 
 	// Ensure all backend buffers are closed. This is safe because Buffer.Close is idempotent.
 	// This handles cases where AddBackend was called but Start wasn't (e.g. tests or early failure).
-	for _, backend := range p.backends {
+	var closeErr error
+	for name, backend := range p.backends {
+		if backend.streamCloseErr != nil {
+			closeErr = errors.Join(closeErr, fmt.Errorf("backend %q: %w", name, backend.streamCloseErr))
+		}
 		if backend.buffer != nil {
-			_ = backend.buffer.Close()
+			if err := backend.buffer.Close(); err != nil {
+				closeErr = errors.Join(closeErr, fmt.Errorf("close backend %q buffer: %w", name, err))
+			}
 		}
 	}
-
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
-	return nil
+	return errors.Join(ctx.Err(), closeErr)
 }
 
 // runBackend runs the change stream consumer for a single backend.
 func (p *Puller) runBackend(ctx context.Context, name string, backend *Backend) {
 	defer p.wg.Done()
-	defer backend.buffer.Close()
+	defer func() {
+		if err := backend.buffer.Close(); err != nil {
+			p.logger.Error("failed to close backend buffer", "backend", name, "error", err)
+		}
+	}()
 
 	logger := p.logger.With("backend", name)
 	logger.Info("starting backend")
@@ -284,26 +301,17 @@ func (p *Puller) runBackend(ctx context.Context, name string, backend *Backend) 
 			}
 
 			action := backend.recoveryHandler.HandleError(err)
-			switch action {
-			case recovery.ActionRestart:
-				logger.Warn("restarting backend due to error", "error", err)
-				if recErr := backend.recoveryHandler.RecoverFromResumeTokenError(ctx); recErr != nil {
-					logger.Error("failed to recover from resume token error", "error", recErr)
-					// If recovery fails, we might want to stop or retry.
-					// For now, we'll retry which will likely trigger another error.
-				}
-				// Continue loop to restart watch
-				time.Sleep(p.retryDelay)
-			case recovery.ActionFatal:
+			if action == recovery.ActionFatal {
 				logger.Error("fatal error, stopping backend", "error", err)
 				return
-			case recovery.ActionReconnect:
-				logger.Warn("transient error, reconnecting", "error", err)
-				time.Sleep(p.retryDelay) // Backoff before reconnect
-			case recovery.ActionNone:
-				// Should not happen if err != nil
-				logger.Warn("unknown error, reconnecting", "error", err)
-				time.Sleep(p.retryDelay)
+			}
+			logger.Warn("reconnecting backend", "error", err)
+			timer := time.NewTimer(p.retryDelay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
 			}
 		} else {
 			// Reset error count on successful run (if watchChangeStream returns nil, it means it finished normally, e.g. context done)
@@ -312,80 +320,153 @@ func (p *Puller) runBackend(ctx context.Context, name string, backend *Backend) 
 	}
 }
 
-// watchChangeStream watches the MongoDB change stream for a backend.
-func (p *Puller) watchChangeStream(ctx context.Context, backend *Backend, logger *slog.Logger) error {
-	// Load resume token if exists
-	resumeToken, err := backend.buffer.LoadCheckpoint()
-	if err != nil {
-		logger.Warn("failed to load checkpoint from buffer", "error", err)
-		// Continue without resume token
+// watchChangeStream watches the fixed collection scope at database level.
+func (p *Puller) watchChangeStream(ctx context.Context, backend *Backend, logger *slog.Logger) (resultErr error) {
+	if !backend.checkpointLoaded {
+		cp, err := backend.buffer.LoadCheckpoint()
+		if err != nil {
+			return captureFailure("load capture checkpoint", err)
+		}
+		backend.admittedCheckpoint = cp
+		backend.checkpointLoaded = true
 	}
 
-	// Build watch pipeline for collection filtering
-	pipeline := p.buildWatchPipeline(backend.config)
-
-	// Configure watch options
-	opts := options.ChangeStream().
-		SetFullDocument(options.UpdateLookup)
-
-	if resumeToken != nil {
-		opts.SetResumeAfter(resumeToken)
-		logger.Info("resuming from checkpoint")
+	source, err := p.readSource(ctx, backend.db, backend.name, backend.config.Collections)
+	if err != nil {
+		return captureFailure("resolve MongoDB capture source", err)
+	}
+	cp := backend.admittedCheckpoint
+	opts := options.ChangeStream().SetFullDocument(options.UpdateLookup).SetMaxAwaitTime(time.Second)
+	if cp != "" {
+		position, err := checkpoint.MatchMongoSource(cp, source)
+		if err != nil {
+			return err
+		}
+		if position.StartAt != nil {
+			opts.SetStartAtOperationTime(position.StartAt)
+		} else {
+			opts.SetResumeAfter(position.ResumeAfter)
+		}
+	} else if p.cfg.Bootstrap.Mode == "from_beginning" {
+		start := primitive.Timestamp{T: 1, I: 1}
+		opts.SetStartAtOperationTime(&start)
 	} else {
-		logger.Info("starting fresh (no checkpoint)")
-		if p.cfg.Bootstrap.Mode == "from_beginning" {
-			opts.SetStartAtOperationTime(&primitive.Timestamp{T: 1, I: 1})
+		// An empty first batch exposes the initial server position without passing
+		// any unread event. Later getMore calls use the server's default batch size.
+		opts.SetBatchSize(0)
+	}
+
+	stream, err := p.openStream(ctx, backend.db, p.buildWatchPipeline(backend.config), opts)
+	if err != nil {
+		return recovery.ClassifyMongoError(fmt.Errorf("open MongoDB change stream: %w", err))
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := stream.Close(closeCtx); err != nil {
+			closeErr := recovery.ClassifyMongoError(fmt.Errorf("close MongoDB change stream: %w", err))
+			backend.streamCloseErr = errors.Join(backend.streamCloseErr, closeErr)
+			resultErr = errors.Join(resultErr, closeErr)
+		}
+	}()
+
+	// Collection recreation between metadata lookup and Watch must not bind a
+	// checkpoint to a different incarnation of the configured source.
+	boundSource, err := p.readSource(ctx, backend.db, backend.name, backend.config.Collections)
+	if err != nil {
+		return captureFailure("verify MongoDB capture source", err)
+	}
+	sourceBinding, err := checkpoint.EncodeMongoStart(source, primitive.Timestamp{T: 1, I: 1})
+	if err != nil {
+		return err
+	}
+	if _, err := checkpoint.MatchMongoSource(sourceBinding, boundSource); err != nil {
+		return err
+	}
+
+	if cp == "" {
+		if opts.StartAtOperationTime != nil {
+			cp, err = checkpoint.EncodeMongoStart(source, *opts.StartAtOperationTime)
+		} else {
+			cp, err = checkpoint.EncodeMongo(source, stream.ResumeToken())
+		}
+		if err != nil {
+			return captureFailure("encode initial capture position", err)
+		}
+		if err := saveCaptureCheckpoint(backend, cp); err != nil {
+			return err
 		}
 	}
+	logger.Info("change stream opened", "resuming", opts.ResumeAfter != nil || opts.StartAtOperationTime != nil)
 
-	// Start watching at database level
-	stream, err := p.openStream(ctx, backend.db, pipeline, opts)
-	if err != nil {
-		return fmt.Errorf("failed to open change stream: %w", err)
-	}
-	defer stream.Close(ctx)
+	for {
+		if !stream.TryNext(ctx) {
+			if err := stream.Err(); err != nil {
+				return recovery.ClassifyMongoError(fmt.Errorf("read MongoDB change stream: %w", err))
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if stream.ID() == 0 {
+				return &checkpoint.Error{Code: checkpoint.SourceMismatch, Message: "MongoDB change stream closed before capture was canceled"}
+			}
+			if token := stream.ResumeToken(); len(token) != 0 {
+				cp, err := checkpoint.EncodeMongo(source, token)
+				if err != nil {
+					return captureFailure("encode idle capture position", err)
+				}
+				if err := saveCaptureCheckpoint(backend, cp); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 
-	logger.Info("change stream opened")
-
-	// Process events
-	for stream.Next(ctx) {
 		var raw normalizer.RawEvent
 		if err := stream.Decode(&raw); err != nil {
-			logger.Error("failed to decode event", "error", err)
-			continue
+			return captureFailure("decode MongoDB change event", err)
 		}
-
-		// Normalize event
+		switch raw.OperationType {
+		case "drop", "dropDatabase", "rename", "invalidate":
+			return &checkpoint.Error{Code: checkpoint.SourceMismatch, Message: "MongoDB capture collection was dropped, renamed, or invalidated"}
+		}
 		evt, err := backend.normalizer.Normalize(&raw)
 		if err != nil {
-			logger.Error("failed to normalize event", "error", err)
-			continue
+			return captureFailure("normalize MongoDB change event", err)
 		}
 		evt.Backend = backend.name
 
-		logger.Info("Puller: received event from mongo",
-			"eventID", evt.EventID,
-			"op", evt.OpType,
-			"mgoid", evt.MgoDocID,
-		)
-
-		// Check for gaps
-		backend.gapDetector.RecordEvent(evt)
-
-		if err := backend.buffer.Write(evt, raw.ResumeToken); err != nil {
-			logger.Error("failed to write event to buffer", "error", err)
-			continue
+		// ResumeToken can already be the batch's later high-water mark. The raw
+		// event token is the only position that belongs to this cached record.
+		cp, err := checkpoint.EncodeMongo(source, raw.ResumeToken)
+		if err != nil {
+			return captureFailure("encode event capture position", err)
 		}
-		logger.Debug("Puller: buffered event", "eventID", evt.EventID)
-
-		// Handle event after it is persisted
+		if err := backend.buffer.Write(evt, cp); err != nil {
+			return captureFailure("buffer MongoDB change event", err)
+		}
+		backend.admittedCheckpoint = cp
+		backend.gapDetector.RecordEvent(evt)
 		p.invokeHandlerWithBackpressure(ctx, backend, evt)
 	}
+}
 
-	if err := stream.Err(); err != nil {
-		return fmt.Errorf("change stream error: %w", err)
+func captureFailure(message string, err error) error {
+	var sourceErr *checkpoint.Error
+	if errors.As(err, &sourceErr) {
+		return fmt.Errorf("%s: %w", message, err)
 	}
+	return &checkpoint.Error{Code: checkpoint.SourceUnavailable, Message: message, Cause: err}
+}
 
+func saveCaptureCheckpoint(backend *Backend, cp checkpoint.Checkpoint) error {
+	if cp == backend.admittedCheckpoint {
+		return nil
+	}
+	if err := backend.buffer.SaveCheckpoint(cp); err != nil {
+		return captureFailure("persist capture position", err)
+	}
+	backend.admittedCheckpoint = cp
 	return nil
 }
 
@@ -424,7 +505,11 @@ func (p *Puller) buildWatchPipeline(cfg config.PullerBackendConfig) mongo.Pipeli
 
 	return mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{
-			"ns.coll": bson.M{"$in": cfg.Collections},
+			"$or": bson.A{
+				bson.M{"ns.coll": bson.M{"$in": cfg.Collections}},
+				bson.M{"operationType": bson.M{"$in": bson.A{"dropDatabase", "invalidate"}}},
+				bson.M{"operationType": "rename", "to.coll": bson.M{"$in": cfg.Collections}},
+			},
 		}}},
 	}
 }
