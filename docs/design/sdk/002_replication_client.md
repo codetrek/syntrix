@@ -27,16 +27,9 @@
 - RxDB available (Dexie storage) in client environment.
 
 ## Data Model (flattened)
-
 - Fields: `id`, `version?`, `updatedAt`, `createdAt`, `collection`, `deleted?`, plus user fields.
 - RxDB primary key: `id`. Indexes: `updatedAt`, `collection`, optionally business fields.
-- Tombstones follow the [server deletion contract](../../reference/replication.md#deletion-and-retention).
-
-| Tombstone content | Client rule |
-| --- | --- |
-| Identity, collection, version, timestamps | Preserve for local application and replication |
-| `deleted: true` | Mark the corresponding local document deleted |
-| Former business fields | Remove; the tombstone is not the previous document state |
+- Tombstones: keep `deleted: true` docs with identity and timestamps; former business fields are cleared. Physical cleanup is not another business deletion. See [deletion semantics](../server/core/storage/03.stores.md#document-deletion-and-physical-cleanup).
 
 ## Components
 - **ReplicationCoordinator**: high-level orchestrator per collection; owns pull/push workers, realtime trigger wiring, state, callbacks.
@@ -47,16 +40,21 @@
 - **Outbox**: local queue of pending writes (create/update/replace/delete), durable across reloads.
 
 ## SDK Architecture (public surface)
-
-| Public boundary | Responsibility | Status |
-| --- | --- | --- |
-| `SyntrixClient` | HTTP document CRUD and queries | Existing |
-| `TriggerClient` | Trigger writes | Existing |
-| `TriggerHandler` | Trigger payload execution | Existing |
-| `createReplicationCoordinator(options)` | Construct the replication coordinator | Planned |
-| Replication, pull, push, and realtime options | Configure transport, batching, and scheduling | Planned |
-| Checkpoint and outbox adapters | Supply local persistence boundaries | Planned |
-| Hooks and DTOs | Define observations and transferred data | Planned |
+- Package entry: `pkg/syntrix-client-ts/src/index.ts` re-exports clients and will export replication orchestrator types once implemented.
+- Public clients remain:
+	- `SyntrixClient` for CRUD/query over HTTP.
+	- `TriggerClient` for trigger writes.
+	- `TriggerHandler` wrapper for trigger payload execution.
+- New replication surface (planned):
+	- `createReplicationCoordinator(options): ReplicationCoordinator` factory.
+	- Interfaces: `ReplicationOptions`, `PullOptions`, `PushOptions`, `RealtimeOptions`, `CheckpointStore`, `OutboxAdapter`, hooks types.
+- Suggested layout under `src/replication/`:
+	- `coordinator.ts` (orchestrator, public entry)
+	- `pull.ts` (PullWorker)
+	- `push.ts` (PushWorker)
+	- `realtime.ts` (trigger wiring abstraction)
+	- `checkpoint.ts`, `outbox.ts` (pluggable adapters)
+	- `types.ts` (options, hooks, DTOs)
 
 ### High-level call graph (SDK)
 ```
@@ -92,9 +90,7 @@ App
 ### Pull sequence (happy path)
 1) Determine `checkpoint` from CheckpointStore (default "0").
 2) Call `/replication/v1/pull?collection=...&checkpoint=...&limit=...`.
-3) Upsert returned documents into RxDB; apply `deleted` tombstones to the same
-   document identity before advancing progress. Do not retain stale business
-   fields by treating a tombstone as an ordinary partial update.
+3) Upsert returned documents into RxDB; preserve `deleted` tombstones.
 4) Persist returned `checkpoint` for next cycle.
 5) Emit callbacks `onPullSuccess` with counts/timing.
 
@@ -138,10 +134,7 @@ App
 - Custom: app-provided merge in `onConflict`, then enqueue merged doc back to Outbox for retry.
 
 ## Cleanup
-- Tombstone GC (optional): an application can supply a local cleanup policy once
-  the deletion has been synchronized. Server-side physical cleanup is independent
-  and does not produce another business deletion notification. Local retention
-  must not assume the server retains deletion history indefinitely.
+- Tombstone GC (optional): app can provide policy (e.g., delete tombstones older than N days after last checkpoint synced) to keep local store small.
 
 ## Connection Health & Keepalive
 

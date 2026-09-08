@@ -55,33 +55,8 @@ Documents in responses and requests use a flattened JSON object with reserved me
 - Semantics:
   - Documents are ordered by server checkpoint (monotonic).
   - `checkpoint` in response is the new high-water mark for the next pull.
-  - Logical deletions are represented by retained `deleted: true` tombstones.
-    Their bodies retain identity, collection, version, and timestamps; former
-    business fields have been cleared.
-
-### Deletion lifecycle
-
-```text
-logical deletion -> retained tombstone -> pull response
-                                             |
-                                      apply locally
-                                             |
-                                      save checkpoint
-
-tombstone expiry -> physical cleanup -> no second business deletion
-```
-
-| Boundary | Required behavior or limit |
-| --- | --- |
-| Logical deletion | Supply the business deletion signal and retained state for replication |
-| Client completion | Apply each tombstone before saving the response checkpoint |
-| Tombstone content | Retain identity and metadata; clear former business fields |
-| Physical cleanup | Suppress the raw removal as a business notification |
-| Offline interval | Recovery from a document scan is limited by tombstone retention |
-| Removed tombstone | Physical removal leaves no tombstone to scan; this protocol supplies neither a snapshot nor a history-gap recovery procedure |
-
-See the [storage deletion contract](../core/storage/03.stores.md#document-deletion-and-physical-cleanup)
-for ownership and retention prerequisites.
+  - Deleted docs are represented via `deleted: true`; identity and metadata remain, while former business fields are cleared.
+  - Physical cleanup does not create another business deletion; a removed tombstone is unavailable to document scans. See [deletion semantics](../core/storage/03.stores.md#document-deletion-and-physical-cleanup).
 
 ## Push
 
@@ -151,6 +126,4 @@ for ownership and retention prerequisites.
 
 - Do not include storage-internal fields in any response or request validation.
 - Keep batch sizes modest (100–500) for IndexedDB performance when using RxDB Dexie.
-- Retained logical-deletion documents include `id`, `collection`, `version`, and
-  timestamps so clients can identify and apply the tombstone. Raw MongoDB
-  physical-delete notifications are not replication tombstone documents.
+- Deleted docs should still include `id`, `version`, and timestamps so clients can cleanly tombstone or purge.

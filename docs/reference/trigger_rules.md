@@ -1,9 +1,10 @@
 # Trigger Rules Guide
 
-Configure triggers with JSON and write conditions using
-[Common Expression Language (CEL)](https://github.com/google/cel-spec).
+This guide explains how to configure Triggers in Syntrix and how to write conditions using the Common Expression Language (CEL).
 
 ## Trigger Configuration
+
+A Trigger is defined by a JSON configuration object. Here is the structure:
 
 ```json
 {
@@ -12,7 +13,7 @@ Configure triggers with JSON and write conditions using
   "database": "acme",
   "collection": "chats/*/members",
   "events": ["create"],
-  "condition": "event.document.age >= 18",
+  "condition": "event.document.data.age >= 18",
   "url": "http://localhost:3000/webhooks/welcome",
   "headers": {
     "X-Custom-Header": "value"
@@ -25,116 +26,91 @@ Configure triggers with JSON and write conditions using
 }
 ```
 
-| Field | Meaning |
-|---|---|
-| `triggerId` | Unique trigger identifier |
-| `collection` | Logical collection pattern; `chats/*/messages` matches `chats/room1/messages` |
-| `events` | Business event types: `create`, `update`, `delete` |
-| `condition` | Boolean CEL expression; an empty condition matches after scope filtering |
-| `url` | Webhook POST destination |
-| `retryPolicy` | Delivery retry settings; backoffs use duration strings such as `1s`, `100ms`, or `1m` |
+### Fields
 
-`delete` means Syntrix logical document deletion. MongoDB physical document
-removal does not fire a trigger.
+-   **`triggerId`**: Unique identifier for the trigger.
+-   **`collection`**: The database collection to watch (e.g., `users`, `orders`). Supports wildcards (e.g., `chats/*/messages` matches `chats/room1/messages`).
+-   **`events`**: List of event types to listen for: `create`, `update`, `delete`. Here `delete` means Syntrix logical deletion; Mongo physical removal does not fire a trigger.
+-   **Deletion data**: A tombstone retains metadata and clears business fields. Access to former values requires the proposed [before-image capability](../../.agents/notes/proposed/feature/2026-09-07-trigger-before-images.md).
+-   **`condition`**: A CEL expression string. If this evaluates to `true`, the webhook is fired. If empty, it defaults to `true`.
+-   **`url`**: The destination URL for the webhook POST request.
+-   **`retryPolicy`**: Configuration for retrying failed deliveries. Backoff times are duration strings (e.g., `1s`, `100ms`, `1m`).
 
-## CEL Event Context
+## Writing Conditions (CEL)
 
-Conditions receive one `event` object:
+Syntrix uses Google's [Common Expression Language (CEL)](https://github.com/google/cel-spec) for defining trigger conditions. CEL is a simple, safe, and fast expression language.
+
+### The `event` Context
+
+All conditions are evaluated against an `event` variable. The structure of `event` is:
 
 ```json
 {
-  "type": "create",
-  "timestamp": 1697041234000,
-  "document": {
-    "id": "acme:<document-hash>",
+  "type": "create",          // "create", "update", or "delete"
+  "path": "users/user_123",  // Full document path
+  "timestamp": 1697041234,   // Event timestamp (Unix)
+  "document": {              // The document state (User-Facing Document)
+    "id": "user_123",        // Business ID
     "collection": "users",
     "version": 1,
-    "name": "Alice",
+    "name": "Alice",         // Flattened fields
     "age": 25,
     "role": "admin",
     "tags": ["vip", "beta"]
-  },
-  "before": null
+  }
 }
 ```
 
-| Field | Meaning |
-|---|---|
-| `type` | Business event type |
-| `timestamp` | Puller normalization time in Unix milliseconds |
-| `document` | Flattened business data plus stored `id`, `collection`, and `version`; metadata overwrites colliding business fields |
-| `document.id` | Storage identifier; original business-ID access is not guaranteed |
-| `before` | Previous image; currently `null` for all production event types |
+### Examples
 
-There is no `event.path`, nested `event.document.data`, or storage `deleted` flag
-in the CEL context.
-
-## Logical Deletion and Previous Data
-
-The [storage deletion lifecycle](../design/server/core/storage/03.stores.md#document-deletion-and-physical-cleanup)
-retains a tombstone with `deleted=true`, business `data={}`, and document metadata.
-
-| Operation | Trigger event | Available business data |
-|---|---|---|
-| Logical deletion | `delete`; `event.document` retains `id`, `collection`, and `version` | Cleared; previous fields are unavailable |
-| Physical document removal, including later tombstone cleanup | None | No additional deletion trigger |
-
-Logical-delete CEL input:
-
-```json
-{
-  "type": "delete",
-  "timestamp": 1697041235000,
-  "document": {
-    "id": "acme:<document-hash>",
-    "collection": "users",
-    "version": 2
-  },
-  "before": null
-}
+#### 1. Simple Field Check
+Trigger only when a user's age is 18 or older.
+```cel
+event.document.age >= 18
 ```
 
-| Capability | Availability |
-|---|---|
-| Match a logical deletion | Use `event.type == 'delete'` and retained metadata |
-| Read previous values or compare old and new values | Requires proposed [before-image capture](../../.agents/notes/proposed/feature/2026-09-07-trigger-before-images.md) |
-| Enable previous images with `includeBefore` | Current production input does not capture them; the setting cannot supply absent data |
-| Access cleared or optional fields | Use `has(event.document.field)` for optional data; guards cannot recover previous values |
-| Webhook business payload for deletion | Empty; JSON omits `payload`. Event type and routing metadata remain present |
+#### 2. String Matching
+Trigger when a user's role is 'admin'.
+```cel
+event.document.role == 'admin'
+```
 
-## Matching and Errors
+#### 3. Boolean Logic
+Trigger for active users who are also VIPs.
+```cel
+event.document.isActive == true && event.document.isVIP == true
+```
 
-| Outcome | Current behavior |
-|---|---|
-| Scope mismatch or CEL `false` | No task |
-| Scope match with CEL `true` or an empty condition | Create a delivery task |
-| Invalid CEL, non-boolean result, missing-field access, or null-image dereference | Evaluation error; service logs the failure and skips that rule for the event |
+#### 4. List Operations
+Trigger if the user has the 'beta' tag.
+```cel
+'beta' in event.document.tags
+```
 
-The current error handling does not guarantee retry or recovery of a failed
-evaluation. Historical-image failure handling remains part of the before-image
-proposal.
+#### 5. Null Checks
+Trigger if the 'email' field exists and is not null.
+```cel
+has(event.document.email) && event.document.email != null
+```
 
-## Condition Examples
+#### 6. Complex Logic
+Trigger on high-value orders (amount > 1000) OR orders from specific regions.
+```cel
+event.document.amount > 1000 || event.document.region in ['US', 'EU']
 
-| Intent | CEL condition |
-|---|---|
-| Adult user | `event.document.age >= 18` |
-| Administrator | `event.document.role == 'admin'` |
-| Active VIP | `event.document.isActive == true && event.document.isVIP == true` |
-| Beta participant | `'beta' in event.document.tags` |
-| Email exists and is non-null | `has(event.document.email) && event.document.email != null` |
-| High-value or selected-region order | `event.document.amount > 1000 \|\| event.document.region in ['US', 'EU']` |
-| Updated document is shipped | `event.type == 'update' && event.document.status == 'shipped'` |
-| Logical deletion | `event.type == 'delete'` |
+```
 
-The shipped-status example checks the current state; it does not prove that
-`status` changed.
+#### 7. Event Type Specific
+Although you usually filter by `events` array in config, you can also check in CEL:
+```cel
+event.type == 'update' && event.document.data.status == 'shipped'
+```
 
-## Testing and Limits
+## Testing Rules
 
-- Test expressions in the [CEL Playground](https://playcel.undistro.io/) with a
-  Generic environment and representative event data, or in application tests.
-- Conditions must be deterministic for replayability; random and current-time
-  functions are unsupported.
-- Conditions cannot make network requests or database lookups. They evaluate
-  only the supplied event data.
+You can test your CEL expressions using the [CEL Playground](https://playcel.undistro.io/) (select "Generic" environment) or by writing unit tests in your application code.
+
+## Limitations
+
+-   **Deterministic**: CEL functions must be deterministic. Randomness (e.g., `rand()`) or time-based functions (e.g., `now()`) are generally not supported inside the condition to ensure replayability.
+-   **No External Calls**: Conditions cannot make network requests or database lookups. They can only evaluate the data present in the `event` object.

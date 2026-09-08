@@ -116,7 +116,6 @@ These endpoints allow you to perform CRUD operations on documents.
 - `createdAt`: Database creation timestamp (Unix milliseconds).
 - `updatedAt`: Database last update timestamp (Unix milliseconds).
 - `collection`: Collection path.
-- `deleted`: Logical deletion marker on retained tombstones.
 
 ### Get Document
 
@@ -205,26 +204,15 @@ Update specific fields of an existing document.
 
 ### Delete Document
 
-Logically delete a document by retaining a tombstone.
+Logically delete a document: retain its tombstone and metadata, clear business
+data, and advance version/time. Later physical cleanup does not generate another
+business deletion. See [deletion semantics](../design/server/core/storage/03.stores.md#document-deletion-and-physical-cleanup).
 
 **Endpoint:** `DELETE /api/v1/{document_path...}`
 
 **Example:** `DELETE /api/v1/rooms/room-1/messages/msg-1`
 
 **Response (204 No Content):** Empty body.
-
-| Effect | Result |
-| --- | --- |
-| Ordinary reads | Hide the tombstone |
-| Identity and routing | Retain document metadata |
-| Business fields | Clear the deleted content |
-| Version and time | Advance version and modification timestamp |
-| Business event | Notify logical deletion |
-| Later physical cleanup | No second business deletion notification |
-| Retention | Business data is cleared; deletion history has no indefinite-retention guarantee. Physical cleanup depends on configured retention and cleanup prerequisites |
-
-See [document deletion and physical cleanup](../design/server/core/storage/03.stores.md#document-deletion-and-physical-cleanup)
-and [replication tombstones](replication.md#deletion-and-retention).
 
 ## Query Operations
 

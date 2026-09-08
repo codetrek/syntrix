@@ -69,35 +69,8 @@ Replication endpoints for offline-first clients. All documents use a flattened s
 - 409: (reserved) explicit conflict signaling; currently conflicts are returned in 200 with `conflicts`
 - 500: server error
 
-## Deletion and retention
-
-A Syntrix document deletion is represented by a retained document with
-`deleted: true`. Its public identity, collection, version, and timestamps identify
-the state the client must remove or mark deleted; the former business fields
-have been cleared. For example:
-
-```json
-{
-  "id": "msg-3",
-  "collection": "rooms/room-1/messages",
-  "version": 4,
-  "updatedAt": 1710000001000,
-  "createdAt": 1700000000000,
-  "deleted": true
-}
-```
-
-| Boundary | Client-visible rule |
-| --- | --- |
-| Completion | Apply the tombstone before saving the response checkpoint |
-| Former data | A tombstone is not a before-image of deleted business fields |
-| Physical cleanup | No second business deletion is generated |
-| Physically removed tombstone | A document scan cannot recover it; finite retention limits recovery of old client state |
-
-The [storage deletion contract](../design/server/core/storage/03.stores.md#document-deletion-and-physical-cleanup)
-owns cleanup prerequisites and the distinction between source and business events.
-
 ## Notes
 - Document fields are flattened; do not send storage-layer fields like `_id`, `fullpath`, or `parent`.
 - Checkpoint must be persisted by the client and reused for the next pull.
-- Apply live documents and retained tombstones using the same document identity.
+- Deleted docs are expressed via `deleted: true` in pull responses; identity and metadata remain, while former business fields are cleared.
+- Apply tombstones before saving progress. Physical cleanup is not another business deletion and removes the tombstone from document scans. See [deletion semantics](../design/server/core/storage/03.stores.md#document-deletion-and-physical-cleanup).

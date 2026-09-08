@@ -104,27 +104,8 @@ This is the business layer Document type, visible to the API.
 
 Response (204 No Content)
 
-| Concern | Contract |
-| --- | --- |
-| Stored state | Retain a `deleted=true` tombstone and its document identity and routing metadata |
-| Business data | Clear the document's former business fields |
-| Version and time | Advance the version and modification time; assign a cleanup deadline |
-| Ordinary reads | Hide the tombstone |
-| Business change | Deliver logical deletion through the change stream; expose retained tombstones to replication |
-| Physical cleanup | Remove the expired record separately; suppress a second business deletion notification |
-
-```text
-DELETE request -> retained tombstone -> logical deletion notification
-                         |
-                    cleanup deadline
-                         |
-                         v
-                  physical removal
-                  (no second notification)
-```
-
-See [document deletion and physical cleanup](../core/storage/03.stores.md#document-deletion-and-physical-cleanup)
-for the lifecycle and layer boundaries.
+- Logical deletion retains a tombstone and its metadata, clears business data, and advances version/time.
+- Later physical cleanup does not send a second business deletion. See [deletion semantics](../core/storage/03.stores.md#document-deletion-and-physical-cleanup).
 
 ### 1.2 Query Operations
 
