@@ -69,7 +69,36 @@ Replication endpoints for offline-first clients. All documents use a flattened s
 - 409: (reserved) explicit conflict signaling; currently conflicts are returned in 200 with `conflicts`
 - 500: server error
 
+## Deletion and retention
+
+A Syntrix document deletion is represented by a retained document with
+`deleted: true`. Its public identity, collection, version, and timestamps identify
+the state the client must remove or mark deleted; the former business fields
+have been cleared. For example:
+
+```json
+{
+  "id": "msg-3",
+  "collection": "rooms/room-1/messages",
+  "version": 4,
+  "updatedAt": 1710000001000,
+  "createdAt": 1700000000000,
+  "deleted": true
+}
+```
+
+Apply the tombstone before saving the pull response's checkpoint. MongoDB stores
+this logical deletion as an update. Physical cleanup after the retention deadline
+is a separate operation and does not generate a second business deletion. A
+physically removed tombstone can no longer be returned by a document scan;
+retention therefore does not promise recovery for arbitrarily old client state.
+
+The [storage deletion contract](../design/server/core/storage/03.stores.md#document-deletion-and-physical-cleanup)
+defines tombstone metadata, cleanup prerequisites, and the distinction between
+Store Watch events and Syntrix business events. A tombstone is not a before-image
+of the deleted business data.
+
 ## Notes
 - Document fields are flattened; do not send storage-layer fields like `_id`, `fullpath`, or `parent`.
 - Checkpoint must be persisted by the client and reused for the next pull.
-- Deleted docs are expressed via `deleted: true` in pull responses.
+- Apply live documents and retained tombstones using the same document identity.

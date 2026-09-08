@@ -55,7 +55,24 @@ Documents in responses and requests use a flattened JSON object with reserved me
 - Semantics:
   - Documents are ordered by server checkpoint (monotonic).
   - `checkpoint` in response is the new high-water mark for the next pull.
-  - Deleted docs are represented via `deleted: true`; body still includes metadata.
+  - Logical deletions are represented by retained `deleted: true` tombstones.
+    Their bodies retain identity, collection, version, and timestamps; former
+    business fields have been cleared.
+
+### Deletion lifecycle
+
+The [storage deletion contract](../core/storage/03.stores.md#document-deletion-and-physical-cleanup)
+distinguishes Syntrix logical deletion from physical storage cleanup. The Mongo
+adapter records a logical deletion as an update that creates a tombstone. That
+change supplies the business deletion notification and the retained state needed
+by pull replication. Later physical removal is ignored by business event
+conversion and does not represent another user deletion.
+
+Clients apply each tombstone before persisting the response checkpoint. They
+must not expect the tombstone to contain the document's former business data.
+After physical cleanup, a document scan cannot recover that tombstone; a finite
+retention policy cannot support an unbounded offline interval. This lifecycle
+does not add a snapshot or history-gap recovery mechanism to this protocol.
 
 ## Push
 
@@ -125,4 +142,6 @@ Documents in responses and requests use a flattened JSON object with reserved me
 
 - Do not include storage-internal fields in any response or request validation.
 - Keep batch sizes modest (100–500) for IndexedDB performance when using RxDB Dexie.
-- Deleted docs should still include `id`, `version`, and timestamps so clients can cleanly tombstone or purge.
+- Retained logical-deletion documents include `id`, `collection`, `version`, and
+  timestamps so clients can identify and apply the tombstone. Raw MongoDB
+  physical-delete notifications are not replication tombstone documents.

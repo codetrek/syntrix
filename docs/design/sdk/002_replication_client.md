@@ -29,7 +29,10 @@
 ## Data Model (flattened)
 - Fields: `id`, `version?`, `updatedAt`, `createdAt`, `collection`, `deleted?`, plus user fields.
 - RxDB primary key: `id`. Indexes: `updatedAt`, `collection`, optionally business fields.
-- Tombstones: keep `deleted: true` docs with timestamps for cleanup/filters.
+- Tombstones: keep `deleted: true` documents with their identity, collection,
+  version, and timestamps. Server deletion clears business fields; a tombstone
+  does not contain the previous document state. Follow the
+  [server deletion and retention contract](../../reference/replication.md#deletion-and-retention).
 
 ## Components
 - **ReplicationCoordinator**: high-level orchestrator per collection; owns pull/push workers, realtime trigger wiring, state, callbacks.
@@ -90,7 +93,9 @@ App
 ### Pull sequence (happy path)
 1) Determine `checkpoint` from CheckpointStore (default "0").
 2) Call `/replication/v1/pull?collection=...&checkpoint=...&limit=...`.
-3) Upsert returned documents into RxDB; preserve `deleted` tombstones.
+3) Upsert returned documents into RxDB; apply `deleted` tombstones to the same
+   document identity before advancing progress. Do not retain stale business
+   fields by treating a tombstone as an ordinary partial update.
 4) Persist returned `checkpoint` for next cycle.
 5) Emit callbacks `onPullSuccess` with counts/timing.
 
@@ -134,7 +139,10 @@ App
 - Custom: app-provided merge in `onConflict`, then enqueue merged doc back to Outbox for retry.
 
 ## Cleanup
-- Tombstone GC (optional): app can provide policy (e.g., delete tombstones older than N days after last checkpoint synced) to keep local store small.
+- Tombstone GC (optional): an application can supply a local cleanup policy once
+  the deletion has been synchronized. Server-side physical cleanup is independent
+  and does not produce another business deletion notification. Local retention
+  must not assume the server retains deletion history indefinitely.
 
 ## Connection Health & Keepalive
 

@@ -74,9 +74,30 @@ The watcher subscribes to Puller and emits filtered change events.
 - Subscribes to Puller with a consumer ID
 - Filters events by `Database` field (Syntrix logical database)
 - Transforms `PullerEvent` to `SyntrixChangeEvent`
+- Emits business `delete` events for retained tombstones from MongoDB updates or replacements
+- Ignores MongoDB physical document deletes through `ErrDeleteOPIgnored`
 - Manages checkpoint for resume capability
 
 See: [01.checkpoint.md](01.checkpoint.md)
+
+#### Document deletion
+
+Syntrix logical deletion writes `deleted=true`, clears business `data` to `{}`,
+and retains document metadata. The watcher keeps this tombstone in
+`SyntrixChangeEvent.Document` and classifies it as `delete`. MongoDB physical
+document deletion, including later tombstone cleanup, does not produce a
+business trigger event. The [storage deletion contract](../../core/storage/03.stores.md#document-deletion-and-physical-cleanup)
+owns the distinction and retention behavior.
+
+The current Puller path does not capture previous document images, so `Before`
+is absent. CEL sees the tombstone's `id`, `collection`, and `version` under
+`event.document`, with no previous business fields and `event.before=null`.
+Task construction uses the tombstone's empty `Data` map as `Payload`; JSON
+serialization omits this empty `payload` field. Matching and delivery still
+carry the business `delete` type and document routing metadata.
+
+See [CEL evaluation](02.cel_evaluator.md#document-deletion-and-before-images) for
+supported conditions and the proposed before-image capability.
 
 ### 2. CEL Evaluator
 

@@ -116,6 +116,7 @@ These endpoints allow you to perform CRUD operations on documents.
 - `createdAt`: Database creation timestamp (Unix milliseconds).
 - `updatedAt`: Database last update timestamp (Unix milliseconds).
 - `collection`: Collection path.
+- `deleted`: Logical deletion marker on retained tombstones.
 
 ### Get Document
 
@@ -204,13 +205,25 @@ Update specific fields of an existing document.
 
 ### Delete Document
 
-Delete a document.
+Logically delete a document by replacing its live state with a retained
+tombstone. Ordinary document reads hide the tombstone. The stored document keeps
+its identity and routing metadata, increments its version, updates its timestamp,
+and clears its business data.
 
 **Endpoint:** `DELETE /api/v1/{document_path...}`
 
 **Example:** `DELETE /api/v1/rooms/room-1/messages/msg-1`
 
 **Response (204 No Content):** Empty body.
+
+The logical deletion is the business change consumed by realtime and replication
+paths. MongoDB implements it as an update setting `deleted=true`; later physical
+cleanup of the expired record does not produce another Syntrix deletion
+notification. Retention and cleanup are storage configuration, not a promise to
+retain the deleted business fields or deletion history indefinitely. See
+[document deletion and physical cleanup](../design/server/core/storage/03.stores.md#document-deletion-and-physical-cleanup)
+for the storage and event-layer contracts, and
+[replication tombstones](replication.md#deletion-and-retention) for the pull representation.
 
 ## Query Operations
 

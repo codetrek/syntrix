@@ -94,11 +94,24 @@ the stream returns `WatchPayloadUnavailable`. It neither leaks an event from
 another collection nor skips an event whose membership is unknown.
 
 An ordinary-collections watch can emit a physical delete using document identity
-alone. Non-delete events require available document enrichment. `Document` may
-reflect a later lookup state; `Before` is exposed only when requested and
-available from the source. This API does not promise retained historical payloads
-or enable Mongo pre-images. Source capability and retention remain operational
+alone. The current Mongo Watch adapter emits `EventDelete` for both the logical
+tombstone transition and physical removal, with `Document == nil` for either
+event. An update's immutable `updateDescription` identifies the tombstone
+transition; source operations other than physical deletes still require
+available document enrichment. `Document` on create/update events may reflect a
+later lookup state. `Before` is exposed only when requested and available from
+the source. This API does not promise retained historical payloads or enable
+Mongo pre-images. Source capability and retention remain operational
 prerequisites for a scope that needs those images or routing metadata.
+
+The [document deletion lifecycle](../../../../docs/design/server/core/storage/03.stores.md#document-deletion-and-physical-cleanup)
+owns the distinction between normal document deletion, physical cleanup, and
+administrative purge. Normal `Delete` uses Mongo `UpdateOne` to retain a tombstone
+with `deleted = true`, empty `data`, and identity/routing metadata. Subsequent
+physical cleanup is garbage collection. Store Watch reports both source changes;
+its shared event type does not identify which one was the logical business
+deletion. This is separate from Puller's business conversion, which ignores raw
+physical deletes and retains the available tombstone for a logical delete.
 
 ## Alternatives
 
@@ -163,6 +176,17 @@ validation. Puller ingestion still obtains Mongo clients through
 and bypasses `DocumentStore.Watch`. Its ingestion, batching, caches, pending
 writes, persisted buffers, and local/gRPC delivery are unchanged by this
 contract. The broader Puller design remains separate proposed work.
+
+Puller's current raw `StoreChangeEvent` preserves Mongo operation types,
+including physical deletes. The
+[`events.Transform` converter](../../../../internal/puller/events/transform.go)
+returns `ErrDeleteOPIgnored` for those deletes and maps update/replace events
+with an available tombstone to business `EventDelete`, retaining that document.
+It neither consumes Store Watch events nor supplies a historical before-image.
+An update lookup can observe newer state; missing update/replace payloads are
+rejected by the normalizer and logged/skipped by current ingestion. These limits
+remain distinct from Store Watch's terminal payload failures and optional
+source pre-images.
 
 | Deferred work and owner | Cost and constraint retained here |
 |---|---|
