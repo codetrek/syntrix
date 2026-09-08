@@ -32,9 +32,9 @@ contract insufficient.
 
 ## Alternatives
 
-**Return overload immediately.** This bounds memory, but the current ingestion
-loop continues after Write errors. It requires an explicit retry/stop contract
-to avoid skipped publication; blocking admission directly backpressures reading.
+**Return overload immediately.** This bounds memory but terminates capture under
+the implemented [admission-failure handling](../../implemented/bug-fix/2026-09-08-puller-capture-failures.md).
+Blocking admission keeps temporary capacity exhaustion within normal backpressure.
 
 **Allocate a buffered channel of queue_size.** A channel simplifies waiting, but
 its capacity alone excludes the in-flight batch and does not bound admission
@@ -59,7 +59,7 @@ Payload size still affects memory within the event count bound.
 
 ## Dependencies
 
-[Persist before publish](../architecture/2026-09-07-puller-persist-before-publish.md)
-defines completion and error ownership;
+[Capture failure handling](../../implemented/bug-fix/2026-09-08-puller-capture-failures.md)
+preserves existing atomic event/token commits and terminal write failures;
 [history-gap recovery](../architecture/2026-09-07-puller-history-gap-recovery.md)
 handles upstream history expiry during prolonged stalls.
