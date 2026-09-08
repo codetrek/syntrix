@@ -204,7 +204,9 @@ Update specific fields of an existing document.
 
 ### Delete Document
 
-Delete a document.
+Logically delete a document: retain its tombstone and metadata, clear business
+data, and advance version/time. Later physical cleanup does not generate another
+business deletion. See [deletion semantics](../design/server/core/storage/03.stores.md#document-deletion-and-physical-cleanup).
 
 **Endpoint:** `DELETE /api/v1/{document_path...}`
 

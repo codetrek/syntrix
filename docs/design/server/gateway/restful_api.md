@@ -104,6 +104,9 @@ This is the business layer Document type, visible to the API.
 
 Response (204 No Content)
 
+- Logical deletion retains a tombstone and its metadata, clears business data, and advances version/time.
+- Later physical cleanup does not send a second business deletion. See [deletion semantics](../core/storage/03.stores.md#document-deletion-and-physical-cleanup).
+
 ### 1.2 Query Operations
 
 #### Execute Query

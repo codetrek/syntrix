@@ -72,4 +72,5 @@ Replication endpoints for offline-first clients. All documents use a flattened s
 ## Notes
 - Document fields are flattened; do not send storage-layer fields like `_id`, `fullpath`, or `parent`.
 - Checkpoint must be persisted by the client and reused for the next pull.
-- Deleted docs are expressed via `deleted: true` in pull responses.
+- Deleted docs are expressed via `deleted: true` in pull responses; identity and metadata remain, while former business fields are cleared.
+- Apply tombstones before saving progress. Physical cleanup is not another business deletion and removes the tombstone from document scans. See [deletion semantics](../design/server/core/storage/03.stores.md#document-deletion-and-physical-cleanup).

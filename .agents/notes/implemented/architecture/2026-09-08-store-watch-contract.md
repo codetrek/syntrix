@@ -100,6 +100,12 @@ available from the source. This API does not promise retained historical payload
 or enable Mongo pre-images. Source capability and retention remain operational
 prerequisites for a scope that needs those images or routing metadata.
 
+The [deletion lifecycle](../../../../docs/design/server/core/storage/03.stores.md#document-deletion-and-physical-cleanup)
+distinguishes logical tombstone updates from physical removal. Raw Puller events
+retain that distinction; business conversion ignores physical deletion. Store
+Watch instead uses `EventDelete` with nil `Document` for both source changes,
+so its event type alone is not the business deletion contract.
+
 ## Alternatives
 
 **Keep the event channel and untyped raw tokens.** This retains the earlier call

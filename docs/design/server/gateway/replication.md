@@ -55,7 +55,8 @@ Documents in responses and requests use a flattened JSON object with reserved me
 - Semantics:
   - Documents are ordered by server checkpoint (monotonic).
   - `checkpoint` in response is the new high-water mark for the next pull.
-  - Deleted docs are represented via `deleted: true`; body still includes metadata.
+  - Deleted docs are represented via `deleted: true`; identity and metadata remain, while former business fields are cleared.
+  - Physical cleanup does not create another business deletion; a removed tombstone is unavailable to document scans. See [deletion semantics](../core/storage/03.stores.md#document-deletion-and-physical-cleanup).
 
 ## Push
 

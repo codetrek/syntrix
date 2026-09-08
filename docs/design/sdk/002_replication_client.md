@@ -29,7 +29,7 @@
 ## Data Model (flattened)
 - Fields: `id`, `version?`, `updatedAt`, `createdAt`, `collection`, `deleted?`, plus user fields.
 - RxDB primary key: `id`. Indexes: `updatedAt`, `collection`, optionally business fields.
-- Tombstones: keep `deleted: true` docs with timestamps for cleanup/filters.
+- Tombstones: keep `deleted: true` docs with identity and timestamps; former business fields are cleared. Physical cleanup is not another business deletion. See [deletion semantics](../server/core/storage/03.stores.md#document-deletion-and-physical-cleanup).
 
 ## Components
 - **ReplicationCoordinator**: high-level orchestrator per collection; owns pull/push workers, realtime trigger wiring, state, callbacks.

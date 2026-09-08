@@ -30,7 +30,8 @@ A Trigger is defined by a JSON configuration object. Here is the structure:
 
 -   **`triggerId`**: Unique identifier for the trigger.
 -   **`collection`**: The database collection to watch (e.g., `users`, `orders`). Supports wildcards (e.g., `chats/*/messages` matches `chats/room1/messages`).
--   **`events`**: List of event types to listen for: `create`, `update`, `delete`.
+-   **`events`**: List of event types to listen for: `create`, `update`, `delete`. Here `delete` means Syntrix logical deletion; Mongo physical removal does not fire a trigger.
+-   **Deletion data**: A tombstone retains metadata and clears business fields. Access to former values requires the proposed [before-image capability](../../.agents/notes/proposed/feature/2026-09-07-trigger-before-images.md).
 -   **`condition`**: A CEL expression string. If this evaluates to `true`, the webhook is fired. If empty, it defaults to `true`.
 -   **`url`**: The destination URL for the webhook POST request.
 -   **`retryPolicy`**: Configuration for retrying failed deliveries. Backoff times are duration strings (e.g., `1s`, `100ms`, `1m`).

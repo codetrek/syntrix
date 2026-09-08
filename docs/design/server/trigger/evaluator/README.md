@@ -74,6 +74,7 @@ The watcher subscribes to Puller and emits filtered change events.
 - Subscribes to Puller with a consumer ID
 - Filters events by `Database` field (Syntrix logical database)
 - Transforms `PullerEvent` to `SyntrixChangeEvent`
+- Preserves Syntrix logical deletion from tombstone updates; ignores Mongo physical deletion, including later cleanup
 - Manages checkpoint for resume capability
 
 See: [01.checkpoint.md](01.checkpoint.md)

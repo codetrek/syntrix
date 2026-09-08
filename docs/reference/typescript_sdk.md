@@ -68,7 +68,7 @@ Both clients return `DocumentReference` and `CollectionReference` objects with t
 - **`get(): Promise<T | null>`** — fetch the document.
 - **`set(data: T): Promise<T>`** — overwrite the document.
 - **`update(data: Partial<T>): Promise<T>`** — partial update.
-- **`delete(): Promise<void>`** — delete the document.
+- **`delete(): Promise<void>`** — logically delete the document; see [tombstone semantics](api.md#delete-document).
 - **`collection(path: string): CollectionReference`** — sub-collection reference.
 
 ### CollectionReference `<T>`
