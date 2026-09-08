@@ -87,16 +87,15 @@ have been cleared. For example:
 }
 ```
 
-Apply the tombstone before saving the pull response's checkpoint. MongoDB stores
-this logical deletion as an update. Physical cleanup after the retention deadline
-is a separate operation and does not generate a second business deletion. A
-physically removed tombstone can no longer be returned by a document scan;
-retention therefore does not promise recovery for arbitrarily old client state.
+| Boundary | Client-visible rule |
+| --- | --- |
+| Completion | Apply the tombstone before saving the response checkpoint |
+| Former data | A tombstone is not a before-image of deleted business fields |
+| Physical cleanup | No second business deletion is generated |
+| Physically removed tombstone | A document scan cannot recover it; finite retention limits recovery of old client state |
 
 The [storage deletion contract](../design/server/core/storage/03.stores.md#document-deletion-and-physical-cleanup)
-defines tombstone metadata, cleanup prerequisites, and the distinction between
-Store Watch events and Syntrix business events. A tombstone is not a before-image
-of the deleted business data.
+owns cleanup prerequisites and the distinction between source and business events.
 
 ## Notes
 - Document fields are flattened; do not send storage-layer fields like `_id`, `fullpath`, or `parent`.

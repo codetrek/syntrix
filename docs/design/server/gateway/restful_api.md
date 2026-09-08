@@ -104,17 +104,27 @@ This is the business layer Document type, visible to the API.
 
 Response (204 No Content)
 
-This operation logically deletes the Syntrix document. Storage retains a
-`deleted=true` tombstone with document identity and metadata, clears business
-data, advances the version and modification time, and assigns a cleanup deadline.
-Ordinary document reads exclude the tombstone. In the Mongo adapter this is an
-update; later physical removal is a separate cleanup operation and is ignored by
-business event conversion. The logical deletion remains observable through the
-business change stream and retained replication tombstones.
+| Concern | Contract |
+| --- | --- |
+| Stored state | Retain a `deleted=true` tombstone and its document identity and routing metadata |
+| Business data | Clear the document's former business fields |
+| Version and time | Advance the version and modification time; assign a cleanup deadline |
+| Ordinary reads | Hide the tombstone |
+| Business change | Deliver logical deletion through the change stream; expose retained tombstones to replication |
+| Physical cleanup | Remove the expired record separately; suppress a second business deletion notification |
 
-[Document deletion and physical cleanup](../core/storage/03.stores.md#document-deletion-and-physical-cleanup)
-owns the lifecycle and layer boundaries. Retaining a tombstone does not retain
-the deleted document's former business fields.
+```text
+DELETE request -> retained tombstone -> logical deletion notification
+                         |
+                    cleanup deadline
+                         |
+                         v
+                  physical removal
+                  (no second notification)
+```
+
+See [document deletion and physical cleanup](../core/storage/03.stores.md#document-deletion-and-physical-cleanup)
+for the lifecycle and layer boundaries.
 
 ### 1.2 Query Operations
 

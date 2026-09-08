@@ -27,12 +27,16 @@
 - RxDB available (Dexie storage) in client environment.
 
 ## Data Model (flattened)
+
 - Fields: `id`, `version?`, `updatedAt`, `createdAt`, `collection`, `deleted?`, plus user fields.
 - RxDB primary key: `id`. Indexes: `updatedAt`, `collection`, optionally business fields.
-- Tombstones: keep `deleted: true` documents with their identity, collection,
-  version, and timestamps. Server deletion clears business fields; a tombstone
-  does not contain the previous document state. Follow the
-  [server deletion and retention contract](../../reference/replication.md#deletion-and-retention).
+- Tombstones follow the [server deletion contract](../../reference/replication.md#deletion-and-retention).
+
+| Tombstone content | Client rule |
+| --- | --- |
+| Identity, collection, version, timestamps | Preserve for local application and replication |
+| `deleted: true` | Mark the corresponding local document deleted |
+| Former business fields | Remove; the tombstone is not the previous document state |
 
 ## Components
 - **ReplicationCoordinator**: high-level orchestrator per collection; owns pull/push workers, realtime trigger wiring, state, callbacks.
@@ -43,21 +47,16 @@
 - **Outbox**: local queue of pending writes (create/update/replace/delete), durable across reloads.
 
 ## SDK Architecture (public surface)
-- Package entry: `pkg/syntrix-client-ts/src/index.ts` re-exports clients and will export replication orchestrator types once implemented.
-- Public clients remain:
-	- `SyntrixClient` for CRUD/query over HTTP.
-	- `TriggerClient` for trigger writes.
-	- `TriggerHandler` wrapper for trigger payload execution.
-- New replication surface (planned):
-	- `createReplicationCoordinator(options): ReplicationCoordinator` factory.
-	- Interfaces: `ReplicationOptions`, `PullOptions`, `PushOptions`, `RealtimeOptions`, `CheckpointStore`, `OutboxAdapter`, hooks types.
-- Suggested layout under `src/replication/`:
-	- `coordinator.ts` (orchestrator, public entry)
-	- `pull.ts` (PullWorker)
-	- `push.ts` (PushWorker)
-	- `realtime.ts` (trigger wiring abstraction)
-	- `checkpoint.ts`, `outbox.ts` (pluggable adapters)
-	- `types.ts` (options, hooks, DTOs)
+
+| Public boundary | Responsibility | Status |
+| --- | --- | --- |
+| `SyntrixClient` | HTTP document CRUD and queries | Existing |
+| `TriggerClient` | Trigger writes | Existing |
+| `TriggerHandler` | Trigger payload execution | Existing |
+| `createReplicationCoordinator(options)` | Construct the replication coordinator | Planned |
+| Replication, pull, push, and realtime options | Configure transport, batching, and scheduling | Planned |
+| Checkpoint and outbox adapters | Supply local persistence boundaries | Planned |
+| Hooks and DTOs | Define observations and transferred data | Planned |
 
 ### High-level call graph (SDK)
 ```

@@ -205,10 +205,7 @@ Update specific fields of an existing document.
 
 ### Delete Document
 
-Logically delete a document by replacing its live state with a retained
-tombstone. Ordinary document reads hide the tombstone. The stored document keeps
-its identity and routing metadata, increments its version, updates its timestamp,
-and clears its business data.
+Logically delete a document by retaining a tombstone.
 
 **Endpoint:** `DELETE /api/v1/{document_path...}`
 
@@ -216,14 +213,18 @@ and clears its business data.
 
 **Response (204 No Content):** Empty body.
 
-The logical deletion is the business change consumed by realtime and replication
-paths. MongoDB implements it as an update setting `deleted=true`; later physical
-cleanup of the expired record does not produce another Syntrix deletion
-notification. Retention and cleanup are storage configuration, not a promise to
-retain the deleted business fields or deletion history indefinitely. See
-[document deletion and physical cleanup](../design/server/core/storage/03.stores.md#document-deletion-and-physical-cleanup)
-for the storage and event-layer contracts, and
-[replication tombstones](replication.md#deletion-and-retention) for the pull representation.
+| Effect | Result |
+| --- | --- |
+| Ordinary reads | Hide the tombstone |
+| Identity and routing | Retain document metadata |
+| Business fields | Clear the deleted content |
+| Version and time | Advance version and modification timestamp |
+| Business event | Notify logical deletion |
+| Later physical cleanup | No second business deletion notification |
+| Retention | Business data is cleared; deletion history has no indefinite-retention guarantee. Physical cleanup depends on configured retention and cleanup prerequisites |
+
+See [document deletion and physical cleanup](../design/server/core/storage/03.stores.md#document-deletion-and-physical-cleanup)
+and [replication tombstones](replication.md#deletion-and-retention).
 
 ## Query Operations
 

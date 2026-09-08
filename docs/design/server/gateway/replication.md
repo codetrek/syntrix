@@ -61,18 +61,27 @@ Documents in responses and requests use a flattened JSON object with reserved me
 
 ### Deletion lifecycle
 
-The [storage deletion contract](../core/storage/03.stores.md#document-deletion-and-physical-cleanup)
-distinguishes Syntrix logical deletion from physical storage cleanup. The Mongo
-adapter records a logical deletion as an update that creates a tombstone. That
-change supplies the business deletion notification and the retained state needed
-by pull replication. Later physical removal is ignored by business event
-conversion and does not represent another user deletion.
+```text
+logical deletion -> retained tombstone -> pull response
+                                             |
+                                      apply locally
+                                             |
+                                      save checkpoint
 
-Clients apply each tombstone before persisting the response checkpoint. They
-must not expect the tombstone to contain the document's former business data.
-After physical cleanup, a document scan cannot recover that tombstone; a finite
-retention policy cannot support an unbounded offline interval. This lifecycle
-does not add a snapshot or history-gap recovery mechanism to this protocol.
+tombstone expiry -> physical cleanup -> no second business deletion
+```
+
+| Boundary | Required behavior or limit |
+| --- | --- |
+| Logical deletion | Supply the business deletion signal and retained state for replication |
+| Client completion | Apply each tombstone before saving the response checkpoint |
+| Tombstone content | Retain identity and metadata; clear former business fields |
+| Physical cleanup | Suppress the raw removal as a business notification |
+| Offline interval | Recovery from a document scan is limited by tombstone retention |
+| Removed tombstone | Physical removal leaves no tombstone to scan; this protocol supplies neither a snapshot nor a history-gap recovery procedure |
+
+See the [storage deletion contract](../core/storage/03.stores.md#document-deletion-and-physical-cleanup)
+for ownership and retention prerequisites.
 
 ## Push
 

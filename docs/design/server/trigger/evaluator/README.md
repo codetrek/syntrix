@@ -1,139 +1,86 @@
 # Evaluator Service Design
 
-## Overview
-
-The Evaluator Service watches document changes, evaluates trigger conditions, and publishes matched tasks to the delivery queue.
-
-## Responsibility
-
-- Watch document changes from Puller
-- Filter events by database
-- Evaluate trigger conditions using CEL
-- Build and publish DeliveryTask to NATS JetStream
-- Manage checkpoint for resume capability
+The Evaluator Service converts document changes into matched delivery tasks.
+Separating evaluation from HTTP delivery gives each service its own capacity and
+lifecycle while preserving document routing and resumable input.
 
 ## Data Flow
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                      Evaluator Service                                │
-│                                                                       │
-│  ┌──────────┐    ┌─────────┐    ┌───────────┐    ┌──────────────┐   │
-│  │ Watcher  │ -> │   CEL   │ -> │  Builder  │ -> │  Publisher   │   │
-│  │(Puller)  │    │Evaluator│    │(DelivTask)│    │(NATS JS)     │   │
-│  └──────────┘    └─────────┘    └───────────┘    └──────────────┘   │
-│       │                                                    │         │
-│       v                                                    v         │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                      Checkpoint Store                         │   │
-│  │                 (sys/checkpoints/trigger_evaluator)          │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────────────┘
-```
+```text
+Puller changes
+      |
+      v
++---------------------+
+| Business event gate |
++---------------------+
+      |               \ physical document removal
+      |                +----> No business trigger event
+      v
+Database / collection / event-type filters
+      |
+      v
+CEL condition ---- no match ----> No task
+      |
+      | match
+      v
+Delivery task ----> NATS JetStream ----> Delivery Service
 
-## Service Interface
-
-```go
-// Service evaluates document changes against trigger rules and publishes matched tasks.
-type Service interface {
-    // LoadTriggers validates and loads trigger rules.
-    LoadTriggers(triggers []*types.Trigger) error
-
-    // Start begins watching for changes and evaluating triggers.
-    // Blocks until context is cancelled.
-    Start(ctx context.Context) error
-
-    // Close releases resources.
-    Close() error
-}
-
-// ServiceOptions configures the evaluator service.
-type ServiceOptions struct {
-    Database     string  // Syntrix logical database for event filtering
-    StartFromNow bool    // If true, start from "now" when checkpoint missing
-    RulesFile    string  // Path to trigger rules file (JSON/YAML)
-    StreamName   string  // NATS stream name (default: "TRIGGERS")
-}
-
-// Dependencies contains external dependencies for the evaluator service.
-type Dependencies struct {
-    Store   storage.DocumentStore
-    Puller  puller.Service
-    Nats    *nats.Conn
-    Metrics types.Metrics
-}
+Puller progress ----> Evaluator checkpoint store ----> Resume position
 ```
 
-## Components
+The [checkpoint design](01.checkpoint.md) owns progress persistence and resume
+behavior. Receiving progress does not itself establish successful delivery.
 
-### 1. DocumentWatcher
+## Component Contracts
 
-The watcher subscribes to Puller and emits filtered change events.
+| Component | Responsibility | Boundary |
+|---|---|---|
+| Watcher | Subscribe with a consumer identity, select the logical database, and produce business events | Physical document removal produces no business event |
+| CEL evaluator | Match database, collection pattern, event type, and condition | Return match, no match, or evaluation failure; see [CEL evaluation](02.cel_evaluator.md) |
+| Task builder | Carry the matched event type, document routing metadata, and available business payload | Empty deleted data cannot supply previous business fields |
+| Publisher | Queue tasks in NATS JetStream | Subject: `<stream>.<database>.<collection>.<docKey>`; see [task publishing](03.publisher.md) |
+| Checkpoint store | Persist the evaluator's Puller progress for restart | Global storage key: `sys/checkpoints/trigger_evaluator` |
 
-**Key behaviors:**
-- Subscribes to Puller with a consumer ID
-- Filters events by `Database` field (Syntrix logical database)
-- Transforms `PullerEvent` to `SyntrixChangeEvent`
-- Emits business `delete` events for retained tombstones from MongoDB updates or replacements
-- Ignores MongoDB physical document deletes through `ErrDeleteOPIgnored`
-- Manages checkpoint for resume capability
+Publisher routing encodes the document key as base64url without padding. A
+subject exceeding 1024 bytes uses a hashed key fragment; the task retains the
+original routing identity.
 
-See: [01.checkpoint.md](01.checkpoint.md)
+## Deletion Contract
 
-#### Document deletion
+The [storage deletion lifecycle](../../core/storage/03.stores.md#document-deletion-and-physical-cleanup)
+owns tombstone retention and physical cleanup.
 
-Syntrix logical deletion writes `deleted=true`, clears business `data` to `{}`,
-and retains document metadata. The watcher keeps this tombstone in
-`SyntrixChangeEvent.Document` and classifies it as `delete`. MongoDB physical
-document deletion, including later tombstone cleanup, does not produce a
-business trigger event. The [storage deletion contract](../../core/storage/03.stores.md#document-deletion-and-physical-cleanup)
-owns the distinction and retention behavior.
+| Source change | Business event | Document state |
+|---|---|---|
+| Logical deletion: MongoDB update or replacement with `deleted=true` | `delete` | Retained tombstone; business `data={}` and document metadata preserved |
+| Physical document removal, including tombstone cleanup | None | No second logical deletion or trigger invocation |
 
-The current Puller path does not capture previous document images, so `Before`
-is absent. CEL sees the tombstone's `id`, `collection`, and `version` under
-`event.document`, with no previous business fields and `event.before=null`.
-Task construction uses the tombstone's empty `Data` map as `Payload`; JSON
-serialization omits this empty `payload` field. Matching and delivery still
-carry the business `delete` type and document routing metadata.
+### Current Payload Availability
 
-See [CEL evaluation](02.cel_evaluator.md#document-deletion-and-before-images) for
-supported conditions and the proposed before-image capability.
+| Consumer | Logical-delete payload | Limit |
+|---|---|---|
+| CEL | `event.type="delete"`; `event.document` contains stored `id`, `collection`, and `version` | Business fields and the storage `deleted` flag are absent |
+| CEL previous image | `event.before=null` | Current production input has no historical image; `includeBefore` does not enable capture |
+| Delivery task | `delete` type and routing metadata; empty business payload | JSON omits the empty `payload` field; deleted business data is unavailable |
 
-### 2. CEL Evaluator
+[Before-image capture](../../../../../.agents/notes/proposed/feature/2026-09-07-trigger-before-images.md)
+remains proposed. It owns capture, retention, transport, per-rule exposure, and
+failure behavior when a required historical image is unavailable.
 
-Evaluates trigger conditions against events.
+## Service Lifecycle and Configuration
 
-**Key behaviors:**
-- Compiles CEL expressions once and caches programs
-- Evaluates conditions against event data
-- Supports `path.Match` for collection glob matching
+| Operation | Contract |
+|---|---|
+| Load rules | Validate and activate trigger definitions |
+| Start | Watch and evaluate until context cancellation; report failures |
+| Close | Release resources owned by the evaluator |
 
-### 3. TaskPublisher
+| Setting | Purpose |
+|---|---|
+| `Database` | Syntrix logical database used for event filtering |
+| `StartFromNow` | Permit starting at the current boundary when a checkpoint is missing |
+| `RulesFile` | JSON or YAML trigger definitions |
+| `StreamName` | Delivery stream name; default `TRIGGERS` |
 
-Publishes matched tasks to NATS JetStream.
-
-**Key behaviors:**
-- Publishes to subject: `<stream>.<database>.<collection>.<docKey>`
-- Uses subject-safe encoding for docKey (base64url without padding)
-- Hashes docKey if subject would exceed NATS limit (1024 bytes)
-
-## Configuration
-
-```go
-type TriggerConfig struct {
-    // Evaluator-specific
-    Database     string  // Syntrix logical database
-    StartFromNow bool    // Start from now if checkpoint missing
-    RulesFile    string  // Trigger rules file path
-
-    // Shared
-    StreamName   string  // NATS stream name
-}
-```
-
-## Implementation
-
-See: `internal/trigger/evaluator/`
-- `service.go` - Service interface and implementation
-- `factory.go` - Factory function
-- `validation.go` - Trigger validation
+Dependencies are the document/checkpoint store, Puller subscription, NATS
+connection, and metrics sink. HTTP execution belongs to the Delivery Service.

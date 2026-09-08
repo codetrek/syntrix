@@ -113,6 +113,32 @@ its shared event type does not identify which one was the logical business
 deletion. This is separate from Puller's business conversion, which ignores raw
 physical deletes and retains the available tombstone for a logical delete.
 
+### Implementation evidence and adoption limits
+
+The design documents own architecture contracts. This table records the
+implementation evidence and limits relevant to applying those contracts.
+
+| Boundary | Observed behavior and consequence | Evidence |
+|---|---|---|
+| Logical document deletion | `Delete` uses an update to set `deleted=true`, clear `data`, increment version, update time, and assign expiry. Identity and routing metadata remain. A missing or already deleted target returns `ErrNotFound`; a failed predicate on a live target returns `ErrPreconditionFailed`. | [Mongo document Store](../../../../internal/core/storage/mongo/document_store.go) |
+| Recreation and administrative purge | Creating at a retained tombstone replaces it with the new document. Database purge physically removes data and system records, including live records, without writing per-document tombstones. | [Mongo document Store](../../../../internal/core/storage/mongo/document_store.go) |
+| Cleanup prerequisites | Index initialization installs `sys_expires_at` TTL on the ordinary data collection, not the separate system collection. An expiry field alone does not guarantee system-record cleanup. | [Mongo document Store](../../../../internal/core/storage/mongo/document_store.go) |
+| Raw Puller capture | The native pipeline filters configured physical collections through `ns.coll`; it retains physical delete operations. Logical database identity is derived from the available full document and can be absent on physical deletes. | [Ingestion](../../../../internal/puller/core/puller.go), [normalizer](../../../../internal/puller/normalizer/normalizer.go) |
+| Business conversion | Physical `StoreOperationDelete` returns `ErrDeleteOPIgnored`. Update/replace with a tombstone becomes business delete with the document retained; live replacement becomes create, and live update remains update. Raw insert becomes create, including when coalescing supplied a tombstone. No previous image is populated. | [Transformation](../../../../internal/puller/events/transform.go) |
+| Lookup and normalization failure | Puller classifies supplied latest-state images. Missing update/replace full documents are rejected, then logged and skipped by ingestion; this does not establish preservation of every logical transition. | [Normalizer](../../../../internal/puller/normalizer/normalizer.go), [ingestion](../../../../internal/puller/core/puller.go) |
+| Raw coalescing | Insert followed by update retains the insert operation and latest payload; insert followed by physical delete cancels. These reductions do not certify preservation of each business transition. | [Coalescer](../../../../internal/puller/buffer/coalescer.go) |
+| Store Watch classification | Logical and physical deletion both produce `EventDelete` without `Document`. Immutable deleted-field updates identify the logical transition, but enrichment remains required for non-physical-delete source events. Scoped routing may require pre-images even when `IncludeBefore` is false. Native cursor cleanup has a five-second deadline. | [Mongo Watch](../../../../internal/core/storage/mongo/watch.go) |
+| Index application | A tombstone removes its index entry when `IncludeDeleted` is false; otherwise the supplied tombstone is upserted. Missing full documents are skipped. `ShowDeleted` requires a template retaining tombstones; physical cleanup provides no index invalidation guarantee. | [Indexer service](../../../../internal/indexer/service.go), [template selection](../../../../internal/indexer/manager/manager.go) |
+| Streamer delivery | Business conversion precedes matching; physical deletes are ignored. Flattening supplies public document metadata when the document reference is available. The ingestion loop advances in-memory progress after received events, including ignored physical deletes. | [Streamer](../../../../internal/streamer/service.go), [flattening](../../../../internal/helper/convert.go) |
+| Trigger evaluation | CEL exposes one `event` map. Document business fields are flattened, then stored `id`, `collection`, and `version` overwrite matching keys. A tombstone therefore supplies a metadata map, not previous business fields; the production path has no `Before`. Evaluation errors are logged and skip the affected rule. | [CEL context](../../../../internal/trigger/evaluator/cel/evaluator.go), [trigger service](../../../../internal/trigger/evaluator/service.go) |
+| Trigger delivery | Task construction copies the tombstone's empty business map into `Payload`; JSON `omitempty` omits that field. This task representation is distinct from the CEL metadata map. | [Task construction](../../../../internal/trigger/evaluator/service.go), [delivery task](../../../../internal/trigger/types/types.go) |
+
+MongoDB's [UpdateLookup contract](https://www.mongodb.com/docs/manual/changeStreams/#lookup-full-document-for-update-operations)
+permits a later majority-committed document state rather than an event-time
+image. The event delta and the looked-up document therefore have different
+roles. Historical-image capture and end-to-end recovery remain separately
+proposed work; the observations above do not make those guarantees implemented.
+
 ## Alternatives
 
 **Keep the event channel and untyped raw tokens.** This retains the earlier call
