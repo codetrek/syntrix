@@ -346,7 +346,7 @@ func (f *fakeDocumentStore) Query(ctx context.Context, database string, q model.
 func (f *fakeDocumentStore) GetMany(ctx context.Context, database string, paths []string) ([]*storage.StoredDoc, error) {
 	return nil, nil
 }
-func (f *fakeDocumentStore) Watch(ctx context.Context, database, collection string, resumeToken interface{}, opts storage.WatchOptions) (<-chan storage.Event, error) {
+func (f *fakeDocumentStore) Watch(ctx context.Context, database, collection string, after storage.WatchCheckpoint, opts storage.WatchOptions) (storage.WatchStream, error) {
 	return nil, nil
 }
 func (f *fakeDocumentStore) Close(ctx context.Context) error { return nil }

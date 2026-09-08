@@ -78,12 +78,15 @@ func TestRoutedDocumentStore_Coverage(t *testing.T) {
 
 	t.Run("Watch Select Error", func(t *testing.T) {
 		router := new(mockDocRouter)
-		router.On("Select", database, types.OpRead).Return(nil, errSelect)
+		router.On("Select", database, types.OpWatch).Return(nil, errSelect).Once()
 
 		rs := NewRoutedDocumentStore(router)
-		_, err := rs.Watch(ctx, database, "coll", nil, types.WatchOptions{})
+		stream, err := rs.Watch(ctx, database, "coll", "", types.WatchOptions{})
 
+		assert.Nil(t, stream)
+		assert.Same(t, errSelect, err)
 		assert.ErrorIs(t, err, errSelect)
+		router.AssertExpectations(t)
 	})
 
 	t.Run("GetMany Select Error", func(t *testing.T) {

@@ -73,11 +73,6 @@ type StoredDoc struct {
 	Deleted bool `json:"deleted,omitempty" bson:"deleted,omitempty"`
 }
 
-// WatchOptions defines options for watching changes
-type WatchOptions struct {
-	IncludeBefore bool
-}
-
 // DocumentStore defines the interface for document storage operations
 type DocumentStore interface {
 	// Get retrieves a document by its path
@@ -110,9 +105,11 @@ type DocumentStore interface {
 	// Query executes a complex query
 	Query(ctx context.Context, database string, q model.Query) ([]*StoredDoc, error)
 
-	// Watch returns a channel of events for a given collection (or all if empty).
-	// resumeToken can be nil to start from now.
-	Watch(ctx context.Context, database string, collection string, resumeToken interface{}, opts WatchOptions) (<-chan Event, error)
+	// Watch observes one logical database. An empty collection selects its ordinary
+	// data collections; a system collection must be selected explicitly. Empty after
+	// starts at a source-established current boundary. A checkpoint resumes after
+	// its completed prefix and must belong to the same source, scope, and options.
+	Watch(ctx context.Context, database string, collection string, after WatchCheckpoint, opts WatchOptions) (WatchStream, error)
 
 	// Close closes the connection to the backend
 	Close(ctx context.Context) error
@@ -166,6 +163,9 @@ const (
 	OpRead OpKind = iota
 	OpWrite
 	OpMigrate
+	// OpWatch requires the authoritative source used for writes, rather than an
+	// independently configured ordinary read replica.
+	OpWatch
 )
 
 // Router defines the interface for selecting stores based on operation
@@ -202,13 +202,17 @@ const (
 
 // Event represents a database change event
 type Event struct {
-	Id          string      `json:"id"`
-	Database    string      `json:"database"`
-	Type        EventType   `json:"type"`
-	Document    *StoredDoc  `json:"document,omitempty"` // Nil for delete
-	Before      *StoredDoc  `json:"before,omitempty"`   // Previous state, if available
-	Timestamp   int64       `json:"timestamp"`
-	ResumeToken interface{} `json:"-"` // Opaque token for resuming watch
+	// ChangeID identifies one source change across watches and retries. Id remains
+	// the affected document's storage key; neither field is an ordered checkpoint.
+	ChangeID string     `json:"changeId,omitempty"`
+	Id       string     `json:"id"`
+	Database string     `json:"database"`
+	Type     EventType  `json:"type"`
+	Document *StoredDoc `json:"document,omitempty"` // Nil for delete
+	Before   *StoredDoc `json:"before,omitempty"`   // Previous state, if available
+	// Timestamp is Unix nanoseconds at the source's available precision. It is
+	// event metadata, not an ordering key or a checkpoint.
+	Timestamp int64 `json:"timestamp"`
 }
 
 // ReplicationPullRequest represents a request to pull changes

@@ -81,9 +81,9 @@ func (m *mockDocumentStore) GetMany(ctx context.Context, database string, paths 
 	}
 	return args.Get(0).([]*types.StoredDoc), args.Error(1)
 }
-func (m *mockDocumentStore) Watch(ctx context.Context, database, collection string, resumeToken interface{}, opts types.WatchOptions) (<-chan types.Event, error) {
-	args := m.Called(ctx, database, collection, resumeToken, opts)
-	return args.Get(0).(<-chan types.Event), args.Error(1)
+func (m *mockDocumentStore) Watch(ctx context.Context, database, collection string, after types.WatchCheckpoint, opts types.WatchOptions) (types.WatchStream, error) {
+	args := m.Called(ctx, database, collection, after, opts)
+	return args.Get(0).(types.WatchStream), args.Error(1)
 }
 func (m *mockDocumentStore) Close(ctx context.Context) error {
 	return m.Called(ctx).Error(0)

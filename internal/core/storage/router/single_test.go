@@ -36,7 +36,7 @@ func (f *fakeDocumentStore) Query(ctx context.Context, database string, q model.
 func (f *fakeDocumentStore) GetMany(ctx context.Context, database string, paths []string) ([]*types.StoredDoc, error) {
 	return nil, nil
 }
-func (f *fakeDocumentStore) Watch(ctx context.Context, database string, collection string, resumeToken interface{}, opts types.WatchOptions) (<-chan types.Event, error) {
+func (f *fakeDocumentStore) Watch(ctx context.Context, database string, collection string, after types.WatchCheckpoint, opts types.WatchOptions) (types.WatchStream, error) {
 	return nil, nil
 }
 func (f *fakeDocumentStore) Close(ctx context.Context) error { return nil }

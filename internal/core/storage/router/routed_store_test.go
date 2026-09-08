@@ -2,11 +2,13 @@ package router
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"github.com/syntrixbase/syntrix/internal/core/storage/types"
 	"github.com/syntrixbase/syntrix/pkg/model"
 )
@@ -78,17 +80,34 @@ func (m *mockDocumentStore) GetMany(ctx context.Context, database string, paths 
 	return args.Get(0).([]*types.StoredDoc), args.Error(1)
 }
 
-func (m *mockDocumentStore) Watch(ctx context.Context, database string, collection string, resumeToken interface{}, opts types.WatchOptions) (<-chan types.Event, error) {
-	args := m.Called(ctx, database, collection, resumeToken, opts)
+func (m *mockDocumentStore) Watch(ctx context.Context, database string, collection string, after types.WatchCheckpoint, opts types.WatchOptions) (types.WatchStream, error) {
+	args := m.Called(ctx, database, collection, after, opts)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(<-chan types.Event), args.Error(1)
+	return args.Get(0).(types.WatchStream), args.Error(1)
 }
 
 func (m *mockDocumentStore) Close(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)
+}
+
+type mockWatchStream struct {
+	mock.Mock
+}
+
+func (s *mockWatchStream) InitialCheckpoint() types.WatchCheckpoint {
+	return s.Called().Get(0).(types.WatchCheckpoint)
+}
+
+func (s *mockWatchStream) Next(ctx context.Context) (types.WatchFrame, error) {
+	args := s.Called(ctx)
+	return args.Get(0).(types.WatchFrame), args.Error(1)
+}
+
+func (s *mockWatchStream) Close() error {
+	return s.Called().Error(0)
 }
 
 func TestRoutedDocumentStore(t *testing.T) {
@@ -192,17 +211,21 @@ func TestRoutedDocumentStore(t *testing.T) {
 		store.AssertExpectations(t)
 	})
 
-	t.Run("Watch uses Read op", func(t *testing.T) {
+	t.Run("Watch forwards checkpoint and options with Watch op", func(t *testing.T) {
 		router := new(mockDocRouter)
 		store := new(mockDocumentStore)
+		stream := new(mockWatchStream)
+		after := types.WatchCheckpoint("source-checkpoint")
+		opts := types.WatchOptions{IncludeBefore: true}
 
-		router.On("Select", database, types.OpRead).Return(store, nil)
-		store.On("Watch", ctx, database, "col", nil, mock.Anything).Return(make(<-chan types.Event), nil)
+		router.On("Select", database, types.OpWatch).Return(store, nil).Once()
+		store.On("Watch", ctx, database, "col", after, opts).Return(stream, nil).Once()
 
 		rs := NewRoutedDocumentStore(router)
-		_, err := rs.Watch(ctx, database, "col", nil, types.WatchOptions{})
+		actual, err := rs.Watch(ctx, database, "col", after, opts)
 
-		assert.NoError(t, err)
+		require.NoError(t, err)
+		assert.Same(t, stream, actual)
 		router.AssertExpectations(t)
 		store.AssertExpectations(t)
 	})
@@ -256,6 +279,98 @@ func TestRoutedDocumentStore(t *testing.T) {
 		assert.Error(t, err)
 		router.AssertExpectations(t)
 	})
+}
+
+func TestRoutedDocumentStoreWatchRejectsEmptyDatabase(t *testing.T) {
+	router := new(mockDocRouter)
+	routed := NewRoutedDocumentStore(router)
+
+	stream, err := routed.Watch(context.Background(), "", "users", "", types.WatchOptions{})
+
+	require.Nil(t, stream)
+	var watchErr *types.WatchError
+	require.ErrorAs(t, err, &watchErr)
+	assert.Equal(t, types.WatchInvalidScope, watchErr.Code)
+	assert.Empty(t, watchErr.Database)
+	assert.Equal(t, "users", watchErr.Collection)
+	assert.ErrorIs(t, err, ErrDatabaseRequired)
+	router.AssertNotCalled(t, "Select", mock.Anything, mock.Anything)
+}
+
+func TestRoutedDocumentStoreWatchPreservesBackendError(t *testing.T) {
+	ctx := context.Background()
+	router := new(mockDocRouter)
+	store := new(mockDocumentStore)
+	after := types.WatchCheckpoint("other-source-checkpoint")
+	cause := errors.New("checkpoint belongs to another source")
+	expected := &types.WatchError{
+		Code:       types.WatchSourceMismatch,
+		Database:   "app",
+		Collection: "users",
+		Cause:      cause,
+	}
+	router.On("Select", "app", types.OpWatch).Return(store, nil).Once()
+	store.On("Watch", ctx, "app", "users", after, types.WatchOptions{}).Return(nil, expected).Once()
+
+	stream, err := NewRoutedDocumentStore(router).Watch(ctx, "app", "users", after, types.WatchOptions{})
+
+	assert.Nil(t, stream)
+	assert.Same(t, expected, err)
+	assert.ErrorIs(t, err, cause)
+	router.AssertExpectations(t)
+	store.AssertExpectations(t)
+}
+
+func TestRoutedDocumentStoreWatchStaysOnSelectedPrimary(t *testing.T) {
+	ctx := context.Background()
+	primary := new(mockDocumentStore)
+	replica := new(mockDocumentStore)
+	replacement := new(mockDocumentStore)
+	stream := new(mockWatchStream)
+	after := types.WatchCheckpoint("primary-checkpoint")
+	frame := types.WatchFrame{Checkpoint: "primary-progress"}
+	doc := &types.StoredDoc{Id: "app:document-key", Fullpath: "users/user1"}
+	terminal := &types.WatchError{Code: types.WatchSourceUnavailable, Database: "app", Cause: errors.New("source disconnected")}
+	cleanupErr := errors.New("cursor cleanup failed")
+
+	primary.On("Watch", ctx, "app", "", after, types.WatchOptions{}).Return(stream, nil).Once()
+	replica.On("Get", ctx, "app", doc.Fullpath).Return(doc, nil).Once()
+	replacement.On("Get", ctx, "app", doc.Fullpath).Return(doc, nil).Once()
+	stream.On("InitialCheckpoint").Return(after).Once()
+	stream.On("Next", ctx).Return(frame, nil).Once()
+	stream.On("Next", ctx).Return(types.WatchFrame{}, terminal).Once()
+	stream.On("Close").Return(cleanupErr).Once()
+
+	routes := map[string]types.DocumentRouter{"app": NewSplitDocumentRouter(primary, replica)}
+	routed := NewRoutedDocumentStore(NewDatabaseDocumentRouter(nil, routes))
+	actual, err := routed.Watch(ctx, "app", "", after, types.WatchOptions{})
+	require.NoError(t, err)
+	require.Same(t, stream, actual)
+	assert.Equal(t, after, actual.InitialCheckpoint())
+
+	read, err := routed.Get(ctx, "app", doc.Fullpath)
+	require.NoError(t, err)
+	assert.Same(t, doc, read)
+
+	routes["app"] = NewSingleDocumentRouter(replacement)
+	progress, err := actual.Next(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, frame, progress)
+	_, err = actual.Next(ctx)
+	assert.Same(t, terminal, err)
+	assert.ErrorIs(t, err, terminal.Cause)
+	assert.ErrorIs(t, actual.Close(), cleanupErr)
+
+	read, err = routed.Get(ctx, "app", doc.Fullpath)
+	require.NoError(t, err)
+	assert.Same(t, doc, read)
+	primary.AssertNotCalled(t, "Close", mock.Anything)
+	replica.AssertNotCalled(t, "Close", mock.Anything)
+	replacement.AssertNotCalled(t, "Close", mock.Anything)
+	primary.AssertExpectations(t)
+	replica.AssertExpectations(t)
+	replacement.AssertExpectations(t)
+	stream.AssertExpectations(t)
 }
 
 // Mock User Router & Store
