@@ -34,6 +34,10 @@ func TestSplitDocumentRouter(t *testing.T) {
 	s, err = router.Select("default", types.OpWrite)
 	assert.NoError(t, err)
 	assert.Equal(t, primary, s)
+
+	s, err = router.Select("default", types.OpWatch)
+	assert.NoError(t, err)
+	assert.Same(t, primary, s)
 }
 
 func TestSplitUserRouter(t *testing.T) {

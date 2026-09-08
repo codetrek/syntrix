@@ -124,7 +124,7 @@ func (m *fullMockDocStore) DeleteByDatabase(ctx context.Context, database string
 func (m *fullMockDocStore) Query(ctx context.Context, database string, q model.Query) ([]*types.StoredDoc, error) {
 	return nil, nil
 }
-func (m *fullMockDocStore) Watch(ctx context.Context, database string, collection string, resumeToken interface{}, opts types.WatchOptions) (<-chan types.Event, error) {
+func (m *fullMockDocStore) Watch(ctx context.Context, database string, collection string, after types.WatchCheckpoint, opts types.WatchOptions) (types.WatchStream, error) {
 	return nil, nil
 }
 func (m *fullMockDocStore) Close(ctx context.Context) error { return nil }

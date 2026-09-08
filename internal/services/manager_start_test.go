@@ -81,11 +81,9 @@ func (s *storageBackendStub) Delete(context.Context, string, string, model.Filte
 func (s *storageBackendStub) Query(context.Context, string, model.Query) ([]*storage.StoredDoc, error) {
 	return nil, nil
 }
-func (s *storageBackendStub) Watch(context.Context, string, string, interface{}, storage.WatchOptions) (<-chan storage.Event, error) {
+func (s *storageBackendStub) Watch(context.Context, string, string, storage.WatchCheckpoint, storage.WatchOptions) (storage.WatchStream, error) {
 	s.watchCalls.Add(1)
-	ch := make(chan storage.Event)
-	close(ch)
-	return ch, nil
+	return nil, nil
 }
 func (s *storageBackendStub) Close(context.Context) error { return nil }
 func (s *storageBackendStub) DB() *mongo.Database         { return nil }

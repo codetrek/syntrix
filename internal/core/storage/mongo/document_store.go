@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/syntrixbase/syntrix/internal/core/storage/types"
-	"github.com/syntrixbase/syntrix/internal/helper"
 	"github.com/syntrixbase/syntrix/pkg/model"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -22,6 +21,7 @@ type documentStore struct {
 	sysCollection       string
 	softDeleteRetention time.Duration
 	openStream          func(context.Context, *mongo.Collection, mongo.Pipeline, *options.ChangeStreamOptions) (changeStream, error)
+	readSource          func(context.Context, *mongo.Collection, bool) (watchSource, error)
 }
 
 // NewDocumentStore initializes a new MongoDB document store
@@ -33,13 +33,6 @@ func NewDocumentStore(client *mongo.Client, db *mongo.Database, dataColl string,
 		sysCollection:       sysColl,
 		softDeleteRetention: softDeleteRetention,
 	}
-}
-
-type changeStream interface {
-	Next(context.Context) bool
-	Decode(any) error
-	Err() error
-	Close(context.Context) error
 }
 
 func (m *documentStore) getCollection(nameOrPath string) *mongo.Collection {
@@ -371,192 +364,6 @@ func (m *documentStore) Query(ctx context.Context, database string, q model.Quer
 	}
 
 	return docs, nil
-}
-
-func (m *documentStore) Watch(ctx context.Context, database string, collectionName string, resumeToken interface{}, opts types.WatchOptions) (<-chan types.Event, error) {
-	pipeline := mongo.Pipeline{}
-
-	// Database filter
-	if database != "" {
-		databaseMatch := bson.D{
-			{Key: "$or", Value: bson.A{
-				bson.D{
-					{Key: "operationType", Value: bson.D{{Key: "$in", Value: bson.A{"insert", "update", "replace"}}}},
-					{Key: "fullDocument.database", Value: database},
-				},
-				bson.D{
-					{Key: "operationType", Value: "delete"},
-					{Key: "documentKey._id", Value: bson.D{{Key: "$regex", Value: "^" + database + ":"}}},
-				},
-			}},
-		}
-		pipeline = append(pipeline, bson.D{{Key: "$match", Value: databaseMatch}})
-	}
-
-	if collectionName != "" {
-		// Filter by fullDocument.collection for insert/update/replace
-		// OR operationType is delete (since we can't filter deletes by collection with hash ID)
-		match := bson.D{
-			{Key: "$or", Value: bson.A{
-				bson.D{{Key: "fullDocument.collection", Value: collectionName}},
-				bson.D{{Key: "operationType", Value: "delete"}},
-			}},
-		}
-		pipeline = append(pipeline, bson.D{{Key: "$match", Value: match}})
-	}
-
-	// We need 'updateLookup' to get the full document after an update
-	changeStreamOpts := options.ChangeStream().SetFullDocument(options.UpdateLookup)
-	if opts.IncludeBefore {
-		changeStreamOpts.SetFullDocumentBeforeChange("whenAvailable")
-	}
-	if resumeToken != nil {
-		changeStreamOpts.SetResumeAfter(resumeToken)
-	}
-	if m.openStream == nil {
-		m.openStream = func(ctx context.Context, coll *mongo.Collection, pipeline mongo.Pipeline, opts *options.ChangeStreamOptions) (changeStream, error) {
-			return coll.Watch(ctx, pipeline, opts)
-		}
-	}
-	collection := m.getCollection(collectionName)
-	stream, err := m.openStream(ctx, collection, pipeline, changeStreamOpts)
-	if err != nil {
-		return nil, err
-	}
-
-	out := make(chan types.Event)
-
-	go func() {
-		defer close(out)
-		defer stream.Close(ctx)
-
-		for stream.Next(ctx) {
-			var changeEvent changeStreamEvent
-			if err := stream.Decode(&changeEvent); err != nil {
-				continue
-			}
-
-			evt, ok := m.convertChangeEvent(changeEvent, database, collectionName)
-			if !ok {
-				continue
-			}
-
-			if evt.Document != nil {
-				coll, _, _ := helper.ExplodeFullpath(evt.Document.Fullpath)
-				evt.Document.Collection = coll
-			}
-
-			select {
-			case out <- *evt:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	return out, nil
-}
-
-type changeStreamEvent struct {
-	ID                       interface{}      `bson:"_id"`
-	OperationType            string           `bson:"operationType"`
-	FullDocument             *types.StoredDoc `bson:"fullDocument"`
-	FullDocumentBeforeChange *types.StoredDoc `bson:"fullDocumentBeforeChange"`
-	DocumentKey              struct {
-		ID string `bson:"_id"`
-	} `bson:"documentKey"`
-	ClusterTime       interface{} `bson:"clusterTime"` // Timestamp
-	UpdateDescription *struct {
-		UpdatedFields map[string]interface{} `bson:"updatedFields"`
-		RemovedFields []string               `bson:"removedFields"`
-	} `bson:"updateDescription"`
-}
-
-func (m *documentStore) convertChangeEvent(changeEvent changeStreamEvent, database string, collectionName string) (*types.Event, bool) {
-	// Client-side filtering for database (double check)
-	if database != "" {
-		if changeEvent.OperationType == "delete" {
-			if !strings.HasPrefix(changeEvent.DocumentKey.ID, database+":") {
-				return nil, false
-			}
-		} else {
-			if changeEvent.FullDocument == nil || changeEvent.FullDocument.Database != database {
-				return nil, false
-			}
-		}
-	}
-
-	// Client-side filtering for collection (double check)
-	if collectionName != "" && changeEvent.OperationType != "delete" {
-		if changeEvent.FullDocument == nil || changeEvent.FullDocument.Collection != collectionName {
-			return nil, false
-		}
-	}
-
-	// If database arg is empty, try to get it from document
-	eventDatabase := database
-	if eventDatabase == "" {
-		if changeEvent.FullDocument != nil {
-			eventDatabase = changeEvent.FullDocument.Database
-		} else if strings.Contains(changeEvent.DocumentKey.ID, ":") {
-			parts := strings.SplitN(changeEvent.DocumentKey.ID, ":", 2)
-			eventDatabase = parts[0]
-		}
-	}
-
-	evt := types.Event{
-		Id:          changeEvent.DocumentKey.ID,
-		Database:    eventDatabase,
-		ResumeToken: changeEvent.ID,
-		Timestamp:   time.Now().UnixNano(),
-		Before:      changeEvent.FullDocumentBeforeChange,
-	}
-
-	switch changeEvent.OperationType {
-	case "insert":
-		evt.Type = types.EventCreate
-		evt.Document = changeEvent.FullDocument
-	case "update", "replace":
-		if changeEvent.FullDocument != nil && changeEvent.FullDocument.Deleted {
-			evt.Type = types.EventDelete
-		} else if changeEvent.OperationType == "replace" {
-			// Replace operation on a non-deleted document is treated as a Create (re-creation)
-			// This happens when overwriting a soft-deleted document
-			// But check if it was previously deleted in "FullDocumentBeforeChange" to be sure it's a "Recreate" semantically?
-			// Actually, if we just overwrite, it is a Create OR Update.
-			// Specifically for "Recreate" logic (soft-delete then create), it comes as a "replace" usually if using ReplaceOne.
-			evt.Type = types.EventCreate
-			evt.Document = changeEvent.FullDocument
-		} else if changeEvent.FullDocumentBeforeChange != nil && changeEvent.FullDocumentBeforeChange.Deleted {
-			evt.Type = types.EventCreate
-			evt.Document = changeEvent.FullDocument
-		} else {
-			// If it's an update, check if we are "un-deleting" (setting deleted=false).
-			// If we un-delete, it should probably be treated as Create.
-			isUndelete := false
-			if changeEvent.UpdateDescription != nil {
-				if val, ok := changeEvent.UpdateDescription.UpdatedFields["deleted"]; ok {
-					if bVal, isBool := val.(bool); isBool && !bVal {
-						isUndelete = true
-					}
-				}
-			}
-
-			if isUndelete {
-				evt.Type = types.EventCreate
-				evt.Document = changeEvent.FullDocument
-			} else {
-				evt.Type = types.EventUpdate
-				evt.Document = changeEvent.FullDocument
-			}
-		}
-	case "delete":
-		evt.Type = types.EventDelete
-	default:
-		return nil, false
-	}
-
-	return &evt, true
 }
 
 // EnsureIndexes creates necessary indexes

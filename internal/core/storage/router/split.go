@@ -4,7 +4,8 @@ import (
 	"github.com/syntrixbase/syntrix/internal/core/storage/types"
 )
 
-// SplitDocumentRouter routes read operations to replica and write operations to primary
+// SplitDocumentRouter uses the replica for ordinary reads. Watches use the
+// primary so a checkpoint stays bound to the authoritative change source.
 type SplitDocumentRouter struct {
 	primary types.DocumentStore
 	replica types.DocumentStore

@@ -89,12 +89,12 @@ func (m *MockDocumentStore) GetMany(ctx context.Context, database string, paths 
 	return args.Get(0).([]*storage.StoredDoc), args.Error(1)
 }
 
-func (m *MockDocumentStore) Watch(ctx context.Context, database, collection string, resumeToken interface{}, opts storage.WatchOptions) (<-chan storage.Event, error) {
-	args := m.Called(ctx, database, collection, resumeToken, opts)
+func (m *MockDocumentStore) Watch(ctx context.Context, database, collection string, after storage.WatchCheckpoint, opts storage.WatchOptions) (storage.WatchStream, error) {
+	args := m.Called(ctx, database, collection, after, opts)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(<-chan storage.Event), args.Error(1)
+	return args.Get(0).(storage.WatchStream), args.Error(1)
 }
 
 func (m *MockDocumentStore) Close(ctx context.Context) error {

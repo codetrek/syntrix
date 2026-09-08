@@ -21,6 +21,11 @@ type ReplicationPushChange = types.ReplicationPushChange
 type ReplicationPushRequest = types.ReplicationPushRequest
 type ReplicationPushResponse = types.ReplicationPushResponse
 type WatchOptions = types.WatchOptions
+type WatchCheckpoint = types.WatchCheckpoint
+type WatchFrame = types.WatchFrame
+type WatchStream = types.WatchStream
+type WatchError = types.WatchError
+type WatchErrorCode = types.WatchErrorCode
 type Router = types.Router
 type DocumentRouter = types.DocumentRouter
 type UserRouter = types.UserRouter
@@ -30,12 +35,26 @@ const (
 	OpRead    = types.OpRead
 	OpWrite   = types.OpWrite
 	OpMigrate = types.OpMigrate
+	OpWatch   = types.OpWatch
 )
 
 const (
 	EventCreate = types.EventCreate
 	EventUpdate = types.EventUpdate
 	EventDelete = types.EventDelete
+)
+
+const (
+	WatchInvalidScope       = types.WatchInvalidScope
+	WatchInvalidCheckpoint  = types.WatchInvalidCheckpoint
+	WatchSourceMismatch     = types.WatchSourceMismatch
+	WatchScopeMismatch      = types.WatchScopeMismatch
+	WatchHistoryUnavailable = types.WatchHistoryUnavailable
+	WatchPayloadUnavailable = types.WatchPayloadUnavailable
+	WatchInvalidEvent       = types.WatchInvalidEvent
+	WatchUnsupported        = types.WatchUnsupported
+	WatchPermissionDenied   = types.WatchPermissionDenied
+	WatchSourceUnavailable  = types.WatchSourceUnavailable
 )
 
 var (

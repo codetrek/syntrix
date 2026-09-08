@@ -63,12 +63,12 @@ func (m *MockStorageBackend) GetMany(ctx context.Context, database string, paths
 	return args.Get(0).([]*storage.StoredDoc), args.Error(1)
 }
 
-func (m *MockStorageBackend) Watch(ctx context.Context, database, collection string, resumeToken interface{}, opts storage.WatchOptions) (<-chan storage.Event, error) {
-	args := m.Called(ctx, database, collection, resumeToken, opts)
+func (m *MockStorageBackend) Watch(ctx context.Context, database, collection string, after storage.WatchCheckpoint, opts storage.WatchOptions) (storage.WatchStream, error) {
+	args := m.Called(ctx, database, collection, after, opts)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(<-chan storage.Event), args.Error(1)
+	return args.Get(0).(storage.WatchStream), args.Error(1)
 }
 
 func (m *MockStorageBackend) Close(ctx context.Context) error {
@@ -81,10 +81,10 @@ type MockCSPService struct {
 	mock.Mock
 }
 
-func (m *MockCSPService) Watch(ctx context.Context, database, collection string, resumeToken interface{}, opts storage.WatchOptions) (<-chan storage.Event, error) {
-	args := m.Called(ctx, database, collection, resumeToken, opts)
+func (m *MockCSPService) Watch(ctx context.Context, database, collection string, after storage.WatchCheckpoint, opts storage.WatchOptions) (storage.WatchStream, error) {
+	args := m.Called(ctx, database, collection, after, opts)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(<-chan storage.Event), args.Error(1)
+	return args.Get(0).(storage.WatchStream), args.Error(1)
 }

@@ -81,12 +81,20 @@ func (s *RoutedDocumentStore) Query(ctx context.Context, database string, q mode
 	return store.Query(ctx, database, q)
 }
 
-func (s *RoutedDocumentStore) Watch(ctx context.Context, database string, collection string, resumeToken interface{}, opts types.WatchOptions) (<-chan types.Event, error) {
-	store, err := s.router.Select(database, types.OpRead)
+func (s *RoutedDocumentStore) Watch(ctx context.Context, database string, collection string, after types.WatchCheckpoint, opts types.WatchOptions) (types.WatchStream, error) {
+	if database == "" {
+		return nil, &types.WatchError{
+			Code:       types.WatchInvalidScope,
+			Database:   database,
+			Collection: collection,
+			Cause:      ErrDatabaseRequired,
+		}
+	}
+	store, err := s.router.Select(database, types.OpWatch)
 	if err != nil {
 		return nil, err
 	}
-	return store.Watch(ctx, database, collection, resumeToken, opts)
+	return store.Watch(ctx, database, collection, after, opts)
 }
 
 func (s *RoutedDocumentStore) Close(ctx context.Context) error {

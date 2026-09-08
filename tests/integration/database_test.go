@@ -3,6 +3,7 @@ package integration
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -223,58 +224,72 @@ func TestDatabaseOwnerImplicitAdmin(t *testing.T) {
 	resp.Body.Close()
 }
 
-// TestSuspendedDatabaseRejectsWrites tests that suspended databases reject write operations
-// This test uses the default database which always exists
 func TestSuspendedDatabaseRejectsWrites(t *testing.T) {
 	t.Parallel()
 	tc := NewTestContext(t)
 	adminToken := tc.GenerateSystemToken()
 
-	// Use default database - it always exists
-	// First, ensure it's active
-	updateReq := map[string]interface{}{
-		"status": "active",
-	}
-	resp := tc.MakeRequest("PATCH", "/admin/databases/default", updateReq, adminToken)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	resp.Body.Close()
-
-	// Create a unique collection name for this test
-	collName := tc.Collection("suspended-test")
-
-	// Write a document while active
-	docData := map[string]interface{}{
-		"name": "test doc",
-	}
-	resp = tc.MakeRequest("POST", "/api/v1/databases/default/documents/"+collName, docData, adminToken)
+	// Status is database-wide; this fixture owns the database while parallel
+	// tests continue using the shared default database.
+	resp := tc.MakeRequest("POST", "/admin/databases", map[string]interface{}{
+		"display_name": "Suspended Write Test",
+		"slug":         tc.Slug("suspended"),
+	}, adminToken)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
-	resp.Body.Close()
-
-	// Suspend the database (admin API required)
-	updateReq = map[string]interface{}{
-		"status": "suspended",
+	var database struct {
+		ID string `json:"id"`
 	}
-	resp = tc.MakeRequest("PATCH", "/admin/databases/default", updateReq, adminToken)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	resp.Body.Close()
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&database))
+	require.NoError(t, resp.Body.Close())
+	require.NotEmpty(t, database.ID)
 
-	// Try to write while suspended - should fail
-	resp = tc.MakeRequest("POST", "/api/v1/databases/default/documents/"+collName, docData, adminToken)
+	databaseIdentifier := "id:" + database.ID
+	adminPath := "/admin/databases/" + databaseIdentifier
+	t.Cleanup(func() {
+		resp := tc.MakeRequest("DELETE", adminPath, nil, adminToken)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.NoError(t, resp.Body.Close())
+	})
+
+	rules := map[string]interface{}{
+		"database":      databaseIdentifier,
+		"rules_version": "1",
+		"service":       "syntrix",
+		"match": map[string]interface{}{
+			"/databases/{database}/documents": map[string]interface{}{
+				"match": map[string]interface{}{
+					"/{document=**}": map[string]interface{}{
+						"allow": map[string]string{"read, write": "true"},
+					},
+				},
+			},
+		},
+	}
+	resp = tc.MakeRequest("POST", "/admin/rules/push?database="+url.QueryEscape(databaseIdentifier), rules, adminToken)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NoError(t, resp.Body.Close())
+
+	documentPath := "/api/v1/databases/" + databaseIdentifier + "/documents/" + tc.Collection("suspended-test")
+	docData := map[string]interface{}{"name": "test doc"}
+	resp = tc.MakeRequest("POST", documentPath, docData, adminToken)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	require.NoError(t, resp.Body.Close())
+
+	resp = tc.MakeRequest("PATCH", adminPath, map[string]interface{}{"status": "suspended"}, adminToken)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NoError(t, resp.Body.Close())
+
+	resp = tc.MakeRequest("POST", documentPath, docData, adminToken)
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
-	resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 
-	// Resume the database
-	updateReq = map[string]interface{}{
-		"status": "active",
-	}
-	resp = tc.MakeRequest("PATCH", "/admin/databases/default", updateReq, adminToken)
+	resp = tc.MakeRequest("PATCH", adminPath, map[string]interface{}{"status": "active"}, adminToken)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 
-	// Write should work again
-	resp = tc.MakeRequest("POST", "/api/v1/databases/default/documents/"+collName, docData, adminToken)
+	resp = tc.MakeRequest("POST", documentPath, docData, adminToken)
 	assert.Equal(t, http.StatusCreated, resp.StatusCode)
-	resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 }
 
 // TestDatabaseQuotaEnforcement tests that database creation quota is enforced
