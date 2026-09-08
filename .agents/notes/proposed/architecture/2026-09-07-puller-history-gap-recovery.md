@@ -5,9 +5,9 @@ Status: proposed
 ## Problem
 
 Consumers cannot distinguish a complete resume from a stream whose history is
-unavailable. [Recovery](../../../../internal/puller/recovery/recovery.go#L222)
-calls `h.checkpoint.DeleteCheckpoint()` after resume-token errors; the backend
-then opens a fresh watch. Meanwhile,
+unavailable. [Capture failure handling](../../implemented/bug-fix/2026-09-08-puller-capture-failures.md)
+now stops the backend on unusable resume history and retains its checkpoint;
+consumer-visible history errors and recovery remain unimplemented. Meanwhile,
 [Replay](../../../../internal/puller/core/puller.go#L443) scans after the supplied
 key without checking a durable retention boundary, although the
 [cleaner](../../../../internal/puller/buffer/cleaner.go) evicts history.

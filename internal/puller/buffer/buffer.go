@@ -3,6 +3,7 @@ package buffer
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -28,11 +29,12 @@ type Buffer struct {
 	// notifyCh is used to wake up the batcher
 	notifyCh chan struct{}
 
-	// mu protects pending, flushing, and closed
+	// mu protects pending, flushing, closed, and failure
 	mu sync.RWMutex
 
 	// closed indicates if the buffer is closed
-	closed bool
+	closed  bool
+	failure error
 
 	// shutdownOnce ensures resources are fewer closed exactly once
 	shutdownOnce sync.Once
@@ -160,7 +162,6 @@ func (b *Buffer) Close() error {
 	// Wait for batcher to finish flushing all pending writes.
 	b.batcherWG.Wait()
 
-	var finalErr error
 	b.shutdownOnce.Do(func() {
 		var closeErr error
 		func() {
@@ -173,11 +174,15 @@ func (b *Buffer) Close() error {
 		}()
 
 		if closeErr != nil {
-			finalErr = fmt.Errorf("failed to close pebble database: %w", closeErr)
+			b.mu.Lock()
+			b.failure = errors.Join(b.failure, fmt.Errorf("failed to close pebble database: %w", closeErr))
+			b.mu.Unlock()
 		}
 	})
 
-	return finalErr
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.failure
 }
 
 // Path returns the buffer storage path.
@@ -189,7 +194,11 @@ func (b *Buffer) Path() string {
 func (b *Buffer) LoadCheckpoint() (bson.Raw, error) {
 	b.mu.RLock()
 	if b.closed {
+		err := b.failure
 		b.mu.RUnlock()
+		if err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("buffer is closed")
 	}
 	b.mu.RUnlock()

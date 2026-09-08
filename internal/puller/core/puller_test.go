@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"sync/atomic"
@@ -11,9 +12,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/syntrixbase/syntrix/internal/puller/buffer"
 	"github.com/syntrixbase/syntrix/internal/puller/config"
 	"github.com/syntrixbase/syntrix/internal/puller/cursor"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
+	"github.com/syntrixbase/syntrix/internal/puller/normalizer"
 	"github.com/syntrixbase/syntrix/internal/puller/recovery"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -217,7 +220,6 @@ func TestPuller_runBackend_RecoveryActions(t *testing.T) {
 	p.retryDelay = 1 * time.Millisecond
 
 	errs := []error{
-		errors.New("resume token was not found"),
 		nil,
 		errors.New("connection reset by peer"),
 		errors.New("unexpected failure"),
@@ -345,24 +347,34 @@ func TestPuller_watchChangeStream_ProcessesEvent(t *testing.T) {
 	require.NoError(t, backend.buffer.Close())
 }
 
-func TestPuller_watchChangeStream_BufferErrorAndOpenFail(t *testing.T) {
-	env := setupTestEnv(t)
+func TestPuller_watchChangeStream_LoadErrorDoesNotOpenStream(t *testing.T) {
 	cfg := newTestConfig(t)
 	p := New(cfg, nil)
 
 	backendCfg := config.PullerBackendConfig{Name: "backend1"}
 	client, err := mongo.NewClient(options.Client().ApplyURI(testMongoURI))
 	require.NoError(t, err)
-	require.NoError(t, p.AddBackend("backend1", client, env.DBName, backendCfg))
+	require.NoError(t, p.AddBackend("backend1", client, "testdb", backendCfg))
 	backend := p.backends["backend1"]
-
-	// Force LoadCheckpoint to fail
+	token := bson.Raw{5, 0, 0, 0, 0}
+	require.NoError(t, backend.buffer.SaveCheckpoint(token))
 	require.NoError(t, backend.buffer.Close())
-
-	// Do not connect the client so Watch fails fast with disconnected error
+	var opened int
+	p.openStream = func(context.Context, *mongo.Database, mongo.Pipeline, *options.ChangeStreamOptions) (changeStream, error) {
+		opened++
+		return &fakeChangeStream{}, nil
+	}
 
 	err = p.watchChangeStream(context.Background(), backend, p.logger)
-	assert.Error(t, err)
+	require.ErrorIs(t, err, errCaptureFailed)
+	assert.ErrorContains(t, err, "failed to load checkpoint")
+	assert.Zero(t, opened)
+	reopened, err := buffer.NewForBackend(cfg.Buffer.Path, "backend1", nil)
+	require.NoError(t, err)
+	defer reopened.Close()
+	actual, err := reopened.LoadCheckpoint()
+	require.NoError(t, err)
+	assert.Equal(t, token, actual)
 }
 
 func TestPuller_watchChangeStream_StreamErr(t *testing.T) {
@@ -385,25 +397,164 @@ func TestPuller_watchChangeStream_StreamErr(t *testing.T) {
 	assert.True(t, fakeStream.closed.Load(), "expected stream.Close to be called")
 }
 
-func TestPuller_watchChangeStream_DecodeError(t *testing.T) {
-	env := setupTestEnv(t)
-	cfg := newTestConfig(t)
-	p := New(cfg, nil)
-	defer p.Stop(context.Background())
-
-	backendCfg := config.PullerBackendConfig{Name: "backend1"}
-	require.NoError(t, p.AddBackend("backend1", env.Client, env.DBName, backendCfg))
-	backend := p.backends["backend1"]
-
-	scripted := &decodeErrorStream{}
-	p.openStream = func(ctx context.Context, db *mongo.Database, pipeline mongo.Pipeline, opts *options.ChangeStreamOptions) (changeStream, error) {
-		return scripted, nil
+func TestPuller_runBackend_ProcessingFailureStopsBeforeNextEvent(t *testing.T) {
+	decodeErr := errors.New("decode failure")
+	for _, failure := range []string{"decode", "normalize", "write"} {
+		t.Run(failure, func(t *testing.T) {
+			cfg := newTestConfig(t)
+			p := New(cfg, nil)
+			p.retryDelay = time.Millisecond
+			client, err := mongo.NewClient(options.Client().ApplyURI(testMongoURI))
+			require.NoError(t, err)
+			require.NoError(t, p.AddBackend("backend1", client, "testdb", config.PullerBackendConfig{Name: "backend1"}))
+			backend := p.backends["backend1"]
+			raw := normalizer.RawEvent{
+				OperationType: "insert", DocumentKey: bson.M{"_id": "first"},
+				ResumeToken: bson.Raw{5, 0, 0, 0, 0},
+			}
+			stream := &captureTestStream{raw: []normalizer.RawEvent{raw, raw}}
+			switch failure {
+			case "decode":
+				stream.decodeErr = decodeErr
+			case "normalize":
+				stream.raw[0].OperationType = "unknown"
+			case "write":
+				stream.beforeDecode = func() { require.NoError(t, backend.buffer.Close()) }
+			}
+			var opened, published int
+			p.openStream = func(context.Context, *mongo.Database, mongo.Pipeline, *options.ChangeStreamOptions) (changeStream, error) {
+				opened++
+				return stream, nil
+			}
+			p.SetEventHandler(func(context.Context, string, *events.StoreChangeEvent) error {
+				published++
+				return nil
+			})
+			var captureErr error
+			p.watchFunc = func(ctx context.Context, backend *Backend, logger *slog.Logger) error {
+				captureErr = p.watchChangeStream(ctx, backend, logger)
+				return captureErr
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			p.wg.Add(1)
+			p.runBackend(ctx, "backend1", backend)
+			require.NoError(t, ctx.Err(), "backend must stop without waiting for cancellation")
+			require.ErrorIs(t, captureErr, errCaptureFailed)
+			assert.ErrorContains(t, captureErr, "failed to "+failure)
+			if failure == "decode" {
+				assert.ErrorIs(t, captureErr, decodeErr)
+			}
+			assert.Equal(t, 1, opened, "processing failures must not reopen from_now")
+			assert.Equal(t, 1, stream.nextCalls, "the second event must remain unread")
+			assert.Zero(t, published)
+			assert.True(t, stream.closed.Load())
+			reopened, err := buffer.NewForBackend(cfg.Buffer.Path, "backend1", nil)
+			require.NoError(t, err)
+			defer reopened.Close()
+			token, err := reopened.LoadCheckpoint()
+			require.NoError(t, err)
+			assert.Nil(t, token)
+		})
 	}
+}
 
-	err := p.watchChangeStream(context.Background(), backend, p.logger)
+func TestPuller_runBackend_NativeErrorsKeepDurableCheckpoint(t *testing.T) {
+	for _, stage := range []string{"open", "read"} {
+		for _, reconnect := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/reconnect=%t", stage, reconnect), func(t *testing.T) {
+				cfg := newTestConfig(t)
+				p := New(cfg, nil)
+				p.retryDelay = time.Millisecond
+				client, err := mongo.NewClient(options.Client().ApplyURI(testMongoURI))
+				require.NoError(t, err)
+				require.NoError(t, p.AddBackend("backend1", client, "testdb", config.PullerBackendConfig{Name: "backend1"}))
+				backend := p.backends["backend1"]
+				token := bson.Raw{5, 0, 0, 0, 0}
+				require.NoError(t, backend.buffer.SaveCheckpoint(token))
+				historyErr := &mongo.CommandError{Code: 286, Name: "ChangeStreamHistoryLost", Message: "source history is unavailable"}
+				var opened int
+				p.openStream = func(_ context.Context, _ *mongo.Database, _ mongo.Pipeline, opts *options.ChangeStreamOptions) (changeStream, error) {
+					opened++
+					assert.Equal(t, token, opts.ResumeAfter)
+					assert.Nil(t, opts.StartAtOperationTime)
+					var streamErr error = historyErr
+					if reconnect && opened == 1 {
+						streamErr = errors.New("connection reset by peer")
+					}
+					if stage == "open" {
+						return nil, streamErr
+					}
+					return &fakeChangeStream{err: streamErr}, nil
+				}
+				var captureErr error
+				p.watchFunc = func(ctx context.Context, backend *Backend, logger *slog.Logger) error {
+					captureErr = p.watchChangeStream(ctx, backend, logger)
+					return captureErr
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				p.wg.Add(1)
+				p.runBackend(ctx, "backend1", backend)
+				require.NoError(t, ctx.Err())
+				assert.ErrorIs(t, captureErr, historyErr)
+				wantOpened := 1
+				if reconnect {
+					wantOpened = 2
+				}
+				assert.Equal(t, wantOpened, opened)
+				reopened, err := buffer.NewForBackend(cfg.Buffer.Path, "backend1", nil)
+				require.NoError(t, err)
+				defer reopened.Close()
+				actual, err := reopened.LoadCheckpoint()
+				require.NoError(t, err)
+				assert.Equal(t, token, actual, "history failure must retain the native token")
+			})
+		}
+	}
+}
+
+func TestPuller_watchChangeStream_PublishesBeforeBatchFlush(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Buffer.BatchSize = 100
+	cfg.Buffer.BatchInterval = time.Hour
+	p := New(cfg, nil)
+	client, err := mongo.NewClient(options.Client().ApplyURI(testMongoURI))
 	require.NoError(t, err)
-	assert.True(t, scripted.closed.Load(), "expected stream.Close to be called")
-	assert.Equal(t, int32(1), scripted.nextCalls.Load(), "expected a single Next call")
+	require.NoError(t, p.AddBackend("backend1", client, "testdb", config.PullerBackendConfig{Name: "backend1"}))
+	backend := p.backends["backend1"]
+	defer backend.buffer.Close()
+	token := bson.Raw{5, 0, 0, 0, 0}
+	stream := &captureTestStream{raw: []normalizer.RawEvent{{
+		OperationType: "insert", DocumentKey: bson.M{"_id": "first"}, ResumeToken: token,
+	}}}
+	p.openStream = func(context.Context, *mongo.Database, mongo.Pipeline, *options.ChangeStreamOptions) (changeStream, error) {
+		return stream, nil
+	}
+	var published atomic.Int32
+	p.SetEventHandler(func(context.Context, string, *events.StoreChangeEvent) error {
+		published.Add(1)
+		return nil
+	})
+	done := make(chan error, 1)
+	go func() { done <- p.watchChangeStream(context.Background(), backend, p.logger) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("live publication waited for a batch flush")
+	}
+	assert.Equal(t, int32(1), published.Load())
+	actual, err := backend.buffer.LoadCheckpoint()
+	require.NoError(t, err)
+	assert.Nil(t, actual, "the event must still be pending when it is published")
+	require.NoError(t, backend.buffer.Close())
+	reopened, err := buffer.NewForBackend(cfg.Buffer.Path, "backend1", nil)
+	require.NoError(t, err)
+	defer reopened.Close()
+	actual, err = reopened.LoadCheckpoint()
+	require.NoError(t, err)
+	assert.Equal(t, token, actual)
 }
 
 func TestBuildWatchPipeline_NoFilter(t *testing.T) {
@@ -508,19 +659,37 @@ func TestPuller_StartStop(t *testing.T) {
 
 func TestPuller_Stop_TimesOutWhenWorkersHang(t *testing.T) {
 	p := New(newTestConfig(t), nil)
+	buf, err := buffer.New(buffer.Options{Path: t.TempDir()})
+	require.NoError(t, err)
+	p.backends["backend1"] = &Backend{buffer: buf}
+	defer p.Stop(context.Background())
 
 	// Simulate a worker that never finishes.
 	p.wg.Add(1)
+	defer p.wg.Done()
 	p.cancel = func() {}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 
-	err := p.Stop(ctx)
+	err = p.Stop(ctx)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	_, err = buf.LoadCheckpoint()
+	assert.NoError(t, err, "a live worker retains ownership of its buffer after a stop timeout")
+}
 
-	// Release the waitgroup to avoid leaking goroutine from Stop's wait.
-	p.wg.Done()
+func TestPuller_StopPreservesBufferCloseError(t *testing.T) {
+	p := New(newTestConfig(t), nil)
+	buf, err := buffer.New(buffer.Options{Path: t.TempDir()})
+	require.NoError(t, err)
+	p.backends["backend1"] = &Backend{buffer: buf}
+	iter, err := buf.ScanFrom("")
+	require.NoError(t, err)
+	defer iter.Close()
+	closeErr := buf.Close()
+	require.ErrorContains(t, closeErr, "leaked iterators")
+	assert.ErrorIs(t, p.Stop(context.Background()), closeErr)
+	assert.ErrorIs(t, p.Stop(context.Background()), closeErr)
 }
 
 func TestPuller_Replay_IteratorErrorClosesExisting(t *testing.T) {
@@ -555,25 +724,30 @@ func (f *fakeChangeStream) Close(context.Context) error {
 	return nil
 }
 
-type decodeErrorStream struct {
-	nextCalls atomic.Int32
-	closed    atomic.Bool
+type captureTestStream struct {
+	fakeChangeStream
+	raw          []normalizer.RawEvent
+	nextCalls    int
+	decodeErr    error
+	beforeDecode func()
 }
 
-func (d *decodeErrorStream) Next(context.Context) bool {
-	if d.nextCalls.Load() > 0 {
+func (s *captureTestStream) Next(context.Context) bool {
+	if s.nextCalls == len(s.raw) {
 		return false
 	}
-	d.nextCalls.Add(1)
+	s.nextCalls++
 	return true
 }
 
-func (d *decodeErrorStream) Decode(any) error { return errors.New("decode fail") }
-
-func (d *decodeErrorStream) Err() error { return nil }
-
-func (d *decodeErrorStream) Close(context.Context) error {
-	d.closed.Store(true)
+func (s *captureTestStream) Decode(dst any) error {
+	if s.beforeDecode != nil {
+		s.beforeDecode()
+	}
+	if s.decodeErr != nil {
+		return s.decodeErr
+	}
+	*dst.(*normalizer.RawEvent) = s.raw[s.nextCalls-1]
 	return nil
 }
 
