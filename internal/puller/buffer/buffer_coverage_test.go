@@ -153,7 +153,7 @@ func TestBuffer_Write_Atomicity(t *testing.T) {
 	// 1. Open buffer and write event + token
 	buf, err := New(Options{
 		Path:          dir,
-		BatchInterval: 5 * time.Millisecond,
+		BatchInterval: time.Hour,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -177,9 +177,8 @@ func TestBuffer_Write_Atomicity(t *testing.T) {
 		t.Fatalf("Write() error = %v", err)
 	}
 
-	// Ensure it's flushed
-	time.Sleep(50 * time.Millisecond)
-	buf.Close()
+	// Normal shutdown must commit the pending event and token together.
+	require.NoError(t, buf.Close())
 
 	// 2. Re-open buffer (simulate restart)
 	buf2, err := New(Options{

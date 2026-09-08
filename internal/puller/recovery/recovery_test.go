@@ -137,8 +137,8 @@ func TestHandler_HandleError_ResumeToken(t *testing.T) {
 
 	err := errors.New("resume token was not found")
 	action := h.HandleError(err)
-	if action != ActionRestart {
-		t.Errorf("HandleError() = %s, want restart", action)
+	if action != ActionFatal {
+		t.Errorf("HandleError() = %s, want fatal", action)
 	}
 	if h.ResumeTokenErrors() != 1 {
 		t.Errorf("ResumeTokenErrors() = %d, want 1", h.ResumeTokenErrors())

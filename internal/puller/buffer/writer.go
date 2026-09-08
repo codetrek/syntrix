@@ -22,7 +22,11 @@ type writeRequest struct {
 func (b *Buffer) Write(evt *events.StoreChangeEvent, token bson.Raw) error {
 	b.mu.Lock()
 	if b.closed {
+		err := b.failure
 		b.mu.Unlock()
+		if err != nil {
+			return err
+		}
 		return fmt.Errorf("buffer is closed")
 	}
 
@@ -89,19 +93,19 @@ func (b *Buffer) runBatcher() {
 	ticker := time.NewTicker(b.batchInterval)
 	defer ticker.Stop()
 
-	flush := func() {
+	flush := func() error {
 		// Swap pending to flushing under lock
 		b.mu.Lock()
 		if len(b.pending) == 0 {
 			b.mu.Unlock()
-			return
+			return nil
 		}
 		b.flushing = b.pending
 		b.pending = nil
 		b.mu.Unlock()
 
 		if len(b.flushing) == 0 {
-			return
+			return nil
 		}
 
 		batch := b.newBatch()
@@ -130,16 +134,16 @@ func (b *Buffer) runBatcher() {
 			}
 		}
 
-		_ = batch.Close()
+		if err := batch.Close(); err != nil && commitErr == nil {
+			commitErr = fmt.Errorf("failed to close batch: %w", err)
+		}
 
 		// Clear flushing queue
 		b.mu.Lock()
 		b.flushing = nil
-		b.mu.Unlock()
 
 		if commitErr != nil {
-			b.logger.Error("failed to flush batch, stopping batcher", "error", commitErr)
-			b.mu.Lock()
+			b.failure = commitErr
 			if !b.closed {
 				b.closed = true
 				// Note: closeCh might be already closed if Close() was called
@@ -150,16 +154,23 @@ func (b *Buffer) runBatcher() {
 				}
 			}
 			b.mu.Unlock()
-			return
+			b.logger.Error("failed to flush batch, stopping batcher", "error", commitErr)
+			return commitErr
 		}
+		b.mu.Unlock()
+		return nil
 	}
 
 	for {
 		select {
 		case <-b.notifyCh:
-			flush()
+			if err := flush(); err != nil {
+				return
+			}
 		case <-ticker.C:
-			flush()
+			if err := flush(); err != nil {
+				return
+			}
 		case <-b.closeCh:
 			// One last flush to drain pending events
 			flush()

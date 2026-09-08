@@ -189,7 +189,7 @@ func (h *Handler) HandleError(err error) Action {
 			"error", err,
 			"count", h.resumeTokenErrors,
 		)
-		return ActionRestart
+		return ActionFatal
 	}
 
 	// Check for transient errors that can be recovered with reconnect

@@ -3,6 +3,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -26,6 +27,9 @@ import (
 // EventHandler is a function that handles events from the change stream.
 // Note: This type must match the signature in grpc.EventSource interface.
 type EventHandler = func(ctx context.Context, backendName string, event *events.StoreChangeEvent) error
+
+// Retrying a local processing failure could reopen from_now before any token is saved.
+var errCaptureFailed = errors.New("capture failed")
 
 // Backend represents a single MongoDB backend being watched.
 type Backend struct {
@@ -240,21 +244,21 @@ func (p *Puller) Stop(ctx context.Context) error {
 		p.logger.Info("puller stopped gracefully")
 	case <-ctx.Done():
 		p.logger.Warn("puller stop timed out")
+		return ctx.Err()
 	}
 
 	// Ensure all backend buffers are closed. This is safe because Buffer.Close is idempotent.
 	// This handles cases where AddBackend was called but Start wasn't (e.g. tests or early failure).
-	for _, backend := range p.backends {
+	var closeErr error
+	for name, backend := range p.backends {
 		if backend.buffer != nil {
-			_ = backend.buffer.Close()
+			if err := backend.buffer.Close(); err != nil {
+				closeErr = errors.Join(closeErr, fmt.Errorf("failed to close backend %q buffer: %w", name, err))
+			}
 		}
 	}
 
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
-	return nil
+	return errors.Join(ctx.Err(), closeErr)
 }
 
 // runBackend runs the change stream consumer for a single backend.
@@ -282,19 +286,14 @@ func (p *Puller) runBackend(ctx context.Context, name string, backend *Backend) 
 				// Context cancelled, normal shutdown
 				return
 			}
+			if errors.Is(err, errCaptureFailed) {
+				logger.Error("capture failed, stopping backend", "error", err)
+				return
+			}
 
 			action := backend.recoveryHandler.HandleError(err)
 			switch action {
-			case recovery.ActionRestart:
-				logger.Warn("restarting backend due to error", "error", err)
-				if recErr := backend.recoveryHandler.RecoverFromResumeTokenError(ctx); recErr != nil {
-					logger.Error("failed to recover from resume token error", "error", recErr)
-					// If recovery fails, we might want to stop or retry.
-					// For now, we'll retry which will likely trigger another error.
-				}
-				// Continue loop to restart watch
-				time.Sleep(p.retryDelay)
-			case recovery.ActionFatal:
+			case recovery.ActionRestart, recovery.ActionFatal:
 				logger.Error("fatal error, stopping backend", "error", err)
 				return
 			case recovery.ActionReconnect:
@@ -317,8 +316,7 @@ func (p *Puller) watchChangeStream(ctx context.Context, backend *Backend, logger
 	// Load resume token if exists
 	resumeToken, err := backend.buffer.LoadCheckpoint()
 	if err != nil {
-		logger.Warn("failed to load checkpoint from buffer", "error", err)
-		// Continue without resume token
+		return fmt.Errorf("%w: failed to load checkpoint: %w", errCaptureFailed, err)
 	}
 
 	// Build watch pipeline for collection filtering
@@ -351,15 +349,13 @@ func (p *Puller) watchChangeStream(ctx context.Context, backend *Backend, logger
 	for stream.Next(ctx) {
 		var raw normalizer.RawEvent
 		if err := stream.Decode(&raw); err != nil {
-			logger.Error("failed to decode event", "error", err)
-			continue
+			return fmt.Errorf("%w: failed to decode event: %w", errCaptureFailed, err)
 		}
 
 		// Normalize event
 		evt, err := backend.normalizer.Normalize(&raw)
 		if err != nil {
-			logger.Error("failed to normalize event", "error", err)
-			continue
+			return fmt.Errorf("%w: failed to normalize event: %w", errCaptureFailed, err)
 		}
 		evt.Backend = backend.name
 
@@ -373,12 +369,10 @@ func (p *Puller) watchChangeStream(ctx context.Context, backend *Backend, logger
 		backend.gapDetector.RecordEvent(evt)
 
 		if err := backend.buffer.Write(evt, raw.ResumeToken); err != nil {
-			logger.Error("failed to write event to buffer", "error", err)
-			continue
+			return fmt.Errorf("%w: failed to write event to buffer: %w", errCaptureFailed, err)
 		}
 		logger.Debug("Puller: buffered event", "eventID", evt.EventID)
 
-		// Handle event after it is persisted
 		p.invokeHandlerWithBackpressure(ctx, backend, evt)
 	}
 

@@ -259,27 +259,43 @@ func TestPuller_ChangeStreamError_Reconnect(t *testing.T) {
 }
 
 func TestPuller_WatchChangeStream_LoadError(t *testing.T) {
-	env := setupTestEnv(t)
 	cfg := newTestConfig(t)
 	p := New(cfg, nil)
 	defer p.Stop(context.Background())
 	backendCfg := config.PullerBackendConfig{Collections: []string{"users"}}
-	_ = p.AddBackend("backend1", env.Client, env.DBName, backendCfg)
+	client, err := mongo.NewClient(options.Client().ApplyURI(testMongoURI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.AddBackend("backend1", client, "testdb", backendCfg); err != nil {
+		t.Fatal(err)
+	}
 
 	// Close buffer to force LoadCheckpoint error
 	_ = p.backends["backend1"].buffer.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	p.openStream = func(context.Context, *mongo.Database, mongo.Pipeline, *options.ChangeStreamOptions) (changeStream, error) {
+		t.Error("checkpoint read failure opened a fresh change stream")
+		return &fakeChangeStream{}, nil
+	}
 
-	// Start should succeed (logs warning)
-	err := p.Start(ctx)
+	err = p.Start(ctx)
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
 
-	time.Sleep(100 * time.Millisecond)
-	p.Stop(ctx)
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("checkpoint read failure retried instead of stopping the backend")
+	}
 }
 
 func TestPuller_WatchChangeStream_WatchError(t *testing.T) {

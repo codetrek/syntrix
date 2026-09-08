@@ -49,6 +49,7 @@ func TestBuffer_Close_DBError(t *testing.T) {
 
 	err = buf.Close()
 	assert.Error(t, err)
+	assert.ErrorIs(t, buf.Close(), err)
 }
 
 func TestBuffer_Close_PanicHandled(t *testing.T) {
