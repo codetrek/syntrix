@@ -1,12 +1,14 @@
 package core
 
 import (
+	"io"
 	"log/slog"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/syntrixbase/syntrix/internal/puller/events"
 )
 
@@ -62,11 +64,10 @@ func TestSubscriberManager(t *testing.T) {
 	logger := slog.Default() // Use default logger for tests
 	mgr := NewSubscriberManager(logger)
 
-	// Test Add/Get/Count
 	sub1 := NewSubscriber("sub1", nil, false, 10)
 	mgr.Add(sub1)
 	assert.Equal(t, 1, mgr.Count())
-	assert.Equal(t, sub1, mgr.Get("sub1"))
+	assert.Equal(t, []*Subscriber{sub1}, mgr.All())
 
 	// Test Broadcast
 	evt := &events.StoreChangeEvent{
@@ -93,7 +94,7 @@ func TestSubscriberManager(t *testing.T) {
 	assert.True(t, sub1.GetAndResetOverflow())
 
 	// Test Remove
-	mgr.Remove("sub1")
+	mgr.Remove(sub1)
 	assert.Equal(t, 0, mgr.Count())
 
 	select {
@@ -105,31 +106,121 @@ func TestSubscriberManager(t *testing.T) {
 }
 
 func TestSubscriberManager_Race(t *testing.T) {
-	mgr := NewSubscriberManager(nil)
-	sub := NewSubscriber("sub1", nil, false, 1000)
-	mgr.Add(sub)
-
-	done := make(chan struct{})
-	go func() {
-		for {
-			select {
-			case <-done:
-				return
-			default:
+	mgr := NewSubscriberManager(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, run := range []func(){
+		func() {
+			for i := 0; i < 100; i++ {
+				sub := NewSubscriber("same", nil, false, 10)
+				mgr.Add(sub)
+				mgr.Remove(sub)
+				mgr.Remove(sub)
+			}
+		},
+		func() {
+			for i := 0; i < 100; i++ {
 				mgr.Broadcast(&events.StoreChangeEvent{})
 			}
-		}
-	}()
-
+		},
+		func() {
+			for i := 0; i < 100; i++ {
+				mgr.CloseAll()
+			}
+		},
+	} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			run()
+		}()
+	}
+	close(start)
+	done := make(chan struct{})
 	go func() {
-		for i := 0; i < 100; i++ {
-			mgr.Add(NewSubscriber("sub-race", nil, false, 10))
-			mgr.Remove("sub-race")
-		}
+		wg.Wait()
 		close(done)
 	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("concurrent manager operations did not finish")
+	}
+	mgr.CloseAll()
+	assert.Zero(t, mgr.Count())
+}
 
-	<-done
+func TestSubscriberManager_SameLabel(t *testing.T) {
+	for _, label := range []string{"same", ""} {
+		t.Run("label="+label, func(t *testing.T) {
+			mgr := NewSubscriberManager(nil)
+			t.Cleanup(mgr.CloseAll)
+			a := NewSubscriber(label, nil, false, 2)
+			b := NewSubscriber(label, nil, false, 2)
+			mgr.Add(a)
+			mgr.Add(b)
+			mgr.Add(a)
+			require.Equal(t, 2, mgr.Count())
+			require.ElementsMatch(t, []*Subscriber{a, b}, mgr.All())
+
+			absent := NewSubscriber(label, nil, false, 2)
+			mgr.Remove(absent)
+			require.Equal(t, 2, mgr.Count())
+			select {
+			case <-absent.Done():
+				t.Fatal("unregistered subscriber was closed")
+			default:
+			}
+
+			first := &events.StoreChangeEvent{EventID: "first"}
+			mgr.Broadcast(first)
+			for _, sub := range []*Subscriber{a, b} {
+				select {
+				case got := <-sub.Events():
+					require.Same(t, first, got)
+				case <-time.After(time.Second):
+					t.Fatal("subscriber did not receive broadcast")
+				}
+				assert.Empty(t, sub.ch, "duplicate registration must not duplicate delivery")
+			}
+
+			mgr.Remove(a)
+			mgr.Remove(a)
+			require.Equal(t, 1, mgr.Count())
+			require.Equal(t, []*Subscriber{b}, mgr.All())
+			select {
+			case <-a.Done():
+			default:
+				t.Fatal("removed subscriber remains open")
+			}
+			select {
+			case <-b.Done():
+				t.Fatal("same-label subscriber was closed")
+			default:
+			}
+
+			second := &events.StoreChangeEvent{EventID: "second"}
+			mgr.Broadcast(second)
+			select {
+			case got := <-b.Events():
+				require.Same(t, second, got)
+			case <-time.After(time.Second):
+				t.Fatal("remaining subscriber did not receive broadcast")
+			}
+			assert.Empty(t, a.ch, "removed subscriber must not receive new broadcasts")
+
+			mgr.CloseAll()
+			mgr.Remove(a)
+			mgr.Remove(b)
+			require.Zero(t, mgr.Count())
+			select {
+			case <-b.Done():
+			default:
+				t.Fatal("CloseAll left subscriber open")
+			}
+		})
+	}
 }
 
 func TestSubscriberManager_All(t *testing.T) {

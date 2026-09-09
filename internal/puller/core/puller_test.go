@@ -147,6 +147,80 @@ func TestPuller_Subscribe_SendsEvents(t *testing.T) {
 	}
 }
 
+func TestPuller_Subscribe_SameLabel(t *testing.T) {
+	for _, label := range []string{"same", ""} {
+		for _, canceled := range []int{0, 1} {
+			t.Run(fmt.Sprintf("label=%s/cancel=%d", label, canceled), func(t *testing.T) {
+				p := New(config.Config{}, nil)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				t.Cleanup(cancel)
+				var channels [2]<-chan *events.PullerEvent
+				var cancels [2]context.CancelFunc
+				for i := range channels {
+					subCtx, subCancel := context.WithCancel(ctx)
+					cancels[i] = subCancel
+					channels[i] = p.Subscribe(subCtx, label, "")
+				}
+				t.Cleanup(func() {
+					for _, stop := range cancels {
+						stop()
+					}
+					for _, ch := range channels {
+					drain:
+						for {
+							select {
+							case _, ok := <-ch:
+								if !ok {
+									break drain
+								}
+							case <-ctx.Done():
+								t.Error("subscription did not terminate")
+								return
+							}
+						}
+					}
+				})
+				require.Equal(t, 2, p.subs.Count())
+
+				first := &events.StoreChangeEvent{
+					Backend: "db1", EventID: "first", ClusterTime: events.ClusterTime{T: 1, I: 1},
+				}
+				p.subs.Broadcast(first)
+				for _, ch := range channels {
+					select {
+					case got, ok := <-ch:
+						require.True(t, ok, "same-label subscription closed")
+						require.Same(t, first, got.Change)
+					case <-ctx.Done():
+						t.Fatal("subscription did not receive first event")
+					}
+				}
+
+				cancels[canceled]()
+				select {
+				case _, ok := <-channels[canceled]:
+					require.False(t, ok, "expected canceled subscription to close")
+				case <-ctx.Done():
+					t.Fatal("canceled subscription did not close")
+				}
+				require.Equal(t, 1, p.subs.Count(), "channel closure must follow subscription removal")
+
+				second := &events.StoreChangeEvent{
+					Backend: "db1", EventID: "second", ClusterTime: events.ClusterTime{T: 1, I: 2},
+				}
+				p.subs.Broadcast(second)
+				select {
+				case got, ok := <-channels[1-canceled]:
+					require.True(t, ok, "other subscription was closed by cancellation")
+					require.Same(t, second, got.Change)
+				case <-ctx.Done():
+					t.Fatal("remaining subscription did not receive second event")
+				}
+			})
+		}
+	}
+}
+
 func TestPuller_Subscribe_NonBlocking(t *testing.T) {
 	t.Parallel()
 	p := New(config.Config{}, nil)

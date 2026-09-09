@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	pullerv1 "github.com/syntrixbase/syntrix/api/gen/puller/v1"
 	"github.com/syntrixbase/syntrix/internal/core/storage"
 	"github.com/syntrixbase/syntrix/internal/puller/config"
@@ -124,6 +125,100 @@ func TestServer_Subscribe(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Timeout waiting for event")
+	}
+}
+
+func TestServer_Subscribe_ConsumerIDDoesNotIdentifyConnection(t *testing.T) {
+	for _, consumerID := range []string{"shared-consumer", ""} {
+		for _, canceled := range []int{0, 1} {
+			t.Run(fmt.Sprintf("consumer=%q/cancel=%d", consumerID, canceled), func(t *testing.T) {
+				source := &mockEventSource{}
+				srv := NewServer(config.GRPCConfig{ChannelSize: 4, HeartbeatInterval: time.Hour}, source, nil)
+				srv.Init()
+				t.Cleanup(srv.Shutdown)
+
+				var cancels [2]context.CancelFunc
+				var received [2]chan *pullerv1.PullerEvent
+				var results [2]chan error
+				for i := range 2 {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					cancels[i] = cancel
+					messages := make(chan *pullerv1.PullerEvent, 2)
+					received[i] = messages
+					result := make(chan error, 1)
+					results[i] = result
+					exited := make(chan struct{})
+					stream := &mockSubscribeServer{
+						ctx: ctx,
+						sendFunc: func(evt *pullerv1.PullerEvent) error {
+							select {
+							case messages <- evt:
+								return nil
+							case <-ctx.Done():
+								return ctx.Err()
+							}
+						},
+					}
+					t.Cleanup(func() {
+						cancel()
+						select {
+						case <-exited:
+						case <-time.After(2 * time.Second):
+							t.Error("Subscribe handler did not exit")
+						}
+					})
+					go func() {
+						defer close(exited)
+						result <- srv.Subscribe(&pullerv1.SubscribeRequest{ConsumerId: consumerID}, stream)
+					}()
+					require.Eventually(t, func() bool {
+						return srv.SubscriberCount() == i+1
+					}, time.Second, time.Millisecond)
+				}
+
+				first := &events.StoreChangeEvent{
+					EventID: "event-1", Backend: "backend", ClusterTime: events.ClusterTime{T: 1, I: 1},
+				}
+				require.NoError(t, source.EmitEvent(context.Background(), first.Backend, first))
+				for _, messages := range received {
+					select {
+					case response := <-messages:
+						require.Equal(t, first.EventID, response.GetChangeEvent().GetEventId())
+					case <-time.After(time.Second):
+						t.Fatal("registered subscriber did not receive the first event")
+					}
+				}
+
+				cancels[canceled]()
+				select {
+				case err := <-results[canceled]:
+					require.NoError(t, err)
+				case <-time.After(time.Second):
+					t.Fatal("canceled Subscribe handler did not complete its deferred removal")
+				}
+				require.Equal(t, 1, srv.SubscriberCount())
+
+				second := &events.StoreChangeEvent{
+					EventID: "event-2", Backend: "backend", ClusterTime: events.ClusterTime{T: 1, I: 2},
+				}
+				require.NoError(t, source.EmitEvent(context.Background(), second.Backend, second))
+				remaining := 1 - canceled
+				select {
+				case response := <-received[remaining]:
+					require.Equal(t, second.EventID, response.GetChangeEvent().GetEventId())
+				case <-time.After(time.Second):
+					t.Fatal("remaining subscriber did not receive the event after the other handler exited")
+				}
+				cancels[remaining]()
+				select {
+				case err := <-results[remaining]:
+					require.NoError(t, err)
+				case <-time.After(time.Second):
+					t.Fatal("remaining Subscribe handler did not exit")
+				}
+				require.Zero(t, srv.SubscriberCount())
+			})
+		}
 	}
 }
 

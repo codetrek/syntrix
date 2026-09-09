@@ -518,7 +518,7 @@ func (p *Puller) Subscribe(ctx context.Context, consumerID string, after string)
 
 	go func() {
 		defer close(outCh)
-		defer p.subs.Remove(consumerID)
+		defer p.subs.Remove(sub)
 
 		for {
 			select {
