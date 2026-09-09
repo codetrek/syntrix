@@ -4,15 +4,122 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"github.com/syntrixbase/syntrix/internal/core/pubsub"
 	pubsubtesting "github.com/syntrixbase/syntrix/internal/core/pubsub/testing"
+	"github.com/syntrixbase/syntrix/internal/trigger/delivery/worker"
 	"github.com/syntrixbase/syntrix/internal/trigger/types"
 )
+
+func TestConsumer_Worker_HTTPResponses(t *testing.T) {
+	tests := []struct {
+		name      string
+		statuses  []int
+		nakDelays []time.Duration
+		wantAck   bool
+		wantTerm  bool
+	}{
+		{
+			name:      "rate_limit_then_success",
+			statuses:  []int{http.StatusTooManyRequests, http.StatusNoContent},
+			nakDelays: []time.Duration{2 * time.Second, 0},
+			wantAck:   true,
+		},
+		{
+			name:      "rate_limit_exhaustion",
+			statuses:  []int{http.StatusTooManyRequests, http.StatusTooManyRequests, http.StatusTooManyRequests},
+			nakDelays: []time.Duration{2 * time.Second, 3 * time.Second, 0},
+			wantTerm:  true,
+		},
+		{
+			name:      "bad_request",
+			statuses:  []int{http.StatusBadRequest},
+			nakDelays: []time.Duration{0},
+			wantTerm:  true,
+		},
+		{
+			name:      "server_error",
+			statuses:  []int{http.StatusInternalServerError},
+			nakDelays: []time.Duration{2 * time.Second},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempt := int(requests.Add(1))
+				if attempt > len(tt.statuses) {
+					t.Errorf("unexpected HTTP request %d", attempt)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				w.WriteHeader(tt.statuses[attempt-1])
+			}))
+			defer server.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			workerMetrics := new(MockMetrics)
+			workerMetrics.Test(t)
+			for _, status := range tt.statuses {
+				switch status {
+				case http.StatusNoContent:
+					workerMetrics.On("IncDeliverySuccess", "database1", "users").Once()
+					workerMetrics.On("ObserveDeliveryLatency", "database1", "users", mock.Anything).Once()
+				case http.StatusBadRequest:
+					workerMetrics.On("IncDeliveryFailure", "database1", "users", status, true).Once()
+				default:
+					workerMetrics.On("IncDeliveryFailure", "database1", "users", status, false).Once()
+				}
+			}
+			c := &natsConsumer{
+				worker:     worker.NewDeliveryWorker(nil, nil, worker.HTTPClientOptions{}, workerMetrics),
+				numWorkers: 1,
+				metrics:    &types.NoopMetrics{},
+			}
+			data, err := json.Marshal(&types.DeliveryTask{
+				TriggerID:  "http-response-trigger",
+				Database:   "database1",
+				Collection: "users",
+				URL:        server.URL,
+				RetryPolicy: types.RetryPolicy{
+					MaxAttempts:    3,
+					InitialBackoff: types.Duration(2 * time.Second),
+					MaxBackoff:     types.Duration(3 * time.Second),
+				},
+			})
+			require.NoError(t, err)
+
+			for i := range tt.statuses {
+				// The mock records the requested delay; each new message simulates the next broker delivery.
+				msg := pubsubtesting.NewMockMessage("test.subject", data)
+				msg.SetMetadata(pubsub.MessageMetadata{NumDelivered: uint64(i + 1)})
+				c.workerChans = []chan pubsub.Message{make(chan pubsub.Message, 1)}
+				c.workerChans[0] <- msg
+				close(c.workerChans[0])
+				c.wg.Add(1)
+				c.workerLoop(ctx, 0)
+
+				last := i == len(tt.statuses)-1
+				require.Equal(t, tt.nakDelays[i] > 0, msg.IsNaked(), "delivery %d", i+1)
+				require.Equal(t, tt.nakDelays[i], msg.NakDelay(), "delivery %d", i+1)
+				require.Equal(t, last && tt.wantAck, msg.IsAcked(), "delivery %d", i+1)
+				require.Equal(t, last && tt.wantTerm, msg.IsTermed(), "delivery %d", i+1)
+				require.Equal(t, int32(i+1), requests.Load())
+			}
+			workerMetrics.AssertExpectations(t)
+		})
+	}
+}
 
 // TestConsumer_Dispatch_InvalidPayload verifies that invalid payloads are Terminated.
 func TestConsumer_Dispatch_InvalidPayload(t *testing.T) {

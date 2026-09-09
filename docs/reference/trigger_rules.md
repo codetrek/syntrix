@@ -34,7 +34,29 @@ A Trigger is defined by a JSON configuration object. Here is the structure:
 -   **Deletion data**: A tombstone retains metadata and clears business fields. Access to former values requires the proposed [before-image capability](../../.agents/notes/proposed/feature/2026-09-07-trigger-before-images.md).
 -   **`condition`**: A CEL expression string. If this evaluates to `true`, the webhook is fired. If empty, it defaults to `true`.
 -   **`url`**: The destination URL for the webhook POST request.
--   **`retryPolicy`**: Configuration for retrying failed deliveries. Backoff times are duration strings (e.g., `1s`, `100ms`, `1m`).
+-   **`retryPolicy`**: Configuration for [delivery retries](#delivery-retries). Backoff times are duration strings (e.g., `1s`, `100ms`, `1m`).
+
+## Delivery Retries
+
+HTTP 2xx completes delivery. HTTP 429 is retried because endpoint throttling can
+recover after waiting. Other 4xx responses terminate immediately. Other non-2xx
+responses returned by the HTTP client, network errors, and attempt timeouts also
+follow the retry policy. Redirect handling remains the HTTP client's existing
+behavior.
+
+`maxAttempts` counts total deliveries, including the initial attempt. A task
+value of zero uses 3 attempts. When a retryable failure reaches that limit, the
+consumer logs exhaustion and terminates the message. After failed delivery number
+`n`, the delay is `initialBackoff * 2^(n-1)`; a zero task `initialBackoff` uses
+1 second. A positive `maxBackoff` caps that delay. For example, 3 attempts with
+an initial backoff of 1 second and a maximum of 10 seconds schedule retries after
+1 and 2 seconds if the first two attempts fail.
+
+Retries use queue-delayed redelivery. `Retry-After` response headers do not
+change the delay, so a retry can arrive during an endpoint-requested pause.
+[Honoring response hints](../../.agents/notes/proposed/feature/2026-09-07-trigger-retry-after.md)
+is proposed separately. Retries can repeat external side effects; receivers
+must account for duplicate requests.
 
 ## Writing Conditions (CEL)
 
