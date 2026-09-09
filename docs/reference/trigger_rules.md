@@ -15,6 +15,7 @@ A Trigger is defined by a JSON configuration object. Here is the structure:
   "events": ["create"],
   "condition": "event.document.data.age >= 18",
   "url": "http://localhost:3000/webhooks/welcome",
+  "timeout": "30s",
   "headers": {
     "X-Custom-Header": "value"
   },
@@ -34,7 +35,39 @@ A Trigger is defined by a JSON configuration object. Here is the structure:
 -   **Deletion data**: A tombstone retains metadata and clears business fields. Access to former values requires the proposed [before-image capability](../../.agents/notes/proposed/feature/2026-09-07-trigger-before-images.md).
 -   **`condition`**: A CEL expression string. If this evaluates to `true`, the webhook is fired. If empty, it defaults to `true`.
 -   **`url`**: The destination URL for the webhook POST request.
+-   **`timeout`**: Per-attempt execution budget as a duration string (e.g., `"30s"` or `"2m"`); see [delivery timeouts](#delivery-timeouts).
 -   **`retryPolicy`**: Configuration for [delivery retries](#delivery-retries). Backoff times are duration strings (e.g., `1s`, `100ms`, `1m`).
+
+## Delivery Timeouts
+
+| Rule `timeout` | Behavior |
+|----------------|----------|
+| Omitted or zero | Capture a 30-second timeout in each new task |
+| Positive duration | Capture that configured timeout unchanged |
+| Negative duration | Reject the rule set and preserve the previously active rules |
+
+Malformed or unrepresentable duration strings fail configuration parsing. There is no
+additional timeout maximum. A task retains its captured value across retries;
+later rule edits apply to newly created tasks.
+
+The execution budget starts after queue waiting and covers preparation, secret
+resolution, system-token signing, and HTTP work together. Every retry receives
+a fresh budget; waiting for delayed redelivery does not consume it. Earlier
+parent cancellation or deadlines still apply. Timeout failures follow the
+existing retry policy and attempt limit.
+
+The HTTP worker adds no total client timeout by default. A caller that explicitly
+sets a positive HTTP client timeout adds that cap; direct worker callers must
+provide their own bounded or cancellable context. Context-aware operations observe
+cancellation. Local RSA token signing is synchronous and cannot be preempted by
+its context; it consumes elapsed budget but may complete after the deadline.
+Cancellation does not undo effects already performed by a receiver.
+
+The broker acknowledgement window includes both local queue waiting and execution.
+It is independent of the rule budget, so long waits or attempts can overlap broker
+redelivery. [Acknowledgement-window coordination](../../.agents/notes/proposed/architecture/2026-09-07-trigger-acknowledgement-window.md)
+is proposed separately. The [timeout decision](../../.agents/notes/implemented/bug-fix/2026-09-07-trigger-rule-timeouts.md)
+records the delivered ownership and limits.
 
 ## Delivery Retries
 

@@ -21,6 +21,9 @@ func ValidateTrigger(t *types.Trigger) error {
 	if !validNameRegex.MatchString(t.ID) {
 		return fmt.Errorf("invalid trigger id: %s", t.ID)
 	}
+	if t.Timeout < 0 {
+		return errors.New("timeout must not be negative")
+	}
 
 	if t.Database == "" {
 		return errors.New("database is required")
