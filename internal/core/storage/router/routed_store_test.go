@@ -31,8 +31,8 @@ type mockDocumentStore struct {
 	mock.Mock
 }
 
-func (m *mockDocumentStore) Get(ctx context.Context, database string, path string) (*types.StoredDoc, error) {
-	args := m.Called(ctx, database, path)
+func (m *mockDocumentStore) Get(ctx context.Context, database string, path string, opts ...types.ReadOptions) (*types.StoredDoc, error) {
+	args := m.Called(ctx, database, path, opts)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -119,7 +119,7 @@ func TestRoutedDocumentStore(t *testing.T) {
 		store := new(mockDocumentStore)
 
 		router.On("Select", database, types.OpRead).Return(store, nil)
-		store.On("Get", ctx, database, "path").Return(&types.StoredDoc{}, nil)
+		store.On("Get", ctx, database, "path", []types.ReadOptions(nil)).Return(&types.StoredDoc{}, nil)
 
 		rs := NewRoutedDocumentStore(router)
 		_, err := rs.Get(ctx, database, "path")
@@ -334,8 +334,8 @@ func TestRoutedDocumentStoreWatchStaysOnSelectedPrimary(t *testing.T) {
 	cleanupErr := errors.New("cursor cleanup failed")
 
 	primary.On("Watch", ctx, "app", "", after, types.WatchOptions{}).Return(stream, nil).Once()
-	replica.On("Get", ctx, "app", doc.Fullpath).Return(doc, nil).Once()
-	replacement.On("Get", ctx, "app", doc.Fullpath).Return(doc, nil).Once()
+	replica.On("Get", ctx, "app", doc.Fullpath, []types.ReadOptions(nil)).Return(doc, nil).Once()
+	replacement.On("Get", ctx, "app", doc.Fullpath, []types.ReadOptions(nil)).Return(doc, nil).Once()
 	stream.On("InitialCheckpoint").Return(after).Once()
 	stream.On("Next", ctx).Return(frame, nil).Once()
 	stream.On("Next", ctx).Return(types.WatchFrame{}, terminal).Once()
@@ -705,4 +705,125 @@ func TestRoutedRevocationStore(t *testing.T) {
 		err := rs.Close(ctx)
 		assert.NoError(t, err)
 	})
+}
+
+func TestRoutedDocumentStoreGetReadOptions(t *testing.T) {
+	for _, database := range []string{"default", "override"} {
+		for _, path := range []string{"users/user1", "sys/databases/app"} {
+			for _, tc := range []struct {
+				name    string
+				opts    []types.ReadOptions
+				primary bool
+			}{
+				{name: "implicit default"},
+				{name: "explicit default", opts: []types.ReadOptions{{}}},
+				{name: "authoritative", opts: []types.ReadOptions{{Consistency: types.ReadAuthoritative}}, primary: true},
+			} {
+				t.Run(database+"/"+path+"/"+tc.name, func(t *testing.T) {
+					primary, replica := new(mockDocumentStore), new(mockDocumentStore)
+					overridePrimary, overrideReplica := new(mockDocumentStore), new(mockDocumentStore)
+					selected := replica
+					if tc.primary {
+						selected = primary
+					}
+					if database == "override" {
+						selected = overrideReplica
+						if tc.primary {
+							selected = overridePrimary
+						}
+					}
+					ctx := context.Background()
+					expected := &types.StoredDoc{Database: database, Fullpath: path, Version: 9}
+					selected.On("Get", ctx, database, path, tc.opts).Return(expected, nil).Once()
+					routed := NewRoutedDocumentStore(NewDatabaseDocumentRouter(
+						NewSplitDocumentRouter(primary, replica),
+						map[string]types.DocumentRouter{"override": NewSplitDocumentRouter(overridePrimary, overrideReplica)},
+					))
+					actual, err := routed.Get(ctx, database, path, tc.opts...)
+					require.NoError(t, err)
+					assert.Same(t, expected, actual)
+					for _, store := range []*mockDocumentStore{primary, replica, overridePrimary, overrideReplica} {
+						store.AssertExpectations(t)
+						if store != selected {
+							assert.Empty(t, store.Calls)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestRoutedDocumentStoreGetAuthoritativeErrors(t *testing.T) {
+	opts := types.ReadOptions{Consistency: types.ReadAuthoritative}
+	t.Run("selection failure", func(t *testing.T) {
+		router := new(mockDocRouter)
+		expected := errors.New("primary unavailable")
+		router.On("Select", "app", types.OpWrite).Return(nil, expected).Once()
+		doc, err := NewRoutedDocumentStore(router).Get(context.Background(), "app", "users/user1", opts)
+		assert.Nil(t, doc)
+		assert.Same(t, expected, err)
+		router.AssertExpectations(t)
+	})
+	for _, expected := range []error{errors.New("primary read failed"), model.ErrNotFound, context.Canceled, context.DeadlineExceeded} {
+		t.Run(expected.Error(), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if expected == context.Canceled {
+				cancel()
+			}
+			if expected == context.DeadlineExceeded {
+				var deadlineCancel context.CancelFunc
+				ctx, deadlineCancel = context.WithDeadline(ctx, time.Now().Add(-time.Second))
+				defer deadlineCancel()
+			}
+			primary, replica := new(mockDocumentStore), new(mockDocumentStore)
+			primary.On("Get", ctx, "app", "users/user1", []types.ReadOptions{opts}).Return(nil, expected).Once()
+			doc, err := NewRoutedDocumentStore(NewSplitDocumentRouter(primary, replica)).Get(ctx, "app", "users/user1", opts)
+			assert.Nil(t, doc)
+			assert.ErrorIs(t, err, expected)
+			assert.Equal(t, expected, err)
+			primary.AssertExpectations(t)
+			assert.Empty(t, replica.Calls)
+		})
+	}
+}
+
+func TestRoutedDocumentStoreGetRejectsInvalidOptions(t *testing.T) {
+	for _, opts := range [][]types.ReadOptions{
+		{{Consistency: 255}},
+		{{}, {}},
+		{{Consistency: types.ReadAuthoritative}, {Consistency: types.ReadAuthoritative}},
+	} {
+		router := new(mockDocRouter)
+		doc, err := NewRoutedDocumentStore(router).Get(context.Background(), "app", "users/user1", opts...)
+		assert.Nil(t, doc)
+		assert.Error(t, err)
+		assert.Empty(t, router.Calls)
+	}
+}
+
+func TestRoutedDocumentStoreGetAuthoritativeDatabaseIsolation(t *testing.T) {
+	ctx := context.Background()
+	opts := types.ReadOptions{Consistency: types.ReadAuthoritative}
+	defaultPrimary, defaultReplica := new(mockDocumentStore), new(mockDocumentStore)
+	overridePrimary, overrideReplica := new(mockDocumentStore), new(mockDocumentStore)
+	path := "users/shared"
+	defaultDoc := &types.StoredDoc{Database: "default", Fullpath: path, Version: 3}
+	overrideDoc := &types.StoredDoc{Database: "override", Fullpath: path, Version: 8}
+	defaultPrimary.On("Get", ctx, "default", path, []types.ReadOptions{opts}).Return(defaultDoc, nil).Twice()
+	overridePrimary.On("Get", ctx, "override", path, []types.ReadOptions{opts}).Return(overrideDoc, nil).Once()
+	store := NewRoutedDocumentStore(NewDatabaseDocumentRouter(
+		NewSplitDocumentRouter(defaultPrimary, defaultReplica),
+		map[string]types.DocumentRouter{"override": NewSplitDocumentRouter(overridePrimary, overrideReplica)},
+	))
+	for _, expected := range []*types.StoredDoc{defaultDoc, overrideDoc, defaultDoc} {
+		actual, err := store.Get(ctx, expected.Database, path, opts)
+		require.NoError(t, err)
+		assert.Same(t, expected, actual)
+	}
+	defaultPrimary.AssertExpectations(t)
+	overridePrimary.AssertExpectations(t)
+	assert.Empty(t, defaultReplica.Calls)
+	assert.Empty(t, overrideReplica.Calls)
 }

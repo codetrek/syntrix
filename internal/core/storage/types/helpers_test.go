@@ -63,3 +63,32 @@ func TestNewDocument_NoSlashCollection(t *testing.T) {
 	assert.Equal(t, "root", doc.Collection)
 	assert.Empty(t, doc.Parent)
 }
+
+func TestResolveReadOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		options  []ReadOptions
+		expected ReadOptions
+		invalid  bool
+	}{
+		{name: "omitted"},
+		{name: "empty", options: []ReadOptions{}},
+		{name: "zero value", options: []ReadOptions{{}}},
+		{name: "explicit default", options: []ReadOptions{{Consistency: ReadDefault}}},
+		{name: "authoritative", options: []ReadOptions{{Consistency: ReadAuthoritative}}, expected: ReadOptions{Consistency: ReadAuthoritative}},
+		{name: "unknown consistency", options: []ReadOptions{{Consistency: 255}}, invalid: true},
+		{name: "duplicate default", options: []ReadOptions{{}, {}}, invalid: true},
+		{name: "duplicate authoritative", options: []ReadOptions{{Consistency: ReadAuthoritative}, {Consistency: ReadAuthoritative}}, invalid: true},
+		{name: "conflicting", options: []ReadOptions{{}, {Consistency: ReadAuthoritative}}, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			actual, err := ResolveReadOptions(tc.options)
+			if tc.invalid {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expected, actual)
+		})
+	}
+}

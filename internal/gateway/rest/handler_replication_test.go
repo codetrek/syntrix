@@ -214,7 +214,7 @@ type replicationPushStore struct {
 	predicate model.Filters
 }
 
-func (s *replicationPushStore) Get(_ context.Context, database, path string) (*storage.StoredDoc, error) {
+func (s *replicationPushStore) Get(_ context.Context, database, path string, _ ...storage.ReadOptions) (*storage.StoredDoc, error) {
 	s.reads++
 	s.database, s.path = database, path
 	return s.live, nil

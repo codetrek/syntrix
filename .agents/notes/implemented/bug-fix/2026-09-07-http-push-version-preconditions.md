@@ -8,7 +8,9 @@ The HTTP Push handler stripped `document.version` before extracting it and passe
 no `BaseVersion` to Query. The documented optional version precondition was lost,
 so existing live-target version checks could not protect HTTP writes. Decoding
 the value only through the generic document map would also round integers beyond
-JSON's commonly used floating-point precision.
+JSON's commonly used floating-point precision. Read/write splitting could also
+feed Push a stale replica version or apparent absence before a write, even when
+the HTTP precondition was preserved.
 
 ## Decision
 
@@ -41,6 +43,25 @@ No protobuf, SDK, action, or conflict-response contract changes are introduced.
 In particular, `create` with version 1 remains accepted, and zero is an equality
 precondition on an existing live target, not an insert-only instruction.
 
+Push's initial lookup and all three conflict lookups now explicitly request
+`ReadOptions{Consistency: ReadAuthoritative}`. The routed store selects that
+logical database's `OpWrite` source and forwards the option. Mongo clones the
+collection handle for this call with primary read preference, preserving shared
+client/collection settings. Ordinary `Get`, `GetMany`, and `Query` retain their
+configured read behavior.
+
+`Get` accepts zero or one options value. Omission or `ReadDefault` uses ordinary
+read routing; unsupported modes and multiple values fail. Authoritative-source
+selection and read errors propagate without a replica fallback. Push also
+propagates non-`ErrNotFound` conflict-read errors instead of returning an
+incomplete success response. Genuine absence still follows the existing paths.
+
+Authoritative selection requires a writer-capable backend topology. A Mongo
+connection explicitly pinned to a secondary is not made writer-capable by setting
+primary read preference. The option selects the write source; it does not lock a
+document, create a transaction, or establish linearizable reads. Atomic write
+predicates remain necessary because data can change after the read.
+
 ## Alternatives
 
 **Add a separate public `baseVersion` field** would distinguish payload from
@@ -50,6 +71,14 @@ metadata explicitly, but changes the established flattened protocol when
 **Decode all document numbers as exact-number wrappers** would preserve version
 precision, but also changes business-data runtime types throughout the existing
 document path. A local raw-field decoder preserves precision without that change.
+
+**Add a separate `GetForWrite` method** would name the intent explicitly but
+duplicate the single-document read API. A typed per-call option keeps the routing
+requirement visible and forwards it through the existing interface.
+
+**Carry consistency in context values** would avoid an explicit parameter but
+hide a correctness requirement from the storage call. `ReadOptions` exposes the
+request and supports validation without changing ordinary read routing.
 
 **Implement strict create/update/delete semantics with this repair** would also
 address absent and tombstoned targets, but requires Query/storage predicates and
@@ -66,8 +95,9 @@ now describes the accepted input and current limits.
 
 This repair does not establish complete conditional-write safety. Query still
 takes its not-found/Create branch before checking the precondition, so a missing
-or deleted target can be recreated. Concurrent deletion and failed conflict reads
-can also leave incomplete conflict results. The original proposal retains these
+or deleted target can be recreated. Concurrent deletion can still leave an
+incomplete conflict result when the authoritative lookup returns `ErrNotFound`.
+Other conflict-read errors now propagate. The original proposal retains these
 bugs, strict action/version combinations, tombstone-aware reads, structured
 conflicts, and protocol migration. Retries after a lost response remain ambiguous;
 version checks do not establish exactly-once effects.

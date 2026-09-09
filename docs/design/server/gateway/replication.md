@@ -120,8 +120,10 @@ documents retain server initialization at version 1. The supplied value is not
 assigned to stored version metadata. The existing gRPC encoding preserves absence
 as `-1` and retains explicit zero and supported positive int64 values.
 
-Existing live-target writes compare the version and apply it in the atomic write
-predicate. Explicit zero is an equality precondition, not an insert-only request;
+Push requests the database's write source for its initial and conflict lookups.
+Non-not-found conflict-read errors propagate as server errors. These reads do not
+lock data or establish transactions or linearizable reads. Existing live-target
+writes compare the version and apply it in the atomic write predicate. Explicit zero is an equality precondition, not an insert-only request;
 `create` with version 1 remains accepted. Omission retains the current optional,
 unconditional behavior. A malformed version anywhere in a batch prevents all
 Engine calls for that request; valid batches remain nontransactional.
@@ -141,8 +143,8 @@ existing document-number representation.
 - Push may return `conflicts` containing the authoritative server documents in flattened form.
 - Clients decide whether to retry, merge, or surface conflicts.
 - The initial not-found path can enter Create before checking the version, including
-  for deleted targets. Concurrent deletion and failed conflict reads can also leave
-  incomplete conflict results. Strict create/update/delete predicates, authoritative
+  for deleted targets. Concurrent deletion can still leave incomplete conflict
+  results when the authoritative lookup reports absence. Strict create/update/delete predicates, authoritative
   missing/tombstone results, and structured conflict reasons remain in the
   [version-check proposal](../../../../.agents/notes/proposed/bug-fix/2026-09-07-replication-push-version-checks.md).
 

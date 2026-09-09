@@ -2,12 +2,30 @@ package types
 
 import (
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/syntrixbase/syntrix/pkg/model"
 	"github.com/zeebo/blake3"
 )
+
+// ResolveReadOptions preserves default routing only when no other consistency is requested.
+func ResolveReadOptions(opts []ReadOptions) (ReadOptions, error) {
+	if len(opts) > 1 {
+		return ReadOptions{}, fmt.Errorf("Get accepts at most one ReadOptions value")
+	}
+	var resolved ReadOptions
+	if len(opts) == 1 {
+		resolved = opts[0]
+	}
+	switch resolved.Consistency {
+	case ReadDefault, ReadAuthoritative:
+		return resolved, nil
+	default:
+		return ReadOptions{}, fmt.Errorf("unsupported read consistency: %d", resolved.Consistency)
+	}
+}
 
 // CalculateDatabase calculates the database-aware document ID
 // Format: database:hash(fullpath)

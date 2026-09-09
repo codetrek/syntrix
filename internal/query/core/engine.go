@@ -357,7 +357,7 @@ func (e *Engine) Push(ctx context.Context, database string, req storage.Replicat
 			}
 		}
 
-		existing, err := e.storage.Get(ctx, database, doc.Fullpath)
+		existing, err := e.storage.Get(ctx, database, doc.Fullpath, storage.ReadOptions{Consistency: storage.ReadAuthoritative})
 		if err != nil {
 			if err == model.ErrNotFound {
 				if err := e.storage.Create(ctx, database, *doc); err != nil {
@@ -386,12 +386,18 @@ func (e *Engine) Push(ctx context.Context, database string, req storage.Replicat
 		if doc.Deleted {
 			if err := e.storage.Delete(ctx, database, doc.Fullpath, filters); err != nil {
 				if err == model.ErrPreconditionFailed {
-					latest, _ := e.storage.Get(ctx, database, doc.Fullpath)
+					latest, getErr := e.storage.Get(ctx, database, doc.Fullpath, storage.ReadOptions{Consistency: storage.ReadAuthoritative})
+					if getErr != nil && !errors.Is(getErr, model.ErrNotFound) {
+						return nil, getErr
+					}
 					if latest != nil {
 						conflicts = append(conflicts, latest)
 					}
 				} else if err == model.ErrNotFound {
-					latest, getErr := e.storage.Get(ctx, database, doc.Fullpath)
+					latest, getErr := e.storage.Get(ctx, database, doc.Fullpath, storage.ReadOptions{Consistency: storage.ReadAuthoritative})
+					if getErr != nil && !errors.Is(getErr, model.ErrNotFound) {
+						return nil, getErr
+					}
 					if getErr == nil && latest != nil {
 						conflicts = append(conflicts, latest)
 					}
@@ -405,7 +411,10 @@ func (e *Engine) Push(ctx context.Context, database string, req storage.Replicat
 		// Update
 		if err := e.storage.Update(ctx, database, doc.Fullpath, doc.Data, filters); err != nil {
 			if err == model.ErrPreconditionFailed {
-				latest, _ := e.storage.Get(ctx, database, doc.Fullpath)
+				latest, getErr := e.storage.Get(ctx, database, doc.Fullpath, storage.ReadOptions{Consistency: storage.ReadAuthoritative})
+				if getErr != nil && !errors.Is(getErr, model.ErrNotFound) {
+					return nil, getErr
+				}
 				if latest != nil {
 					conflicts = append(conflicts, latest)
 				}

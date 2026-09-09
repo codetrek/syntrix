@@ -12,7 +12,7 @@ import (
 
 type fakeDocumentStore struct{}
 
-func (f *fakeDocumentStore) Get(ctx context.Context, database string, path string) (*types.StoredDoc, error) {
+func (f *fakeDocumentStore) Get(ctx context.Context, database string, path string, opts ...types.ReadOptions) (*types.StoredDoc, error) {
 	return nil, nil
 }
 func (f *fakeDocumentStore) Create(ctx context.Context, database string, doc types.StoredDoc) error {

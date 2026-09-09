@@ -78,14 +78,17 @@ It does not replace server-managed metadata.
 
 For an existing live target, a stale version returns the server document in
 `conflicts`; a matching version proceeds subject to the atomic write predicate
-and other storage outcomes. Explicit zero is preserved and does not mean
+and other storage outcomes. Push uses the database's write source for its initial
+and conflict lookups, rather than the ordinary replica read route. These reads
+do not lock the document or make the batch transactional. Non-not-found
+conflict-read errors return a server error. Explicit zero is preserved and does not mean
 insert-only. The existing `create` example with version 1 remains accepted.
 Omitting the version retains unconditional behavior. Invalid-version rejection
 covers the whole request, but a valid batch is not transactional.
 
 Current limits: a target missing from the initial read, including a deleted target,
-can still enter Create before version checking. Concurrent deletion or a failed
-conflict read can also leave incomplete conflict results. Strict insert-only
+can still enter Create before version checking. Concurrent deletion can leave
+incomplete conflict results when the conflict lookup reports absence. Strict insert-only
 create, missing/tombstone conflicts, and structured conflict reasons remain
 [proposed](../../.agents/notes/proposed/bug-fix/2026-09-07-replication-push-version-checks.md).
 The [HTTP precondition decision](../../.agents/notes/implemented/bug-fix/2026-09-07-http-push-version-preconditions.md)

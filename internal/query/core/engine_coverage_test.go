@@ -7,10 +7,114 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"github.com/syntrixbase/syntrix/internal/core/storage"
+	"github.com/syntrixbase/syntrix/internal/core/storage/router"
 	"github.com/syntrixbase/syntrix/internal/indexer"
 	"github.com/syntrixbase/syntrix/pkg/model"
 )
+
+func TestPush_AuthoritativeReadRouting(t *testing.T) {
+	primaryErr := errors.New("primary unavailable")
+	for _, deleted := range []bool{false, true} {
+		action := "update"
+		if deleted {
+			action = "delete"
+		}
+		t.Run(action, func(t *testing.T) {
+			type testCase struct {
+				name            string
+				baseVersion     int64
+				preReadErr      error
+				writeErr        error
+				refetchErr      error
+				conflictVersion int64
+				expectedErr     error
+			}
+			tests := []testCase{
+				{name: "matching primary version", baseVersion: 5},
+				{name: "stale replica version conflicts with primary", baseVersion: 4, conflictVersion: 5},
+				{name: "CAS race refetches primary", baseVersion: 5, writeErr: model.ErrPreconditionFailed, conflictVersion: 6},
+				{name: "primary read failure", baseVersion: 5, preReadErr: primaryErr, expectedErr: primaryErr},
+				{name: "primary read cancellation", baseVersion: 5, preReadErr: context.Canceled, expectedErr: context.Canceled},
+				{name: "conflict read failure", baseVersion: 5, writeErr: model.ErrPreconditionFailed, refetchErr: primaryErr, expectedErr: primaryErr},
+				{name: "conflict read cancellation", baseVersion: 5, writeErr: model.ErrPreconditionFailed, refetchErr: context.Canceled, expectedErr: context.Canceled},
+				{name: "conflict document no longer visible", baseVersion: 5, writeErr: model.ErrPreconditionFailed, refetchErr: model.ErrNotFound},
+			}
+			if deleted {
+				tests = append(tests,
+					testCase{name: "missing delete refetches primary", baseVersion: 5, writeErr: model.ErrNotFound, conflictVersion: 6},
+					testCase{name: "missing delete refetch failure", baseVersion: 5, writeErr: model.ErrNotFound, refetchErr: primaryErr, expectedErr: primaryErr},
+					testCase{name: "missing delete remains invisible", baseVersion: 5, writeErr: model.ErrNotFound, refetchErr: model.ErrNotFound},
+				)
+			}
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					ctx := context.Background()
+					primary := &routedReadStorage{}
+					replica := &routedReadStorage{}
+					primary.Test(t)
+					replica.Test(t)
+					t.Cleanup(func() {
+						primary.AssertExpectations(t)
+						replica.AssertExpectations(t)
+					})
+					engine := newTestEngine(router.NewRoutedDocumentStore(router.NewSplitDocumentRouter(primary, replica)))
+					primaryDoc := &storage.StoredDoc{Fullpath: "items/1", Collection: "items", Version: 5}
+					replicaDoc := &storage.StoredDoc{Fullpath: "items/1", Collection: "items", Version: 4}
+					authoritative := []storage.ReadOptions{{Consistency: storage.ReadAuthoritative}}
+					replica.On("Get", ctx, "default", "items/1", []storage.ReadOptions(nil)).Return(replicaDoc, nil).Once()
+					ordinary, err := engine.GetDocument(ctx, "default", "items/1")
+					require.NoError(t, err)
+					require.Equal(t, int64(4), ordinary["version"])
+
+					initial := primaryDoc
+					if tt.preReadErr != nil {
+						initial = nil
+					}
+					primary.On("Get", ctx, "default", "items/1", authoritative).Return(initial, tt.preReadErr).Once()
+					data := map[string]interface{}{"value": "changed"}
+					if tt.preReadErr == nil && tt.baseVersion == 5 {
+						filters := model.Filters{{Field: "version", Op: "==", Value: tt.baseVersion}}
+						if deleted {
+							primary.On("Delete", ctx, "default", "items/1", filters).Return(tt.writeErr).Once()
+						} else {
+							primary.On("Update", ctx, "default", "items/1", data, filters).Return(tt.writeErr).Once()
+						}
+						if tt.writeErr != nil {
+							var latest *storage.StoredDoc
+							if tt.refetchErr == nil {
+								latest = &storage.StoredDoc{Fullpath: "items/1", Collection: "items", Version: 6}
+							}
+							primary.On("Get", ctx, "default", "items/1", authoritative).Return(latest, tt.refetchErr).Once()
+						}
+					}
+					resp, err := engine.Push(ctx, "default", storage.ReplicationPushRequest{
+						Collection: "items",
+						Changes: []storage.ReplicationPushChange{{
+							Doc:         &storage.StoredDoc{Fullpath: "items/1", Data: data, Deleted: deleted},
+							BaseVersion: &tt.baseVersion,
+						}},
+					})
+					if tt.expectedErr != nil {
+						require.ErrorIs(t, err, tt.expectedErr)
+						require.Nil(t, resp)
+					} else {
+						require.NoError(t, err)
+						require.NotNil(t, resp)
+						if tt.conflictVersion == 0 {
+							require.Empty(t, resp.Conflicts)
+						} else {
+							require.Len(t, resp.Conflicts, 1)
+							require.Equal(t, tt.conflictVersion, resp.Conflicts[0].Version)
+						}
+					}
+					replica.AssertNumberOfCalls(t, "Get", 1)
+				})
+			}
+		})
+	}
+}
 
 // newTestEngine creates an engine for tests
 func newTestEngine(store storage.DocumentStore) *Engine {

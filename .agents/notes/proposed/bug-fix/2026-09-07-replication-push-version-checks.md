@@ -6,16 +6,17 @@ Status: proposed
 
 The [HTTP precondition repair](../../implemented/bug-fix/2026-09-07-http-push-version-preconditions.md)
 now preserves exact optional versions before protected fields are stripped,
-restoring existing live-target checks. The remaining gaps prevent complete
-conditional-write safety.
+restoring existing live-target checks. Push also reads from the database's write
+source for its initial and conflict lookups and propagates non-not-found read
+errors. The remaining gaps prevent complete conditional-write safety.
 
 The [Query engine](../../../../internal/query/core/engine.go) takes its
 not-found/Create branch before checking `BaseVersion`.
 [Mongo Get](../../../../internal/core/storage/mongo/document_store.go) excludes
 deleted documents, while Create can replace a tombstone. A stale conditional
 update or delete can therefore recreate a missing or deleted target. Concurrent
-deletion and ignored conflict-read errors can also produce incomplete conflict
-results. The document-only conflict array cannot represent actual absence.
+deletion can still produce incomplete conflict results when the authoritative
+lookup reports absence; other conflict-read errors now propagate. The document-only conflict array cannot represent actual absence.
 
 ## Proposal
 
@@ -39,7 +40,8 @@ equality precondition rather than an insert-only instruction.
 Apply these predicates in the write itself, including races after an initial read.
 Resolve failed predicates through a database-scoped authoritative read that
 includes tombstones. Return real tombstone metadata when available; report actual
-absence without inventing a document. If that read fails, surface its error.
+absence without inventing a document. Preserve the delivered propagation of
+non-not-found read errors and define an explicit absent-target outcome.
 
 Make conflicts structured entries containing document ID, a reason
 (`version_mismatch`, `missing`, `tombstoned`, or `already_exists`), and the current
@@ -82,9 +84,9 @@ retained tombstone.
   live data, and retained tombstones produce explicit conflicts without overwrites.
 - Absent versions retain documented behavior; the proposed invalid action/version
   combinations fail before writes once their new contract is implemented.
-- Local and gRPC routes preserve action and optionality; failed conflict reads
-  return errors, and old transport messages cannot become unintended conditional
-  creates.
+- Local and gRPC routes preserve action and optionality; non-not-found conflict
+  reads continue to return errors, absence has an explicit outcome, and old
+  transport messages cannot become unintended conditional creates.
 - Mixed batches and multiple databases cannot lose a precondition or report a
   conflict for another document.
 
