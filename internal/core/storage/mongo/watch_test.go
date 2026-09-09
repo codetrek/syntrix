@@ -214,9 +214,18 @@ func TestMongoWatchCloseAndCancellation(t *testing.T) {
 	store := NewDocumentStore(env.Client, env.DB, "docs", "sys", 0)
 	stream, err := store.Watch(ctx, "tenant", "users", "", types.WatchOptions{})
 	require.NoError(t, err)
+	defer stream.Close()
 	readCtx, cancelRead := context.WithCancel(ctx)
 	done := make(chan error, 1)
-	go func() { _, err := stream.Next(readCtx); done <- err }()
+	go func() {
+		// Progress frames may be returned before cancellation is observed.
+		for {
+			if _, err := stream.Next(readCtx); err != nil {
+				done <- err
+				return
+			}
+		}
+	}()
 	cancelRead()
 	require.ErrorIs(t, <-done, context.Canceled)
 	_, err = stream.Next(ctx)

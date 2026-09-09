@@ -9,7 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/syntrixbase/syntrix/internal/core/identity"
@@ -114,13 +117,25 @@ func (w *HTTPWorker) ProcessTask(ctx context.Context, task *types.DeliveryTask) 
 	}
 
 	fatal := resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests
+	var deliveryErr error = fmt.Errorf("webhook failed with status: %d", resp.StatusCode)
+	if resp.StatusCode == http.StatusTooManyRequests {
+		if values := resp.Header.Values("Retry-After"); len(values) == 1 {
+			delay, parseErr := parseRetryAfter(values[0], time.Now())
+			if parseErr != nil {
+				fatal = true
+				deliveryErr = fmt.Errorf("%w: %w", deliveryErr, parseErr)
+			} else if delay > 0 {
+				deliveryErr = &types.RetryAfterError{Err: deliveryErr, Delay: delay}
+			}
+		}
+	}
 	w.metrics.IncDeliveryFailure(task.Database, task.Collection, resp.StatusCode, fatal)
 
 	if fatal {
-		return &types.FatalError{Err: fmt.Errorf("webhook failed with status: %d", resp.StatusCode)}
+		return &types.FatalError{Err: deliveryErr}
 	}
 
-	return fmt.Errorf("webhook failed with status: %d", resp.StatusCode)
+	return deliveryErr
 }
 
 func (w *HTTPWorker) signPayload(body []byte, secret string, timestamp int64) string {
@@ -130,4 +145,36 @@ func (w *HTTPWorker) signPayload(body []byte, secret string, timestamp int64) st
 	mac.Write(body)
 	sig := hex.EncodeToString(mac.Sum(nil))
 	return fmt.Sprintf("t=%d,v1=%s", timestamp, sig)
+}
+
+// Invalid hints leave rule backoff in control. A valid but unrepresentable delay
+// is reported separately so it cannot overflow into an immediate retry.
+func parseRetryAfter(value string, now time.Time) (time.Duration, error) {
+	value = strings.Trim(value, " \t")
+	if value == "" {
+		return 0, nil
+	}
+	decimal := true
+	for _, ch := range value {
+		if ch < '0' || ch > '9' {
+			decimal = false
+			break
+		}
+	}
+	if decimal {
+		seconds, err := strconv.ParseUint(value, 10, 64)
+		if err != nil || seconds > uint64(math.MaxInt64/int64(time.Second)) {
+			return 0, fmt.Errorf("Retry-After exceeds the maximum supported delay")
+		}
+		return time.Duration(seconds) * time.Second, nil
+	}
+	date, err := http.ParseTime(value)
+	if err != nil || !date.After(now) {
+		return 0, nil
+	}
+	// Time.Sub saturates on overflow, which would schedule before the requested date.
+	if date.After(now.Add(time.Duration(math.MaxInt64))) {
+		return 0, fmt.Errorf("Retry-After exceeds the maximum supported delay")
+	}
+	return date.Sub(now), nil
 }

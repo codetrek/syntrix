@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	stypes "github.com/syntrixbase/syntrix/internal/core/storage/types"
 )
@@ -18,6 +19,20 @@ func (e *FatalError) Error() string {
 }
 
 func (e *FatalError) Unwrap() error {
+	return e.Err
+}
+
+// RetryAfterError carries the endpoint's minimum retry delay without replacing the cause.
+type RetryAfterError struct {
+	Err   error
+	Delay time.Duration
+}
+
+func (e *RetryAfterError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *RetryAfterError) Unwrap() error {
 	return e.Err
 }
 
