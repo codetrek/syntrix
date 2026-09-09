@@ -1,9 +1,12 @@
 package delivery
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -21,34 +24,95 @@ import (
 
 func TestConsumer_Worker_HTTPResponses(t *testing.T) {
 	tests := []struct {
-		name      string
-		statuses  []int
-		nakDelays []time.Duration
-		wantAck   bool
-		wantTerm  bool
+		name       string
+		statuses   []int
+		headers    []string
+		maxBackoff time.Duration
+		nakDelays  []time.Duration
+		wantAck    bool
+		wantTerm   bool
+		fatalHint  bool
 	}{
 		{
-			name:      "rate_limit_then_success",
-			statuses:  []int{http.StatusTooManyRequests, http.StatusNoContent},
-			nakDelays: []time.Duration{2 * time.Second, 0},
-			wantAck:   true,
+			name:       "rate_limit_then_success",
+			maxBackoff: 3 * time.Second,
+			statuses:   []int{http.StatusTooManyRequests, http.StatusNoContent},
+			nakDelays:  []time.Duration{2 * time.Second, 0},
+			wantAck:    true,
 		},
 		{
-			name:      "rate_limit_exhaustion",
-			statuses:  []int{http.StatusTooManyRequests, http.StatusTooManyRequests, http.StatusTooManyRequests},
-			nakDelays: []time.Duration{2 * time.Second, 3 * time.Second, 0},
-			wantTerm:  true,
+			name:       "rate_limit_exhaustion",
+			maxBackoff: 3 * time.Second,
+			statuses:   []int{http.StatusTooManyRequests, http.StatusTooManyRequests, http.StatusTooManyRequests},
+			nakDelays:  []time.Duration{2 * time.Second, 3 * time.Second, 0},
+			wantTerm:   true,
 		},
 		{
-			name:      "bad_request",
-			statuses:  []int{http.StatusBadRequest},
+			name:       "bad_request",
+			headers:    []string{"60"},
+			maxBackoff: 3 * time.Second,
+			statuses:   []int{http.StatusBadRequest},
+			nakDelays:  []time.Duration{0},
+			wantTerm:   true,
+		},
+		{
+			name:       "server_error",
+			headers:    []string{"60"},
+			maxBackoff: 3 * time.Second,
+			statuses:   []int{http.StatusInternalServerError},
+			nakDelays:  []time.Duration{2 * time.Second},
+		},
+		{
+			name:       "hint_exceeds_rule_cap",
+			statuses:   []int{http.StatusTooManyRequests, http.StatusNoContent},
+			headers:    []string{"60", "60"},
+			maxBackoff: 5 * time.Second,
+			nakDelays:  []time.Duration{time.Minute, 0},
+			wantAck:    true,
+		},
+		{
+			name:       "short_hint_preserves_rule_backoff",
+			statuses:   []int{http.StatusTooManyRequests},
+			headers:    []string{"1"},
+			maxBackoff: 5 * time.Second,
+			nakDelays:  []time.Duration{2 * time.Second},
+		},
+		{
+			name:       "invalid_hint_preserves_rule_backoff",
+			statuses:   []int{http.StatusTooManyRequests},
+			headers:    []string{"later"},
+			maxBackoff: 5 * time.Second,
+			nakDelays:  []time.Duration{2 * time.Second},
+		},
+		{
+			name:      "hint_without_rule_cap",
+			statuses:  []int{http.StatusTooManyRequests},
+			headers:   []string{"60"},
+			nakDelays: []time.Duration{time.Minute},
+		},
+		{
+			name:       "hint_preserves_attempt_budget",
+			statuses:   []int{http.StatusTooManyRequests, http.StatusTooManyRequests, http.StatusTooManyRequests},
+			headers:    []string{"60", "60", "60"},
+			maxBackoff: 5 * time.Second,
+			nakDelays:  []time.Duration{time.Minute, time.Minute, 0},
+			wantTerm:   true,
+		},
+		{
+			name:      "seconds_overflow_terminates",
+			statuses:  []int{http.StatusTooManyRequests},
+			headers:   []string{"9223372037"},
 			nakDelays: []time.Duration{0},
 			wantTerm:  true,
+			fatalHint: true,
 		},
 		{
-			name:      "server_error",
-			statuses:  []int{http.StatusInternalServerError},
-			nakDelays: []time.Duration{2 * time.Second},
+			name:      "date_overflow_terminates",
+			statuses:  []int{http.StatusTooManyRequests},
+			headers:   []string{"Fri, 31 Dec 9999 23:59:59 GMT"},
+			nakDelays: []time.Duration{0},
+			wantTerm:  true,
+			fatalHint: true,
 		},
 	}
 
@@ -61,6 +125,9 @@ func TestConsumer_Worker_HTTPResponses(t *testing.T) {
 					t.Errorf("unexpected HTTP request %d", attempt)
 					w.WriteHeader(http.StatusInternalServerError)
 					return
+				}
+				if len(tt.headers) > 0 {
+					w.Header().Set("Retry-After", tt.headers[attempt-1])
 				}
 				w.WriteHeader(tt.statuses[attempt-1])
 			}))
@@ -78,7 +145,7 @@ func TestConsumer_Worker_HTTPResponses(t *testing.T) {
 				case http.StatusBadRequest:
 					workerMetrics.On("IncDeliveryFailure", "database1", "users", status, true).Once()
 				default:
-					workerMetrics.On("IncDeliveryFailure", "database1", "users", status, false).Once()
+					workerMetrics.On("IncDeliveryFailure", "database1", "users", status, tt.fatalHint).Once()
 				}
 			}
 			c := &natsConsumer{
@@ -94,7 +161,7 @@ func TestConsumer_Worker_HTTPResponses(t *testing.T) {
 				RetryPolicy: types.RetryPolicy{
 					MaxAttempts:    3,
 					InitialBackoff: types.Duration(2 * time.Second),
-					MaxBackoff:     types.Duration(3 * time.Second),
+					MaxBackoff:     types.Duration(tt.maxBackoff),
 				},
 			})
 			require.NoError(t, err)
@@ -119,6 +186,40 @@ func TestConsumer_Worker_HTTPResponses(t *testing.T) {
 			workerMetrics.AssertExpectations(t)
 		})
 	}
+}
+
+func TestConsumer_Worker_RetrySchedulingFailure(t *testing.T) {
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(previousLogger)
+
+	mockWorker := new(MockWorker)
+	mockWorker.On("ProcessTask", mock.Anything, mock.Anything).Return(&types.RetryAfterError{
+		Err: errors.New("webhook failed with status: 429"), Delay: time.Minute,
+	}).Once()
+	c := &natsConsumer{
+		worker: mockWorker, metrics: &types.NoopMetrics{},
+		workerChans: []chan pubsub.Message{make(chan pubsub.Message, 1)},
+	}
+	data, err := json.Marshal(&types.DeliveryTask{TriggerID: "retry-scheduling-failure"})
+	require.NoError(t, err)
+	msg := pubsubtesting.NewMockMessage("test.subject", data)
+	msg.SetErrors(nil, errors.New("queue unavailable"), nil, nil)
+	c.workerChans[0] <- msg
+	close(c.workerChans[0])
+	c.wg.Add(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c.workerLoop(ctx, 0)
+
+	assert.False(t, msg.IsAcked())
+	assert.False(t, msg.IsNaked())
+	assert.False(t, msg.IsTermed())
+	assert.Contains(t, logs.String(), `"level":"ERROR","msg":"Failed to schedule trigger retry"`)
+	assert.Contains(t, logs.String(), `"trigger_id":"retry-scheduling-failure"`)
+	assert.Contains(t, logs.String(), `"error":"queue unavailable"`)
+	mockWorker.AssertExpectations(t)
 }
 
 // TestConsumer_Dispatch_InvalidPayload verifies that invalid payloads are Terminated.
@@ -191,6 +292,24 @@ func TestConsumer_Worker_RetryLogic(t *testing.T) {
 				},
 			},
 			expectTerm: true,
+		},
+		{
+			name: "WrappedRetryAfter",
+			processErr: fmt.Errorf("delivery failed: %w", &types.RetryAfterError{
+				Err:   errors.New("webhook failed with status: 429"),
+				Delay: time.Minute,
+			}),
+			numDelivered: 1,
+			payload: &types.DeliveryTask{
+				TriggerID: "t1",
+				RetryPolicy: types.RetryPolicy{
+					MaxAttempts:    3,
+					InitialBackoff: types.Duration(time.Second),
+					MaxBackoff:     types.Duration(5 * time.Second),
+				},
+			},
+			expectNak:      true,
+			expectNakDelay: time.Minute,
 		},
 		{
 			name:         "ProcessError_Fatal",

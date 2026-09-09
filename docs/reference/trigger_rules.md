@@ -39,24 +39,46 @@ A Trigger is defined by a JSON configuration object. Here is the structure:
 ## Delivery Retries
 
 HTTP 2xx completes delivery. HTTP 429 is retried because endpoint throttling can
-recover after waiting. Other 4xx responses terminate immediately. Other non-2xx
-responses returned by the HTTP client, network errors, and attempt timeouts also
-follow the retry policy. Redirect handling remains the HTTP client's existing
-behavior.
+recover after waiting, subject to the hint limit below. Other 4xx responses
+terminate immediately. Other non-2xx responses returned by the HTTP client,
+network errors, and attempt timeouts follow the retry policy. Redirect handling
+remains the HTTP client's existing behavior.
 
 `maxAttempts` counts total deliveries, including the initial attempt. A task
 value of zero uses 3 attempts. When a retryable failure reaches that limit, the
 consumer logs exhaustion and terminates the message. After failed delivery number
-`n`, the delay is `initialBackoff * 2^(n-1)`; a zero task `initialBackoff` uses
-1 second. A positive `maxBackoff` caps that delay. For example, 3 attempts with
-an initial backoff of 1 second and a maximum of 10 seconds schedule retries after
-1 and 2 seconds if the first two attempts fail.
+`n`, rule backoff is `initialBackoff * 2^(n-1)`; a zero task `initialBackoff` uses
+1 second. A positive `maxBackoff` caps that component. For example, 3 attempts
+with an initial backoff of 1 second and a maximum of 10 seconds schedule retries
+after 1 and 2 seconds when no usable hint is present.
 
-Retries use queue-delayed redelivery. `Retry-After` response headers do not
-change the delay, so a retry can arrive during an endpoint-requested pause.
-[Honoring response hints](../../.agents/notes/proposed/feature/2026-09-07-trigger-retry-after.md)
-is proposed separately. Retries can repeat external side effects; receivers
-must account for duplicate requests.
+For HTTP 429, the final delay is `max(capped rule backoff, Retry-After hint)`.
+A response hint is a minimum pause and can exceed `maxBackoff`; it does not add
+attempts or change retry defaults.
+
+| `Retry-After` on HTTP 429 | Behavior |
+|-------------------------|----------|
+| One positive decimal delay-seconds value | Honor that delay when longer than rule backoff |
+| One supported future HTTP-date | Honor its relative delay measured when the response is parsed |
+| Missing, empty, malformed, signed, negative, zero, past/equal date, or multiple physical fields | Use rule backoff |
+| Valid delay beyond the supported duration range | Terminate with `Retry-After exceeds the maximum supported delay` |
+
+Surrounding space or tab is ignored. Malformed combined values are ignored;
+HTTP-date parsing accepts the standard library's supported formats. Hints on
+statuses other than 429 do not affect scheduling. There is no additional business
+delay ceiling: the technical limit is a signed 64-bit nanosecond duration,
+approximately 292 years. Long representable hints can retain delayed work for
+long periods; clock skew affects date-based pauses. Unrepresentable valid hints
+are terminal rather than shortened into earlier retries. Diagnostics omit raw
+hint values and response bodies.
+
+Retries use queue-delayed redelivery without occupying a worker during the wait.
+Scheduling failures are logged, and recovery retains the selected queue backend's
+existing limits. The in-memory queue does not preserve delayed work across
+shutdown or restart. Retried requests can repeat external side effects; receivers
+must account for duplicates. The
+[Retry-After decision](../../.agents/notes/implemented/feature/2026-09-07-trigger-retry-after.md)
+records the policy and tradeoffs.
 
 ## Writing Conditions (CEL)
 

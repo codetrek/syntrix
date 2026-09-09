@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"log/slog"
@@ -257,8 +258,16 @@ func (c *natsConsumer) workerLoop(ctx context.Context, id int) {
 				backoff = maxBackoff
 			}
 
-			slog.Info("Retrying trigger", "trigger_id", task.TriggerID, "backoff", backoff, "attempt", attempt+1, "max_attempts", maxAttempts)
-			msg.NakWithDelay(backoff)
+			var retryAfter *types.RetryAfterError
+			var hint time.Duration
+			if errors.As(err, &retryAfter) {
+				hint = retryAfter.Delay
+			}
+			delay := max(backoff, hint)
+			slog.Info("Retrying trigger", "trigger_id", task.TriggerID, "database", task.Database, "collection", task.Collection, "document_id", task.DocumentID, "lsn", task.LSN, "seq", task.Seq, "backoff", delay, "rule_backoff", backoff, "retry_after", hint, "attempt", attempt+1, "max_attempts", maxAttempts)
+			if err := msg.NakWithDelay(delay); err != nil {
+				slog.Error("Failed to schedule trigger retry", "trigger_id", task.TriggerID, "database", task.Database, "collection", task.Collection, "document_id", task.DocumentID, "lsn", task.LSN, "seq", task.Seq, "delay", delay, "error", err)
+			}
 		} else {
 			msg.Ack()
 		}
