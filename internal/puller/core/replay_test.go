@@ -84,9 +84,9 @@ func TestPuller_Replay(t *testing.T) {
 		MgoDocID:    "doc2",
 	}
 
-	err = buf.Write(evt1, []byte("token1"))
+	err = buf.Write(context.Background(), evt1, []byte("token1"))
 	require.NoError(t, err)
-	err = buf.Write(evt2, []byte("token2"))
+	err = buf.Write(context.Background(), evt2, []byte("token2"))
 	require.NoError(t, err)
 
 	// Wait for flush

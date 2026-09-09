@@ -1,6 +1,7 @@
 package buffer
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
@@ -51,7 +52,7 @@ func TestBuffer_Write_MarshalError(t *testing.T) {
 		},
 	}
 
-	if err := buf.Write(evt, testToken); err == nil {
+	if err := buf.Write(context.Background(), evt, testToken); err == nil {
 		t.Error("Expected error from Write with unserializable event")
 	}
 }
@@ -114,7 +115,7 @@ func TestBuffer_ScanFrom_AfterKey(t *testing.T) {
 		{EventID: "3", Timestamp: 300},
 	}
 	for _, e := range evts {
-		buf.Write(e, testToken)
+		buf.Write(context.Background(), e, testToken)
 	}
 
 	// Wait for batch flush
@@ -173,7 +174,7 @@ func TestBuffer_Write_Atomicity(t *testing.T) {
 	}
 	token := []byte("token-atomicity")
 
-	if err := buf.Write(evt, token); err != nil {
+	if err := buf.Write(context.Background(), evt, token); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -241,7 +242,7 @@ func TestBuffer_ScanFrom_Bounds(t *testing.T) {
 			},
 			Timestamp: time.Now().UnixMilli(),
 		}
-		if err := buf.Write(evts[i], testToken); err != nil {
+		if err := buf.Write(context.Background(), evts[i], testToken); err != nil {
 			t.Fatalf("Write(%d) error = %v", i, err)
 		}
 	}
@@ -293,7 +294,7 @@ func TestBuffer_DeleteBefore_NoMatch(t *testing.T) {
 		EventID:     "evt-high",
 		ClusterTime: events.ClusterTime{T: 2000, I: 1},
 	}
-	require.NoError(t, buf.Write(evt, testToken))
+	require.NoError(t, buf.Write(context.Background(), evt, testToken))
 
 	// Wait for flush
 	require.Eventually(t, func() bool {

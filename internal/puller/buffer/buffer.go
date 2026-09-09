@@ -28,8 +28,10 @@ type Buffer struct {
 	flushing []*writeRequest
 	// notifyCh is used to wake up the batcher
 	notifyCh chan struct{}
+	// capacityCh is replaced after a batch releases queue capacity.
+	capacityCh chan struct{}
 
-	// mu protects pending, flushing, closed, and failure
+	// mu protects pending, flushing, capacityCh, closed, and failure
 	mu sync.RWMutex
 
 	// closed indicates if the buffer is closed
@@ -73,7 +75,7 @@ type Options struct {
 	// BatchInterval is the max time to wait before flushing a batch.
 	BatchInterval time.Duration
 
-	// QueueSize is the buffer for pending writes.
+	// QueueSize limits the total queued and flushing events.
 	QueueSize int
 
 	// Logger for buffer operations.
@@ -132,6 +134,7 @@ func New(opts Options) (*Buffer, error) {
 		queueSize:     queueSize,
 		closeCh:       make(chan struct{}),
 		notifyCh:      make(chan struct{}, 1),
+		capacityCh:    make(chan struct{}),
 	}
 	buf.startBatcher()
 

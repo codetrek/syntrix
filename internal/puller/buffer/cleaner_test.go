@@ -117,7 +117,7 @@ func TestCleaner_CleanupNow(t *testing.T) {
 			I: 1,
 		},
 	}
-	if err := buf.Write(oldEvt, testToken); err != nil {
+	if err := buf.Write(context.Background(), oldEvt, testToken); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -132,7 +132,7 @@ func TestCleaner_CleanupNow(t *testing.T) {
 			I: 1,
 		},
 	}
-	if err := buf.Write(recentEvt, testToken); err != nil {
+	if err := buf.Write(context.Background(), recentEvt, testToken); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -234,7 +234,7 @@ func TestCleaner_RunTriggersCleanup(t *testing.T) {
 			I: 1,
 		},
 	}
-	if err := buf.Write(oldEvt, testToken); err != nil {
+	if err := buf.Write(context.Background(), oldEvt, testToken); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -345,7 +345,7 @@ func TestCleaner_MaxSize(t *testing.T) {
 				Data:     map[string]any{"data": "some payload"},
 			},
 		}
-		if err := buf.Write(evt, testToken); err != nil {
+		if err := buf.Write(context.Background(), evt, testToken); err != nil {
 			t.Fatalf("Write() error = %v", err)
 		}
 	}

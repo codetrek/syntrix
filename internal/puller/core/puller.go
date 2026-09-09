@@ -368,7 +368,7 @@ func (p *Puller) watchChangeStream(ctx context.Context, backend *Backend, logger
 		// Check for gaps
 		backend.gapDetector.RecordEvent(evt)
 
-		if err := backend.buffer.Write(evt, raw.ResumeToken); err != nil {
+		if err := backend.buffer.Write(ctx, evt, raw.ResumeToken); err != nil {
 			return fmt.Errorf("%w: failed to write event to buffer: %w", errCaptureFailed, err)
 		}
 		logger.Debug("Puller: buffered event", "eventID", evt.EventID)
