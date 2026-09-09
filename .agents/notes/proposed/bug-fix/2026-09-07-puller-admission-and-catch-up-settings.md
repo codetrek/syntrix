@@ -19,8 +19,8 @@ Make the server limit active Puller subscriptions atomically, with capacity
 released on every termination path. Define explicitly whether `max_connections`
 retains its name as a subscription limit or is renamed with an operator config
 migration; transport connection count must not stand in for streaming RPC count.
-Use an internal registration identity so diagnostic consumer IDs neither replace
-another subscription nor cause its cleanup.
+Build on the implemented [subscription identity isolation](../../implemented/bug-fix/2026-09-09-puller-subscription-identity.md):
+capacity must count registrations independently of diagnostic consumer labels.
 
 Apply `catch_up_threshold` to the subscription's per-backend backlog. Its
 measurement and reference position remain draft after rejection of the

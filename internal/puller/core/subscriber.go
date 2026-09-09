@@ -126,7 +126,7 @@ func (s *Subscriber) Close() {
 
 // SubscriberManager manages active subscribers.
 type SubscriberManager struct {
-	subscribers map[string]*Subscriber
+	subscribers map[*Subscriber]struct{}
 	logger      *slog.Logger
 	mu          sync.RWMutex
 }
@@ -137,7 +137,7 @@ func NewSubscriberManager(logger *slog.Logger) *SubscriberManager {
 		logger = slog.Default()
 	}
 	return &SubscriberManager{
-		subscribers: make(map[string]*Subscriber),
+		subscribers: make(map[*Subscriber]struct{}),
 		logger:      logger.With("component", "subscriber-manager"),
 	}
 }
@@ -146,24 +146,17 @@ func NewSubscriberManager(logger *slog.Logger) *SubscriberManager {
 func (m *SubscriberManager) Add(sub *Subscriber) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.subscribers[sub.ID] = sub
+	m.subscribers[sub] = struct{}{}
 }
 
 // Remove removes a subscriber.
-func (m *SubscriberManager) Remove(id string) {
+func (m *SubscriberManager) Remove(sub *Subscriber) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if sub, ok := m.subscribers[id]; ok {
+	if _, ok := m.subscribers[sub]; ok {
 		sub.Close()
-		delete(m.subscribers, id)
+		delete(m.subscribers, sub)
 	}
-}
-
-// Get returns a subscriber by ID.
-func (m *SubscriberManager) Get(id string) *Subscriber {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.subscribers[id]
 }
 
 // Count returns the number of active subscribers.
@@ -178,7 +171,7 @@ func (m *SubscriberManager) All() []*Subscriber {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	result := make([]*Subscriber, 0, len(m.subscribers))
-	for _, sub := range m.subscribers {
+	for sub := range m.subscribers {
 		result = append(result, sub)
 	}
 	return result
@@ -188,22 +181,22 @@ func (m *SubscriberManager) All() []*Subscriber {
 func (m *SubscriberManager) CloseAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, sub := range m.subscribers {
+	for sub := range m.subscribers {
 		sub.Close()
 	}
-	m.subscribers = make(map[string]*Subscriber)
+	m.subscribers = make(map[*Subscriber]struct{})
 }
 
 // Broadcast sends an event to all subscribers.
 func (m *SubscriberManager) Broadcast(be *events.StoreChangeEvent) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	for id, sub := range m.subscribers {
+	for sub := range m.subscribers {
 		select {
 		case sub.ch <- be:
 		default:
 			// Slow consumer: mark as overflowed instead of disconnecting
-			m.logger.Warn("slow consumer detected, marking overflow", "consumerId", id)
+			m.logger.Warn("slow consumer detected, marking overflow", "consumerId", sub.ID)
 			sub.SetOverflow()
 		}
 	}

@@ -157,7 +157,7 @@ func (s *Server) Subscribe(req *pullerv1.SubscribeRequest, stream pullerv1.Pulle
 	// Create subscriber
 	sub := core.NewSubscriber(req.GetConsumerId(), after, req.GetCoalesceOnCatchUp(), channelSize)
 	s.subs.Add(sub)
-	defer s.subs.Remove(sub.ID)
+	defer s.subs.Remove(sub)
 
 	s.logger.Info("subscriber connected",
 		"consumerId", sub.ID,
