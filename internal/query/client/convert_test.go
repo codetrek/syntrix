@@ -1,6 +1,8 @@
 package client
 
 import (
+	"math"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -375,34 +377,24 @@ func TestQueryToProto(t *testing.T) {
 }
 
 func TestPushChangeToProto(t *testing.T) {
-	t.Run("with base version", func(t *testing.T) {
-		baseVersion := int64(5)
-		change := storage.ReplicationPushChange{
-			Doc: &storage.StoredDoc{
-				Id:       "doc1",
-				Fullpath: "users/doc1",
-				Version:  6,
-				Data:     map[string]interface{}{"name": "Alice"},
-			},
-			BaseVersion: &baseVersion,
-		}
-		result := pushChangeToProto(change)
+	for _, version := range []int64{-1, 0, 5, 9007199254740993, math.MaxInt64} {
+		t.Run(strconv.FormatInt(version, 10), func(t *testing.T) {
+			change := storage.ReplicationPushChange{
+				Doc: &storage.StoredDoc{
+					Id:       "doc1",
+					Fullpath: "users/doc1",
+					Version:  1,
+					Data:     map[string]interface{}{"name": "Alice"},
+				},
+			}
+			if version >= 0 {
+				change.BaseVersion = &version
+			}
+			result := pushChangeToProto(change)
 
-		assert.NotNil(t, result.Document)
-		assert.Equal(t, "doc1", result.Document.Id)
-		assert.Equal(t, int64(5), result.BaseVersion)
-	})
-
-	t.Run("without base version", func(t *testing.T) {
-		change := storage.ReplicationPushChange{
-			Doc: &storage.StoredDoc{
-				Id: "doc1",
-			},
-			BaseVersion: nil,
-		}
-		result := pushChangeToProto(change)
-
-		assert.NotNil(t, result.Document)
-		assert.Equal(t, int64(-1), result.BaseVersion)
-	})
+			assert.Equal(t, "doc1", result.Document.Id)
+			assert.Equal(t, int64(1), result.Document.Version)
+			assert.Equal(t, version, result.BaseVersion)
+		})
+	}
 }

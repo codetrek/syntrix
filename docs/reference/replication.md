@@ -38,7 +38,7 @@ Replication endpoints for offline-first clients. All documents use a flattened s
       "document": {
         "id": "msg-2",
         "text": "Offline message",
-        "version": 1 // optional optimistic concurrency hint
+        "version": 1 // optional version precondition; not stored metadata
       }
     },
     {
@@ -64,8 +64,35 @@ Replication endpoints for offline-first clients. All documents use a flattened s
 }
 ```
 
+### Version Preconditions
+
+`document.version` is optional and case-sensitive. It is a precondition on the
+existing live-target write path; storage assigns the resulting document version.
+It does not replace server-managed metadata.
+
+| JSON value | Behavior |
+|------------|----------|
+| Field omitted | No version precondition |
+| Integer literal from `0` through `9223372036854775807` | Preserve the exact value as a version equality precondition |
+| Null, string, boolean, negative value, fraction, exponent notation, or out-of-range integer | HTTP 400 before any change in the request reaches the Engine |
+
+For an existing live target, a stale version returns the server document in
+`conflicts`; a matching version proceeds subject to the atomic write predicate
+and other storage outcomes. Explicit zero is preserved and does not mean
+insert-only. The existing `create` example with version 1 remains accepted.
+Omitting the version retains unconditional behavior. Invalid-version rejection
+covers the whole request, but a valid batch is not transactional.
+
+Current limits: a target missing from the initial read, including a deleted target,
+can still enter Create before version checking. Concurrent deletion or a failed
+conflict read can also leave incomplete conflict results. Strict insert-only
+create, missing/tombstone conflicts, and structured conflict reasons remain
+[proposed](../../.agents/notes/proposed/bug-fix/2026-09-07-replication-push-version-checks.md).
+The [HTTP precondition decision](../../.agents/notes/implemented/bug-fix/2026-09-07-http-push-version-preconditions.md)
+records the delivered fix and its limits.
+
 ## Validation & Errors
-- 400: missing/invalid collection, checkpoint, action, or document.id
+- 400: missing/invalid collection, checkpoint, action, document.id, or supplied document.version
 - 409: (reserved) explicit conflict signaling; currently conflicts are returned in 200 with `conflicts`
 - 500: server error
 

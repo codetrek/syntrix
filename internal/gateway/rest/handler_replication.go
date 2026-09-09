@@ -121,12 +121,6 @@ func (h *Handler) handlePush(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Extract metadata
-		var version int64
-		if docData.HasVersion() {
-			version = docData.GetVersion()
-		}
-
 		// Extract ID
 		var docID = docData.GetID()
 		if docID == "" {
@@ -134,14 +128,14 @@ func (h *Handler) handlePush(w http.ResponseWriter, r *http.Request) {
 		}
 
 		doc := storage.NewStoredDoc(database, collection, docID, docData)
-		doc.Version = version
 
 		if change.Action == "delete" {
 			doc.Deleted = true
 		}
 
 		changes = append(changes, storage.ReplicationPushChange{
-			Doc: &doc,
+			Doc:         &doc,
+			BaseVersion: change.BaseVersion,
 		})
 	}
 
