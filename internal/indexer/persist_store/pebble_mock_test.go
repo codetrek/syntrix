@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/stretchr/testify/require"
+	"github.com/syntrixbase/syntrix/internal/indexer/store"
 )
 
 // mockDB is a mock implementation of the DB interface for testing error paths.
@@ -253,6 +255,136 @@ func newMockPebbleStore(db *mockDB) *PebbleStore {
 		flushDoneCh:         make(chan struct{}, 1),
 		batchSize:           100,
 		batchInterval:       50 * time.Millisecond,
+	}
+}
+
+func TestSearchMemoryOverridesPersistedDocument(t *testing.T) {
+	ref := func(id string, key byte) store.DocRef {
+		return store.DocRef{ID: id, OrderKey: []byte{key}}
+	}
+	first, middle, last := ref("first", 0x01), ref("middle", 0x05), ref("last", 0x09)
+	tests := []struct {
+		name         string
+		pendingKey   []byte
+		hasFlushing  bool
+		flushingKey  []byte
+		flushingOnly bool
+		opts         store.SearchOptions
+		want         []store.DocRef
+	}{
+		{
+			name: "same order key", pendingKey: []byte{0x04},
+			want: []store.DocRef{first, ref("target", 0x04), middle, last},
+		},
+		{
+			name: "order key moves earlier", pendingKey: []byte{0x02},
+			want: []store.DocRef{first, ref("target", 0x02), middle, last},
+		},
+		{
+			name: "order key moves later", pendingKey: []byte{0x06},
+			want: []store.DocRef{first, middle, ref("target", 0x06), last},
+		},
+		{
+			name: "pending delete",
+			want: []store.DocRef{first, middle, last},
+		},
+		{
+			name: "updated key leaves lower bound", pendingKey: []byte{0x02},
+			opts: store.SearchOptions{Lower: []byte{0x03}},
+			want: []store.DocRef{middle, last},
+		},
+		{
+			name: "updated key reaches exclusive upper bound", pendingKey: []byte{0x08},
+			opts: store.SearchOptions{Upper: []byte{0x08}},
+			want: []store.DocRef{first, middle},
+		},
+		{
+			name: "updated key enters inclusive lower bound", pendingKey: []byte{0x06},
+			opts: store.SearchOptions{Lower: []byte{0x06}},
+			want: []store.DocRef{ref("target", 0x06), last},
+		},
+		{
+			name: "updated key enters below upper bound", pendingKey: []byte{0x02},
+			opts: store.SearchOptions{Upper: []byte{0x04}},
+			want: []store.DocRef{first, ref("target", 0x02)},
+		},
+		{
+			name: "old key equals cursor", pendingKey: []byte{0x06},
+			opts: store.SearchOptions{StartAfter: []byte{0x04}},
+			want: []store.DocRef{middle, ref("target", 0x06), last},
+		},
+		{
+			name: "updated key equals cursor", pendingKey: []byte{0x06},
+			opts: store.SearchOptions{StartAfter: []byte{0x06}},
+			want: []store.DocRef{last},
+		},
+		{
+			name: "updated key moves before cursor", pendingKey: []byte{0x02},
+			opts: store.SearchOptions{StartAfter: []byte{0x03}},
+			want: []store.DocRef{middle, last},
+		},
+		{
+			name: "limit counts effective results", pendingKey: []byte{0x06},
+			opts: store.SearchOptions{Limit: 3},
+			want: []store.DocRef{first, middle, ref("target", 0x06)},
+		},
+		{
+			name: "flushing update", hasFlushing: true, flushingKey: []byte{0x06}, flushingOnly: true,
+			want: []store.DocRef{first, middle, ref("target", 0x06), last},
+		},
+		{
+			name: "flushing delete", hasFlushing: true, flushingOnly: true,
+			want: []store.DocRef{first, middle, last},
+		},
+		{
+			name: "pending update supersedes flushing update", hasFlushing: true, flushingKey: []byte{0x02}, pendingKey: []byte{0x06},
+			want: []store.DocRef{first, middle, ref("target", 0x06), last},
+		},
+		{
+			name: "pending delete supersedes flushing update", hasFlushing: true, flushingKey: []byte{0x06},
+			want: []store.DocRef{first, middle, last},
+		},
+		{
+			name: "pending update supersedes flushing delete", hasFlushing: true, pendingKey: []byte{0x06},
+			want: []store.DocRef{first, middle, ref("target", 0x06), last},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ps := newMockPebbleStore(newMockDB())
+			// Keep one persisted index row: mockDB iterates a map without sorting.
+			// No batcher runs, so the disk/memory overlap lasts through Search.
+			require.NoError(t, ps.Upsert("testdb", "users/*", "tmpl1", "target", []byte{0x04}, ""))
+			ps.doFlush()
+			key, found := ps.Get("testdb", "users/*", "tmpl1", "target")
+			require.True(t, found)
+			require.Equal(t, []byte{0x04}, key)
+
+			writeTarget := func(key []byte) {
+				if key == nil {
+					require.NoError(t, ps.Delete("testdb", "users/*", "tmpl1", "target", ""))
+				} else {
+					require.NoError(t, ps.Upsert("testdb", "users/*", "tmpl1", "target", key, ""))
+				}
+			}
+			if tt.hasFlushing {
+				writeTarget(tt.flushingKey)
+				// Hold the state after doFlush swaps maps, before its commit.
+				ps.flushing = ps.pending
+				ps.pending = make(map[string]map[string]*pendingOp)
+			}
+			if !tt.flushingOnly {
+				writeTarget(tt.pendingKey)
+			}
+			for _, neighbor := range []store.DocRef{first, middle, last} {
+				require.NoError(t, ps.Upsert("testdb", "users/*", "tmpl1", neighbor.ID, neighbor.OrderKey, ""))
+			}
+
+			got, err := ps.Search("testdb", "users/*", "tmpl1", tt.opts)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
 	}
 }
 
