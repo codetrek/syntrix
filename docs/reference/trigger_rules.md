@@ -65,8 +65,9 @@ Cancellation does not undo effects already performed by a receiver.
 
 The broker acknowledgement window includes both local queue waiting and execution.
 It is independent of the rule budget, so long waits or attempts can overlap broker
-redelivery. [Acknowledgement-window coordination](../../.agents/notes/proposed/architecture/2026-09-07-trigger-acknowledgement-window.md)
-is proposed separately. The [timeout decision](../../.agents/notes/implemented/bug-fix/2026-09-07-trigger-rule-timeouts.md)
+redelivery. The proposed [durable task handoff](../../.agents/notes/proposed/architecture/2026-09-07-trigger-acknowledgement-window.md)
+would acknowledge after durable task acceptance and recover execution from shared
+database state; it is not implemented. The [timeout decision](../../.agents/notes/implemented/bug-fix/2026-09-07-trigger-rule-timeouts.md)
 records the delivered ownership and limits.
 
 ## Delivery Retries

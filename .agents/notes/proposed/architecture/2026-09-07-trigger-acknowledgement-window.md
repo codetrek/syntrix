@@ -1,80 +1,131 @@
-# Agent Note: Coordinate Trigger Acknowledgement Windows
+# Agent Note: Persist Trigger Tasks Before Broker Acknowledgement
 
 Status: proposed
 
 ## Problem
 
-The [rule timeout repair](../../implemented/bug-fix/2026-09-07-trigger-rule-timeouts.md)
-starts each execution budget after local queue waiting. Broker acknowledgement
-timing already runs while a delivered message waits in local queues and while
-the attempt executes. A long wait or valid long attempt can therefore outlive the
-acknowledgement window and permit concurrent redelivery. Honoring rule timeouts
-alone does not prevent overlapping attempts.
+Broker acknowledgement timing includes local queue waiting and HTTP execution.
+A message can be redelivered while its task is still waiting or running. A local
+active-task set cannot prevent another delivery replica from executing the copy.
+The [execution timeout](../../implemented/bug-fix/2026-09-07-trigger-rule-timeouts.md)
+correctly starts when execution begins; changing that boundary does not resolve
+broker acknowledgement expiry or provide cross-replica task ownership.
 
 ## Proposal
 
-Define acknowledgement coordination across queue residence and execution so a
-valid active attempt is not concurrently redelivered solely because its broker
-acknowledgement window expires. Preserve the task's captured timeout and the
-consumer's ownership of attempt accounting. The execution budget still starts
-after queue waiting; acknowledgement ownership must cover that earlier wait too.
+Draft direction: transfer responsibility from NATS to durable task storage before
+acknowledging receipt. Execution then uses the shared task state independently of
+the broker delivery's lifetime. The runtime still acknowledges after processing;
+this handoff and database-driven execution are not implemented.
 
-Select and validate the coordination mechanism before implementation. No lease,
-heartbeat, acknowledgement extension, or timeout cap is selected by this note.
-The decision must define queue interface support, ownership from receipt through
-terminal acknowledgement or retry scheduling, failure propagation, cancellation,
-and shutdown. It must also define behavior when coordination fails or ownership
-is lost; expiry alone does not prove an HTTP side effect stopped.
+```text
+NATS delivery
+    |
+    v
+Atomically accept or verify the durable task
+    |                                |
+    v                                v
+Ack NATS                      Recoverable task state
+                                     |
+                              Atomic worker claim
+                                     |
+                              Begin attempt timeout
+                                     |
+                              HTTP -> Persist outcome
+                                     |
+                         Complete / Retry when eligible
+```
 
-Keep this proposal's ownership narrow. The
-[delivery idempotency proposal](2026-09-07-trigger-delivery-idempotency.md) owns
-stable identity, durable task claims, fencing, and ambiguous external effects.
-The [execution-controls proposal](../feature/2026-09-07-trigger-rule-execution-controls.md)
-owns cross-replica rule admission and rate/concurrency budgets. Acknowledgement
-coordination must fit those ownership boundaries without introducing a competing
-delivery ledger or admission mechanism.
+### One Authoritative Task Record
 
-Deferral preserves existing broker behavior: queue waiting and execution can
-outlast its acknowledgement window. Closing the gap later requires evaluating
-broker capabilities and queue interfaces, and coordinating the consumer's queue,
-attempt, cancellation, and acknowledgement lifecycles. The current timeout
-boundary must remain explicit so this work cannot be mistaken for increasing
-the rule's execution budget. Diagnostics must distinguish queue residence,
-execution deadline, and acknowledgement ownership using available correlation
-fields without logging sensitive task payloads or claiming stable identity before
-that capability exists.
+The [delivery idempotency proposal](2026-09-07-trigger-delivery-idempotency.md)
+owns stable delivery identity, durable task/outbox records, worker claims,
+recovery, and retention. This proposal owns the broker-to-task-store handoff and
+uses that same record. An upstream-created task may already exist: receipt must
+establish or verify durable execution eligibility without creating a second
+inbox or resetting its state.
+
+| Receipt condition | Required outcome |
+|---|---|
+| Task not yet admitted | Conditionally establish the immutable input and recoverable execution state before Ack |
+| Same delivery ID, matching immutable input | Verify durable acceptance; preserve captured rule settings, waiting/running/retry/terminal state, ownership, attempt history, and retry deadline |
+| Same ID, conflicting immutable input | Report an explicit conflict; do not overwrite or authorize another execution |
+| Write failed or commit outcome unknown | Withhold Ack until durable acceptance is verified; do not execute from volatile receipt alone |
+
+Stable logical delivery identity is required. A document ID or per-process set
+does not distinguish all tasks or deduplicate across replicas and republication.
+Deduplication applies within the declared retention and replay horizon.
+Database technology, schema, and conditional-write implementation remain open.
+
+### Acknowledgement and Execution
+
+- Ack means the durable task store has accepted responsibility, not that HTTP
+  delivery succeeded. In the normal receive path, commit precedes Ack, then the
+  receiver may wake an executor.
+- Recovery eligibility begins at the durable commit. It must not depend on an
+  Ack-success flag or an in-memory notification: a crash after Ack must leave
+  work discoverable from the database.
+- Workers atomically claim eligible tasks across replicas using the shared
+  ownership contract. A duplicate broker receipt does not enqueue another HTTP
+  execution; an expired claim alone does not prove prior remote work stopped.
+- Durable state owns execution attempts, retry eligibility, and outcomes. Broker
+  delivery counts no longer determine attempt exhaustion in this proposed model.
+  Preserve the captured timeout, retry limits, backoff, and Retry-After policy.
+- Timeout begins immediately before an admitted attempt enters the worker.
+  Database waiting and retry delays do not consume its budget.
+
+This downstream handoff does not establish new source-checkpoint eligibility.
+[Complete durable scheduling](../bug-fix/2026-09-07-trigger-publish-checkpoint-ordering.md)
+still governs upstream progress. [Execution controls](../feature/2026-09-07-trigger-rule-execution-controls.md)
+own rule-wide admission limits; they must share the same execution ownership.
+
+### Decisions Required Before Implementation
+
+- Stable-ID encoding and envelope requirements; durable schema, indexes, and
+  acceptance transitions, including reuse of upstream outbox records.
+- Atomic claim, renewal, fencing, and recovery rules; ambiguous HTTP outcomes and
+  cancellation of obsolete attempts without claiming remote rollback.
+- Durable retry scanning and attempt accounting; rejection/conflict disposition,
+  retention, storage capacity, and bounded ingestion/backpressure.
+- Store abstraction and required durability/conditional-write capabilities;
+  startup recovery and deployment-mode behavior.
 
 ## Alternatives
 
-No coordination mechanism has been selected. Leaving acknowledgement behavior
-unchanged allowed the rule-timeout repair to preserve the existing queue protocol,
-but accepts overlapping redelivery during long waits or attempts. This proposal
-retains the missing guarantee and the coordination cost required to deliver it.
+**Renew the broker acknowledgement window** can protect healthy processing but
+must cover client prefetch, local waiting, execution, and shutdown. Progress
+messages do not establish shared durable task outcomes or resolve uncertain HTTP
+effects. Renewal may help the shorter persistence phase; it is not the proposed
+execution-ownership mechanism.
+
+**Check a local active-task set** suppresses duplicates within one process but
+cannot arbitrate another replica. A database check followed by an unconditional
+insert or execution also races; admission and claims require atomic operations.
+
+**Increase AckWait** reduces premature redelivery for known workloads, but queue
+residence and task duration can exceed it, while consumer-loss recovery slows.
 
 ## Acceptance Criteria
 
-- Queue residence and execution are both covered by the defined acknowledgement
-  ownership; queue waiting does not consume the per-attempt execution budget.
-- A queued task or still-valid attempt is not concurrently redelivered solely
-  because its acknowledgement window expires.
-- Loss of coordination, cancellation, retry scheduling, acknowledgement failure,
-  and shutdown produce the documented ownership and recovery outcomes without
-  masking failures or creating an unbounded wait.
-- Retries preserve the captured timeout and existing attempt accounting. Rule
-  updates affect new tasks without rewriting the timeout on already queued work.
-- Diagnostics distinguish timeout from acknowledgement ownership failure, and
-  the guarantee states its client-attempt boundary without promising that HTTP
-  cancellation undoes remote work.
+| Failure or concurrency case | Required result |
+|---|---|
+| Crash before durable acceptance | Broker can redeliver; no volatile-only execution |
+| Commit succeeds, Ack fails or its result is unknown | Repeated receipt verifies the same task without resetting its state |
+| Ack succeeds, process exits before notifying a worker | Database recovery discovers eligible work |
+| Concurrent receipts or worker claims | One authoritative task and at most one valid execution claim |
+| Duplicate waiting, running, retry-delayed, or completed task | No extra execution or attempt increment caused solely by receipt |
+| Worker failure or uncertain HTTP result | Persist retry/recovery or ambiguity according to the defined ownership policy |
+| Database outage or capacity exhaustion | Observable bounded backpressure; no successful handoff without persistence |
 
 ## Risks
 
-Covering queue residence can retain broker ownership for a long time and delay
-recovery from failed consumers. Coordination failure can require cancellation or
-fencing that the current queue interface does not express. Deployment-wide
-admission and durable claims must share compatible ownership semantics.
+Database writes, indexes, recovery scans, and retained payloads add capacity and
+access-control costs. Once NATS is acknowledged, database loss or broken recovery
+can lose work; an insert followed by an in-memory-only queue is insufficient.
+Retaining identities too briefly permits old deliveries to create new work.
 
-Local synchronous signing cannot be context-preempted, and remote effects may
-continue after client cancellation. The design must preserve these limits while
-defining when replacement attempts may begin. Queue-backend recovery guarantees
-remain explicit; this proposal does not confer restart durability on the
-in-memory queue.
+Atomic claims prevent simultaneous valid ownership, not exactly-once external
+effects. A timed-out or disconnected worker may have already caused a remote
+effect; receiver cooperation and the idempotency proposal remain necessary.
+Until this draft is implemented, existing broker-managed retry and recovery
+behavior remains in effect.

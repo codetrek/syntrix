@@ -29,11 +29,16 @@ the recorded selection and outcomes, and conflicting immutable content is an
 error. Only complete durable scheduling confers checkpoint eligibility.
 
 A bounded dispatcher publishes pending records and recovers them after restart.
-Broker acknowledgement is dispatch progress, not scheduling completion or proof
-of HTTP delivery. Retain nonterminal task records for redrive after queue loss,
+Publication acknowledgement records broker dispatch. Consumer acknowledgement
+follows the proposed [durable task handoff](2026-09-07-trigger-acknowledgement-window.md):
+verify or establish execution responsibility in the same task record before Ack,
+without a second inbox or resetting an existing task. Neither acknowledgement
+proves HTTP delivery. Retain nonterminal task records for redrive after queue loss,
 including a standalone restart. Delivery workers claim tasks with fenced
 ownership, preserve attempt history, and record acknowledged success or terminal
-failure. Duplicate completed tasks can be acknowledged without another request.
+failure. Durable execution state owns attempts and retry scheduling; duplicate
+broker receipts do not consume attempts. Duplicate completed tasks can be
+acknowledged without another request.
 Claims and dispatch waits observe cancellation. Define outbox admission bounds,
 record schema, indexes, lease recovery, and retention covering replay/retry
 horizons before implementation; full storage must backpressure scheduling.
