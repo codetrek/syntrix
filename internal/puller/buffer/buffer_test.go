@@ -1,6 +1,7 @@
 package buffer
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -111,7 +112,7 @@ func TestBuffer_WriteAndRead(t *testing.T) {
 		},
 	}
 
-	if err := buf.Write(evt, testToken); err != nil {
+	if err := buf.Write(context.Background(), evt, testToken); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -166,7 +167,7 @@ func TestBuffer_ScanFrom(t *testing.T) {
 			},
 			Timestamp: time.Now().UnixMilli(),
 		}
-		if err := buf.Write(evt, testToken); err != nil {
+		if err := buf.Write(context.Background(), evt, testToken); err != nil {
 			t.Fatalf("Write() error = %v", err)
 		}
 	}
@@ -234,7 +235,7 @@ func TestBuffer_Head(t *testing.T) {
 			I: 1,
 		},
 	}
-	if err := buf.Write(evt, testToken); err != nil {
+	if err := buf.Write(context.Background(), evt, testToken); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -277,7 +278,7 @@ func TestBuffer_Delete(t *testing.T) {
 			I: 1,
 		},
 	}
-	if err := buf.Write(evt, testToken); err != nil {
+	if err := buf.Write(context.Background(), evt, testToken); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -338,7 +339,7 @@ func TestBuffer_Count(t *testing.T) {
 				I: 1,
 			},
 		}
-		if err := buf.Write(evt, testToken); err != nil {
+		if err := buf.Write(context.Background(), evt, testToken); err != nil {
 			t.Fatalf("Write() error = %v", err)
 		}
 	}
@@ -423,7 +424,7 @@ func TestBuffer_DeleteBefore(t *testing.T) {
 				I: 1,
 			},
 		}
-		if err := buf.Write(evt, testToken); err != nil {
+		if err := buf.Write(context.Background(), evt, testToken); err != nil {
 			t.Fatalf("Write() error = %v", err)
 		}
 		keys = append(keys, evt.BufferKey())
@@ -485,7 +486,7 @@ func TestBuffer_CountAfter(t *testing.T) {
 				I: 1,
 			},
 		}
-		if err := buf.Write(evt, testToken); err != nil {
+		if err := buf.Write(context.Background(), evt, testToken); err != nil {
 			t.Fatalf("Write() error = %v", err)
 		}
 		keys = append(keys, evt.BufferKey())
@@ -564,7 +565,7 @@ func TestIterator_Key(t *testing.T) {
 			I: 1,
 		},
 	}
-	if err := buf.Write(evt, testToken); err != nil {
+	if err := buf.Write(context.Background(), evt, testToken); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -613,7 +614,7 @@ func TestBuffer_Write(t *testing.T) {
 	}
 	token := bson.Raw{0x05, 0x00, 0x00, 0x00, 0x00}
 
-	err = buf.Write(evt, token)
+	err = buf.Write(context.Background(), evt, token)
 	require.NoError(t, err)
 
 	// Wait for batch flush
@@ -666,7 +667,7 @@ func TestBuffer_Write_NilToken_Error(t *testing.T) {
 		},
 	}
 
-	err = buf.Write(evt, nil)
+	err = buf.Write(context.Background(), evt, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "checkpoint token is required")
 }
@@ -783,14 +784,14 @@ func TestBuffer_Write_BatchesBySize(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, buf.Write(evt1, testToken))
+	require.NoError(t, buf.Write(context.Background(), evt1, testToken))
 
 	// Should not be in DB yet (batch size 2)
 	read1, err := buf.Read(evt1.BufferKey())
 	require.NoError(t, err)
 	require.Nil(t, read1)
 
-	require.NoError(t, buf.Write(evt2, testToken))
+	require.NoError(t, buf.Write(context.Background(), evt2, testToken))
 
 	// Wait for flush
 	time.Sleep(50 * time.Millisecond)
@@ -828,7 +829,7 @@ func TestBuffer_Write_FlushesOnInterval(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, buf.Write(evt, testToken))
+	require.NoError(t, buf.Write(context.Background(), evt, testToken))
 
 	// Should not be in DB yet
 	readEvt, err := buf.Read(evt.BufferKey())
@@ -877,8 +878,8 @@ func TestBuffer_DeleteBefore_SkipsCheckpoint(t *testing.T) {
 			I: 1,
 		},
 	}
-	require.NoError(t, buf.Write(evt1, testToken))
-	require.NoError(t, buf.Write(evt2, testToken))
+	require.NoError(t, buf.Write(context.Background(), evt1, testToken))
+	require.NoError(t, buf.Write(context.Background(), evt2, testToken))
 
 	// Wait for batch flush
 	time.Sleep(20 * time.Millisecond)
@@ -917,8 +918,8 @@ func TestBuffer_First(t *testing.T) {
 		ClusterTime: events.ClusterTime{T: 2, I: 2},
 	}
 
-	require.NoError(t, buf.Write(evt1, testToken))
-	require.NoError(t, buf.Write(evt2, testToken))
+	require.NoError(t, buf.Write(context.Background(), evt1, testToken))
+	require.NoError(t, buf.Write(context.Background(), evt2, testToken))
 
 	// Wait for flush
 	require.Eventually(t, func() bool {
@@ -953,7 +954,7 @@ func TestBuffer_Size(t *testing.T) {
 			Id: string(make([]byte, 1024*10)),
 		},
 	}
-	require.NoError(t, buf.Write(evt, testToken))
+	require.NoError(t, buf.Write(context.Background(), evt, testToken))
 
 	// Wait for flush
 	require.Eventually(t, func() bool {
@@ -1010,7 +1011,7 @@ func TestBuffer_ClosedScenarios(t *testing.T) {
 
 	// Test all methods that should fail when closed
 	t.Run("Write", func(t *testing.T) {
-		err := buf.Write(&events.StoreChangeEvent{}, testToken)
+		err := buf.Write(context.Background(), &events.StoreChangeEvent{}, testToken)
 		assert.ErrorContains(t, err, "buffer is closed")
 	})
 

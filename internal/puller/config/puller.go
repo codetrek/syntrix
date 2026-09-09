@@ -71,7 +71,7 @@ type BufferConfig struct {
 	// BatchInterval is the max time to wait before flushing a batch.
 	BatchInterval time.Duration `yaml:"batch_interval"`
 
-	// QueueSize is the buffer for pending writes.
+	// QueueSize limits events awaiting durable completion, including the active batch.
 	QueueSize int `yaml:"queue_size"`
 }
 

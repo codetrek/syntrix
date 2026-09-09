@@ -514,6 +514,47 @@ func TestPuller_runBackend_NativeErrorsKeepDurableCheckpoint(t *testing.T) {
 	}
 }
 
+func TestPuller_watchChangeStream_CancellationPreventsAdmission(t *testing.T) {
+	cfg := newTestConfig(t)
+	p := New(cfg, nil)
+	client, err := mongo.NewClient(options.Client().ApplyURI(testMongoURI))
+	require.NoError(t, err)
+	require.NoError(t, p.AddBackend("backend1", client, "testdb", config.PullerBackendConfig{Name: "backend1"}))
+	backend := p.backends["backend1"]
+	defer backend.buffer.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	raw := normalizer.RawEvent{
+		OperationType: "insert", DocumentKey: bson.M{"_id": "first"},
+		ResumeToken: bson.Raw{5, 0, 0, 0, 0},
+	}
+	stream := &captureTestStream{
+		raw: []normalizer.RawEvent{raw, raw}, beforeDecode: cancel,
+	}
+	p.openStream = func(context.Context, *mongo.Database, mongo.Pipeline, *options.ChangeStreamOptions) (changeStream, error) {
+		return stream, nil
+	}
+	var published int
+	p.SetEventHandler(func(context.Context, string, *events.StoreChangeEvent) error {
+		published++
+		return nil
+	})
+
+	err = p.watchChangeStream(ctx, backend, p.logger)
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, errCaptureFailed)
+	assert.Zero(t, published)
+	assert.Equal(t, 1, stream.nextCalls, "the second event must remain unread")
+	assert.True(t, stream.closed.Load())
+	require.NoError(t, backend.buffer.Close())
+	reopened, err := buffer.NewForBackend(cfg.Buffer.Path, "backend1", nil)
+	require.NoError(t, err)
+	defer reopened.Close()
+	token, err := reopened.LoadCheckpoint()
+	require.NoError(t, err)
+	assert.Nil(t, token, "the canceled event must not be admitted or committed")
+}
+
 func TestPuller_watchChangeStream_PublishesBeforeBatchFlush(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Buffer.BatchSize = 100

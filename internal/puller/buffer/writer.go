@@ -2,6 +2,7 @@
 package buffer
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -18,52 +19,57 @@ type writeRequest struct {
 	event *events.StoreChangeEvent
 }
 
-// Write stores an event and updates the checkpoint in the same batch.
-func (b *Buffer) Write(evt *events.StoreChangeEvent, token bson.Raw) error {
+// Write queues an event and its checkpoint, waiting for capacity until ctx is canceled.
+func (b *Buffer) Write(ctx context.Context, evt *events.StoreChangeEvent, token bson.Raw) error {
 	b.mu.Lock()
-	if b.closed {
-		err := b.failure
-		b.mu.Unlock()
-		if err != nil {
+	defer b.mu.Unlock()
+	for {
+		if b.closed {
+			if b.failure != nil {
+				return b.failure
+			}
+			return fmt.Errorf("buffer is closed")
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		return fmt.Errorf("buffer is closed")
-	}
-
-	if len(token) == 0 {
+		if len(token) == 0 {
+			return fmt.Errorf("checkpoint token is required")
+		}
+		if len(b.pending)+len(b.flushing) < b.queueSize {
+			break
+		}
+		capacityCh := b.capacityCh
 		b.mu.Unlock()
-		return fmt.Errorf("checkpoint token is required")
+		select {
+		case <-capacityCh:
+		case <-b.closeCh:
+		case <-ctx.Done():
+		}
+		b.mu.Lock()
 	}
 
-	// Key is the buffer key for ordering
 	key := []byte(evt.BufferKey())
-
-	// Value is the JSON-encoded event
 	value, err := json.Marshal(evt)
 	if err != nil {
-		b.mu.Unlock()
 		return fmt.Errorf("failed to marshal event: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
-	req := &writeRequest{
+	b.pending = append(b.pending, &writeRequest{
 		key:   key,
 		value: value,
 		token: append([]byte(nil), token...),
 		event: evt,
-	}
-
-	b.pending = append(b.pending, req)
-	shouldNotify := len(b.pending) >= b.batchSize
-	b.mu.Unlock()
-
-	if shouldNotify {
-		// Notify batcher, non-blocking
+	})
+	if len(b.pending) >= b.batchSize || len(b.pending)+len(b.flushing) >= b.queueSize {
 		select {
 		case b.notifyCh <- struct{}{}:
 		default:
 		}
 	}
-
 	return nil
 }
 
@@ -94,19 +100,19 @@ func (b *Buffer) runBatcher() {
 	defer ticker.Stop()
 
 	flush := func() error {
-		// Swap pending to flushing under lock
+		// Take the oldest capped batch while keeping it visible to readers.
 		b.mu.Lock()
 		if len(b.pending) == 0 {
 			b.mu.Unlock()
 			return nil
 		}
-		b.flushing = b.pending
-		b.pending = nil
-		b.mu.Unlock()
-
-		if len(b.flushing) == 0 {
-			return nil
+		count := min(len(b.pending), b.batchSize)
+		b.flushing = b.pending[:count:count]
+		b.pending = b.pending[count:]
+		if len(b.pending) == 0 {
+			b.pending = nil
 		}
+		b.mu.Unlock()
 
 		batch := b.newBatch()
 		var commitErr error
@@ -140,6 +146,7 @@ func (b *Buffer) runBatcher() {
 
 		// Clear flushing queue
 		b.mu.Lock()
+		clear(b.flushing)
 		b.flushing = nil
 
 		if commitErr != nil {
@@ -157,23 +164,28 @@ func (b *Buffer) runBatcher() {
 			b.logger.Error("failed to flush batch, stopping batcher", "error", commitErr)
 			return commitErr
 		}
+		close(b.capacityCh)
+		b.capacityCh = make(chan struct{})
 		b.mu.Unlock()
 		return nil
 	}
 
 	for {
-		select {
-		case <-b.notifyCh:
-			if err := flush(); err != nil {
-				return
+		b.mu.RLock()
+		closed := b.closed
+		pending := len(b.pending)
+		b.mu.RUnlock()
+		if closed && pending == 0 {
+			return
+		}
+		if !closed && pending < b.batchSize && pending < b.queueSize {
+			select {
+			case <-b.notifyCh:
+			case <-ticker.C:
+			case <-b.closeCh:
 			}
-		case <-ticker.C:
-			if err := flush(); err != nil {
-				return
-			}
-		case <-b.closeCh:
-			// One last flush to drain pending events
-			flush()
+		}
+		if err := flush(); err != nil {
 			return
 		}
 	}
