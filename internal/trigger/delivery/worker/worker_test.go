@@ -124,6 +124,24 @@ func TestDeliveryWorker_ProcessTask_FatalError(t *testing.T) {
 	assert.Contains(t, err.Error(), "webhook failed with status: 400")
 }
 
+func TestDeliveryWorker_ProcessTask_RateLimited(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	w := NewDeliveryWorker(nil, nil, HTTPClientOptions{}, nil)
+	err := w.ProcessTask(ctx, &types.DeliveryTask{
+		TriggerID: "rate-limited-trigger",
+		URL:       server.URL,
+	})
+
+	assert.ErrorContains(t, err, "webhook failed with status: 429")
+	assert.False(t, types.IsFatal(err))
+}
+
 func TestDeliveryWorker_ProcessTask_WithSignature(t *testing.T) {
 	// 1. Setup Mock Server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

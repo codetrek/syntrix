@@ -113,10 +113,9 @@ func (w *HTTPWorker) ProcessTask(ctx context.Context, task *types.DeliveryTask) 
 		return nil
 	}
 
-	fatal := resp.StatusCode >= 400 && resp.StatusCode < 500
+	fatal := resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests
 	w.metrics.IncDeliveryFailure(task.Database, task.Collection, resp.StatusCode, fatal)
 
-	// 4xx errors are fatal, 5xx are retryable.
 	if fatal {
 		return &types.FatalError{Err: fmt.Errorf("webhook failed with status: %d", resp.StatusCode)}
 	}
