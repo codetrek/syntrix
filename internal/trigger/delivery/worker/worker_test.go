@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -104,6 +105,70 @@ func TestDeliveryWorker_ProcessTask_Failure(t *testing.T) {
 	err := worker.ProcessTask(context.Background(), task)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "webhook failed with status: 500")
+	assert.False(t, types.IsFatal(err))
+}
+
+func TestDeliveryWorker_ProcessTask_Timeouts(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		contextLimit  time.Duration
+		clientLimit   time.Duration
+		wantParentErr error
+	}{
+		{name: "task_context", contextLimit: 100 * time.Millisecond, wantParentErr: context.DeadlineExceeded},
+		{name: "explicit_client_cap", contextLimit: 5 * time.Second, clientLimit: 100 * time.Millisecond},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				<-r.Context().Done()
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), tt.contextLimit)
+			defer cancel()
+			w := NewDeliveryWorker(nil, nil, HTTPClientOptions{Timeout: tt.clientLimit}, nil)
+
+			err := w.ProcessTask(ctx, &types.DeliveryTask{URL: server.URL})
+			assert.ErrorIs(t, err, context.DeadlineExceeded)
+			assert.False(t, types.IsFatal(err))
+			assert.Equal(t, tt.wantParentErr, ctx.Err())
+		})
+	}
+}
+
+func TestDeliveryWorker_ProcessTask_BeyondFormerHTTPTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		// Six seconds crosses the former implicit five-second HTTP limit.
+		timer := time.NewTimer(6 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			w.WriteHeader(http.StatusNoContent)
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	w := NewDeliveryWorker(nil, nil, HTTPClientOptions{}, nil)
+
+	require.NoError(t, w.ProcessTask(ctx, &types.DeliveryTask{URL: server.URL}))
+}
+
+func TestDeliveryWorker_ProcessTask_SecretCancellation(t *testing.T) {
+	secrets := &MockSecretProvider{getSecret: func(ctx context.Context, ref string) (string, error) {
+		assert.Equal(t, "signing-key", ref)
+		<-ctx.Done()
+		return "", ctx.Err()
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	w := NewDeliveryWorker(nil, secrets, HTTPClientOptions{}, nil)
+
+	err := w.ProcessTask(ctx, &types.DeliveryTask{URL: "http://localhost/webhook", SecretsRef: "signing-key"})
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.ErrorContains(t, err, "failed to resolve secret signing-key")
 	assert.False(t, types.IsFatal(err))
 }
 
@@ -378,10 +443,14 @@ func TestDeliveryWorker_ProcessTask_InvalidURL(t *testing.T) {
 }
 
 type MockSecretProvider struct {
-	secrets map[string]string
+	secrets   map[string]string
+	getSecret func(context.Context, string) (string, error)
 }
 
 func (m *MockSecretProvider) GetSecret(ctx context.Context, ref string) (string, error) {
+	if m.getSecret != nil {
+		return m.getSecret(ctx, ref)
+	}
 	if s, ok := m.secrets[ref]; ok {
 		return s, nil
 	}

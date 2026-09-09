@@ -110,6 +110,10 @@ func (s *service) Start(ctx context.Context) error {
 						payload = evt.Before.Data
 					}
 
+					timeout := t.Timeout
+					if timeout == 0 {
+						timeout = types.Duration(types.DefaultTaskTimeout)
+					}
 					task := &types.DeliveryTask{
 						TriggerID:   t.ID,
 						Database:    t.Database,
@@ -121,7 +125,7 @@ func (s *service) Start(ctx context.Context) error {
 						Headers:     t.Headers,
 						SecretsRef:  t.SecretsRef,
 						RetryPolicy: t.RetryPolicy,
-						Timeout:     types.Duration(types.DefaultTaskTimeout),
+						Timeout:     timeout,
 					}
 					if s.publisher != nil {
 						if err := s.publisher.Publish(ctx, task); err != nil {

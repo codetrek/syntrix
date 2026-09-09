@@ -294,6 +294,21 @@ func TestConsumer_Worker_RetryLogic(t *testing.T) {
 			expectTerm: true,
 		},
 		{
+			name:           "Timeout_Retry",
+			processErr:     fmt.Errorf("request failed: %w", context.DeadlineExceeded),
+			numDelivered:   1,
+			payload:        &types.DeliveryTask{TriggerID: "t1"},
+			expectNak:      true,
+			expectNakDelay: time.Second,
+		},
+		{
+			name:         "Timeout_MaxAttemptsReached",
+			processErr:   fmt.Errorf("request failed: %w", context.DeadlineExceeded),
+			numDelivered: 3,
+			payload:      &types.DeliveryTask{TriggerID: "t1"},
+			expectTerm:   true,
+		},
+		{
 			name: "WrappedRetryAfter",
 			processErr: fmt.Errorf("delivery failed: %w", &types.RetryAfterError{
 				Err:   errors.New("webhook failed with status: 429"),
@@ -471,29 +486,39 @@ func TestConsumer_Worker_DefaultRetryValues(t *testing.T) {
 	mockWorker.AssertExpectations(t)
 }
 
-// TestConsumer_ProcessMsg_WithTimeout verifies that custom timeout is applied.
 func TestConsumer_ProcessMsg_WithTimeout(t *testing.T) {
-	mockWorker := new(MockWorker)
-	c := &natsConsumer{
-		worker:  mockWorker,
-		metrics: &types.NoopMetrics{},
+	for _, tt := range []struct {
+		name    string
+		timeout time.Duration
+		want    time.Duration
+	}{
+		{name: "custom", timeout: 2 * time.Second, want: 2 * time.Second},
+		{name: "default", want: 30 * time.Second},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			mockWorker := new(MockWorker)
+			c := &natsConsumer{worker: mockWorker, metrics: &types.NoopMetrics{}}
+			data, err := json.Marshal(&types.DeliveryTask{TriggerID: "t1", Timeout: types.Duration(tt.timeout)})
+			require.NoError(t, err)
+			msg := pubsubtesting.NewMockMessage("test.subject", data)
+			started := time.Now()
+			var taskCtx context.Context
+			mockWorker.On("ProcessTask", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				taskCtx = args.Get(0).(context.Context)
+				deadline, ok := taskCtx.Deadline()
+				require.True(t, ok)
+				assert.False(t, deadline.Before(started.Add(tt.want)))
+				assert.False(t, deadline.After(time.Now().Add(tt.want)))
+			}).Return(nil).Once()
+
+			require.NoError(t, c.processMsg(ctx, msg))
+			require.NotNil(t, taskCtx)
+			assert.ErrorIs(t, taskCtx.Err(), context.Canceled)
+			mockWorker.AssertExpectations(t)
+		})
 	}
-
-	task := &types.DeliveryTask{
-		TriggerID:  "t1",
-		Database:   "database1",
-		Collection: "col1",
-		Timeout:    types.Duration(500 * time.Millisecond), // Custom timeout
-	}
-	data, _ := json.Marshal(task)
-	msg := pubsubtesting.NewMockMessage("test.subject", data)
-
-	mockWorker.On("ProcessTask", mock.Anything, mock.Anything).Return(nil)
-
-	err := c.processMsg(context.Background(), msg)
-	assert.NoError(t, err)
-
-	mockWorker.AssertExpectations(t)
 }
 
 // TestConsumer_ProcessMsg_InvalidPayload verifies error handling for invalid payload.

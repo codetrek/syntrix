@@ -170,6 +170,59 @@ func TestService_Start(t *testing.T) {
 	mockPublisher.AssertExpectations(t)
 }
 
+func TestService_Start_TaskTimeouts(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	watcher := new(MockDocumentWatcher)
+	publisher := new(MockTaskPublisher)
+	eval, err := NewEvaluator()
+	require.NoError(t, err)
+	svc := &service{evaluator: eval, watcher: watcher, publisher: publisher}
+	rules := []*types.Trigger{
+		{ID: "short", Database: "db1", Collection: "users", Events: []string{"create"}, URL: "https://example.com/webhook", Timeout: types.Duration(2 * time.Second)},
+		{ID: "long", Database: "db1", Collection: "users", Events: []string{"create"}, URL: "https://example.com/webhook", Timeout: types.Duration(time.Minute)},
+		{ID: "default", Database: "db1", Collection: "users", Events: []string{"create"}, URL: "https://example.com/webhook"},
+	}
+	require.NoError(t, svc.LoadTriggers(rules))
+	eventsCh := make(chan events.SyntrixChangeEvent, 1)
+	eventsCh <- events.SyntrixChangeEvent{
+		Type:     events.EventCreate,
+		Document: &storage.StoredDoc{Id: "doc1", Database: "db1", Collection: "users", Data: map[string]interface{}{"name": "test"}},
+	}
+	watcher.On("Watch", mock.Anything).Return((<-chan events.SyntrixChangeEvent)(eventsCh), nil)
+	captured := make(map[string]types.Duration)
+	publisher.On("Publish", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		task := args.Get(1).(*types.DeliveryTask)
+		captured[task.TriggerID] = task.Timeout
+		if len(captured) == len(rules) {
+			cancel()
+		}
+	}).Return(nil).Times(len(rules))
+
+	require.NoError(t, svc.Start(ctx))
+	assert.Equal(t, map[string]types.Duration{
+		"short": types.Duration(2 * time.Second), "long": types.Duration(time.Minute), "default": types.Duration(30 * time.Second),
+	}, captured)
+	assert.Equal(t, types.Duration(2*time.Second), rules[0].Timeout)
+	assert.Equal(t, types.Duration(time.Minute), rules[1].Timeout)
+	assert.Zero(t, rules[2].Timeout)
+	watcher.AssertExpectations(t)
+	publisher.AssertExpectations(t)
+}
+
+func TestService_LoadTriggers_NegativeTimeout(t *testing.T) {
+	svc := &service{}
+	active := &types.Trigger{ID: "active", Database: "db1", Collection: "users", Events: []string{"create"}, URL: "https://example.com/webhook", Timeout: types.Duration(time.Second)}
+	require.NoError(t, svc.LoadTriggers([]*types.Trigger{active}))
+	invalid := *active
+	invalid.Timeout = types.Duration(-time.Second)
+
+	require.ErrorContains(t, svc.LoadTriggers([]*types.Trigger{&invalid}), "timeout")
+	require.Len(t, svc.triggers, 1)
+	assert.Same(t, active, svc.triggers[0])
+	assert.Equal(t, types.Duration(time.Second), active.Timeout)
+}
+
 func TestService_Start_WatchError(t *testing.T) {
 	mockWatcher := new(MockDocumentWatcher)
 	mockPublisher := new(MockTaskPublisher)

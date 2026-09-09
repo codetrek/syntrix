@@ -21,6 +21,7 @@ import (
 
 // HTTPClientOptions configures the HTTP client.
 type HTTPClientOptions struct {
+	// Timeout is an optional total HTTP cap. Zero relies on the caller's context.
 	Timeout time.Duration
 }
 
@@ -34,16 +35,12 @@ type HTTPWorker struct {
 
 // NewDeliveryWorker creates a new HTTPWorker.
 func NewDeliveryWorker(auth identity.AuthN, secrets SecretProvider, opts HTTPClientOptions, metrics types.Metrics) DeliveryWorker {
-	timeout := opts.Timeout
-	if timeout == 0 {
-		timeout = types.DefaultHTTPTimeout
-	}
 	if metrics == nil {
 		metrics = &types.NoopMetrics{}
 	}
 	return &HTTPWorker{
 		client: &http.Client{
-			Timeout: timeout,
+			Timeout: opts.Timeout,
 		},
 		auth:    auth,
 		secrets: secrets,
@@ -51,7 +48,8 @@ func NewDeliveryWorker(auth identity.AuthN, secrets SecretProvider, opts HTTPCli
 	}
 }
 
-// ProcessTask executes a single delivery task.
+// ProcessTask executes one attempt using the caller's context deadline.
+// The task timeout is applied by the consumer before invoking the worker.
 func (w *HTTPWorker) ProcessTask(ctx context.Context, task *types.DeliveryTask) error {
 	start := time.Now()
 	// Add System Token
