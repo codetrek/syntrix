@@ -712,7 +712,6 @@ func (s *PebbleStore) searchWithPending(iter Iterator, prefix []byte, opts store
 
 			// Skip if pending delete or update (will be handled from pendingDocs)
 			if _, hasPending := memOps[docID]; hasPending {
-				seenDocs[docID] = true
 				iterValid = iter.Next()
 				continue
 			}
