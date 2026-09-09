@@ -30,6 +30,11 @@ leaves buffer ownership with the running backend until its worker finishes.
 
 ## Alternatives
 
+**Require cache-owned progress and commit before publication.** The
+[rejected publication proposal](../../rejected/architecture/2026-09-07-puller-persist-before-publish.md)
+combined these architecture changes with capture error handling. The capture
+failures are fixed without changing checkpoint authority or publication timing.
+
 **Return event-processing errors through ordinary reconnect.** If no durable
 token exists yet, the next `from_now` watch can skip the failed first event.
 These failures therefore terminate the backend before ordinary network retry.

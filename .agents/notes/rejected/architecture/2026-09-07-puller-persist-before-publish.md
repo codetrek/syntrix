@@ -1,6 +1,6 @@
 # Agent Note: Persist Puller Events Before Publication
 
-Status: proposed
+Status: rejected - Requires cache-owned consumer progress and pre-publication commits beyond the capture bugfix delivered in [PR #128](https://github.com/codetreker/syntrix/pull/128).
 
 ## Problem
 
@@ -95,8 +95,8 @@ without resume tokens or document payloads.
 
 ## Dependencies
 
-[Pending-write bounds](../bug-fix/2026-09-07-puller-pending-write-bound.md) owns
-admission capacity. [Local subscription replay](2026-09-07-local-puller-subscription-replay.md)
+[Pending-write bounds](../../proposed/bug-fix/2026-09-07-puller-pending-write-bound.md) owns
+admission capacity. [Local subscription replay](../../proposed/architecture/2026-09-07-local-puller-subscription-replay.md)
 consumes the committed position and frontier.
-[History-gap recovery](2026-09-07-puller-history-gap-recovery.md) owns continuity
+[History-gap recovery](../../proposed/architecture/2026-09-07-puller-history-gap-recovery.md) owns continuity
 generations, retention boundaries, and invalidation during migration.

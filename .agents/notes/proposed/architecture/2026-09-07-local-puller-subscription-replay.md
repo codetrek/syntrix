@@ -30,13 +30,13 @@ Give local and gRPC subscriptions one shared catch-up/live state machine, with
 transport adapters responsible for delivery and errors. A nonempty valid marker
 starts replay; an empty marker retains the protocol's current-head semantics.
 Register live capture before opening replay, track progress per backend, and
-recover channel overflow from the last successfully delivered position. Use the
-durable monotonically increasing committed position assigned per backend by
-[persist before publish](2026-09-07-puller-persist-before-publish.md) for buffer
-order, progress markers, replay bounds, live delivery, and overlap deduplication.
-Compare positions only within the same backend and continuity generation.
-Preserve the stable upstream event identity separately; timestamps and event-ID
-hashes are neither resume positions nor proof that an event was delivered.
+recover channel overflow from the last successfully delivered position.
+Progress encoding, replay ordering, and overlap deduplication remain draft
+mechanisms requiring a separate decision: the
+[publication proposal](../../rejected/architecture/2026-09-07-puller-persist-before-publish.md)
+and its cache-generation/sequence scheme are rejected. Preserve stable upstream
+event identity and the requirement that equal timestamps or event-ID hash order
+cannot cause an undelivered event to be skipped.
 
 Extend the local subscription contract to expose a terminal error separately
 from normal cancellation, then update all local consumers. Malformed markers,
@@ -79,9 +79,7 @@ logging document payloads or raw resume tokens.
 
 ## Dependencies
 
-[Persist before publish](2026-09-07-puller-persist-before-publish.md) owns durable
-position assignment and event identity;
-[history-gap recovery](2026-09-07-puller-history-gap-recovery.md) defines the
+[History-gap recovery](2026-09-07-puller-history-gap-recovery.md) owns the proposed
 terminal continuity failure;
 [consumer settings](../bug-fix/2026-09-07-puller-admission-and-catch-up-settings.md)
 owns admission and catch-up policy.

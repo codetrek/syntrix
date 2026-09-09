@@ -35,4 +35,4 @@ This changes replication ordering and checkpoint format. Bootstrap can outlive r
 
 ## Dependencies
 
-[Puller durability](../architecture/2026-09-07-puller-persist-before-publish.md), [history-gap recovery](../architecture/2026-09-07-puller-history-gap-recovery.md), [local replay](../architecture/2026-09-07-local-puller-subscription-replay.md), [query pagination](../feature/2026-09-07-query-cursor-pagination.md), and [SDK replication](../feature/2026-09-07-sdk-offline-replication.md) provide the required source, bootstrap traversal, and checkpoint persistence.
+[History-gap recovery](../architecture/2026-09-07-puller-history-gap-recovery.md), [local replay](../architecture/2026-09-07-local-puller-subscription-replay.md), [query pagination](../feature/2026-09-07-query-cursor-pagination.md), and [SDK replication](../feature/2026-09-07-sdk-offline-replication.md) track the proposed source, bootstrap traversal, and checkpoint persistence. The [publication proposal](../../rejected/architecture/2026-09-07-puller-persist-before-publish.md) is rejected; relying on Puller history for this replication design remains unconfirmed.

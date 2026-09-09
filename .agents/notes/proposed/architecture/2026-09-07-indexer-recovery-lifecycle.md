@@ -35,4 +35,4 @@ Long scans may outlive retained replay history and require a visible retry or fa
 
 ## Dependencies
 
-[Durable Puller publication](2026-09-07-puller-persist-before-publish.md), [history-gap recovery](2026-09-07-puller-history-gap-recovery.md), and [query cursor pagination](../feature/2026-09-07-query-cursor-pagination.md) supply the recovery boundaries and scan traversal. [Management RPCs](../feature/2026-09-07-indexer-management-rpcs.md) expose this lifecycle.
+[History-gap recovery](2026-09-07-puller-history-gap-recovery.md), [local replay](2026-09-07-local-puller-subscription-replay.md), and [query cursor pagination](../feature/2026-09-07-query-cursor-pagination.md) track the proposed recovery boundaries and scan traversal. The [publication proposal](../../rejected/architecture/2026-09-07-puller-persist-before-publish.md) is rejected; a usable replay boundary remains an unresolved prerequisite. [Management RPCs](../feature/2026-09-07-indexer-management-rpcs.md) expose this lifecycle.

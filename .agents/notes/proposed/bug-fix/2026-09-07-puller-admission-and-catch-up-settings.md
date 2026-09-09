@@ -22,8 +22,10 @@ migration; transport connection count must not stand in for streaming RPC count.
 Use an internal registration identity so diagnostic consumer IDs neither replace
 another subscription nor cause its cleanup.
 
-Apply `catch_up_threshold` to events behind the committed frontier across the
-subscription's backends. Specify a bounded measurement frequency and retain
+Apply `catch_up_threshold` to the subscription's per-backend backlog. Its
+measurement and reference position remain draft after rejection of the
+[publication proposal](../../rejected/architecture/2026-09-07-puller-persist-before-publish.md).
+Specify a bounded measurement frequency and retain
 overflow as an immediate trigger. Server `coalesce_on_catch_up` permits
 coalescing; the individual subscription must also opt in. This avoids silently
 merging events for Trigger or other consumers needing each transition. Carry
@@ -61,6 +63,5 @@ raw cursor values or payloads.
 ## Dependencies
 
 [Local subscription replay](../architecture/2026-09-07-local-puller-subscription-replay.md)
-owns the shared state machine;
-[persist before publish](../architecture/2026-09-07-puller-persist-before-publish.md)
-defines the committed frontier used to measure lag.
+owns the proposed local/remote delivery integration. Lag measurement requires
+its own confirmed definition; the rejected publication scheme supplies none.
