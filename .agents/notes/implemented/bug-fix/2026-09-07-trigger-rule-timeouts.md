@@ -71,8 +71,8 @@ budget increases to 30 seconds.
 Broker acknowledgement timing remains independent of this execution deadline.
 Its window includes queue residence and execution, so long waits or attempts can
 permit redelivery while an earlier attempt remains active. The deferred
-[acknowledgement-window proposal](../../proposed/architecture/2026-09-07-trigger-acknowledgement-window.md)
-owns coordination and its required queue-interface and lifecycle decisions.
+[durable task handoff proposal](../../proposed/architecture/2026-09-07-trigger-acknowledgement-window.md)
+explores persistence before broker Ack and execution from shared database state.
 The timeout repair does not establish non-overlapping broker delivery.
 
 Cancellation cannot undo remote side effects. Stable identity and receiver
