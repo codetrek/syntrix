@@ -1,327 +1,637 @@
-import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
-import { RealtimeClient, RealtimeClientOptions } from './realtime';
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { SyntrixClient } from '../clients/syntrix-client';
+import { TokenProvider } from '../internal/auth/types';
+import { BaseMessage, RealtimeClient, RealtimeClientOptions } from './realtime';
 
-// Mock WebSocket for testing
-class MockWebSocket {
+class ControlledWebSocket {
   static CONNECTING = 0;
   static OPEN = 1;
   static CLOSING = 2;
   static CLOSED = 3;
-
-  readyState = MockWebSocket.CONNECTING;
+  static instances: ControlledWebSocket[] = [];
+  readyState = ControlledWebSocket.CONNECTING;
   onopen: (() => void) | null = null;
   onclose: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
-  onerror: ((event: any) => void) | null = null;
+  onerror: (() => void) | null = null;
+  sent: BaseMessage[] = [];
 
-  sentMessages: string[] = [];
+  constructor(readonly url: string) {
+    ControlledWebSocket.instances.push(this);
+  }
 
-  constructor(public url: string) {
-    // Simulate async connection
-    setTimeout(() => {
-      this.readyState = MockWebSocket.OPEN;
-      this.onopen?.();
-    }, 0);
+  open() {
+    this.readyState = ControlledWebSocket.OPEN;
+    this.onopen?.();
   }
 
   send(data: string) {
-    this.sentMessages.push(data);
+    if (this.readyState !== ControlledWebSocket.OPEN) throw new Error('Socket is not open');
+    this.sent.push(JSON.parse(data));
   }
 
   close() {
-    this.readyState = MockWebSocket.CLOSED;
+    this.readyState = ControlledWebSocket.CLOSED;
     this.onclose?.();
   }
 
-  // Helper to simulate receiving a message
-  simulateMessage(data: any) {
-    this.onmessage?.({ data: JSON.stringify(data) });
+  receive(message: BaseMessage) {
+    this.onmessage?.({ data: JSON.stringify(message) });
+  }
+
+  messages(type: string) {
+    return this.sent.filter(message => message.type === type);
+  }
+
+  authenticate() {
+    const request = this.messages('auth').slice(-1)[0]!;
+    expect(request).toBeDefined();
+    this.receive({ id: request.id, type: 'auth_ack' });
+  }
+
+  ready(subId: string) {
+    const request = this.messages('subscribe').find(message => message.id === subId)!;
+    expect(request).toBeDefined();
+    this.receive({ id: request.id, type: 'subscribe_ack', payload: { subId } });
   }
 }
 
-describe('RealtimeClient Keepalive', () => {
-  let originalWebSocket: typeof globalThis.WebSocket;
+const flush = async () => {
+  for (let i = 0; i < 12; i++) await Promise.resolve();
+};
+
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+};
+
+const query = { query: { collection: 'orders' } };
+const event = (subId: string) => ({
+  type: 'event', payload: { subId, delta: { type: 'update', id: 'one', timestamp: 1 } },
+});
+
+// Explicit timer advancement keeps reconnect and authentication deadline races reproducible.
+class Clock {
+  now = 1_000;
+  private nextId = 0;
+  timers = new Map<number, { at: number; repeat: number; callback: () => void }>();
+  timeout = (callback: () => void, delay = 0) => this.add(callback, delay, false);
+  interval = (callback: () => void, delay = 0) => this.add(callback, delay, true);
+  clear = (id: number) => { this.timers.delete(id); };
+  private add(callback: () => void, delay: number, repeat: boolean) {
+    const id = ++this.nextId;
+    this.timers.set(id, { at: this.now + Math.max(1, delay), repeat: repeat ? Math.max(1, delay) : 0, callback });
+    return id;
+  }
+  async advance(ms: number) {
+    const end = this.now + ms;
+    for (;;) {
+      const next = [...this.timers].filter(([, timer]) => timer.at <= end)
+        .sort((a, b) => a[1].at - b[1].at)[0];
+      if (!next) break;
+      const [id, timer] = next;
+      this.now = timer.at;
+      if (timer.repeat) timer.at += timer.repeat;
+      else this.timers.delete(id);
+      timer.callback();
+      await flush();
+    }
+    this.now = end;
+    await flush();
+  }
+}
+
+describe('Realtime subscription lifecycle', () => {
+  const originals = {
+    WebSocket: globalThis.WebSocket, setTimeout, clearTimeout, setInterval, clearInterval,
+    now: Date.now, random: Math.random, error: console.error, warn: console.warn,
+  };
+  let clock: Clock;
+  let clients: RealtimeClient[];
+  let logs: ReturnType<typeof mock>;
 
   beforeEach(() => {
-    // Save original WebSocket
-    originalWebSocket = globalThis.WebSocket;
-    // @ts-ignore - Mock WebSocket
-    globalThis.WebSocket = MockWebSocket;
+    clock = new Clock();
+    clients = [];
+    ControlledWebSocket.instances = [];
+    globalThis.WebSocket = ControlledWebSocket as unknown as typeof WebSocket;
+    globalThis.setTimeout = clock.timeout as unknown as typeof setTimeout;
+    globalThis.setInterval = clock.interval as unknown as typeof setInterval;
+    globalThis.clearTimeout = clock.clear as unknown as typeof clearTimeout;
+    globalThis.clearInterval = clock.clear as unknown as typeof clearInterval;
+    Date.now = () => clock.now;
+    Math.random = () => 0.5;
+    logs = mock(() => {});
+    console.error = logs;
+    console.warn = mock(() => {});
   });
 
   afterEach(() => {
-    // Restore original WebSocket
-    globalThis.WebSocket = originalWebSocket;
+    for (const client of clients) client.dispose();
+    const timerCount = clock.timers.size;
+    const openSockets = ControlledWebSocket.instances.filter(ws => ws.readyState !== ControlledWebSocket.CLOSED).length;
+    Object.assign(globalThis, {
+      WebSocket: originals.WebSocket, setTimeout: originals.setTimeout, clearTimeout: originals.clearTimeout,
+      setInterval: originals.setInterval, clearInterval: originals.clearInterval,
+    });
+    Date.now = originals.now;
+    Math.random = originals.random;
+    console.error = originals.error;
+    console.warn = originals.warn;
+    expect(timerCount).toBe(0);
+    expect(openSockets).toBe(0);
   });
 
-  it('should initialize with default options', () => {
-    const tokenProvider = { getToken: async () => 'test-token' };
-    const client = new RealtimeClient('ws://localhost:8080/realtime/ws', tokenProvider as any, 'test-db');
+  const create = (options?: RealtimeClientOptions, provider?: Partial<TokenProvider>) => {
+    const client = new RealtimeClient('ws://localhost/realtime/ws', {
+      getToken: async () => 'test-token', refreshToken: async () => 'fresh-token', ...provider,
+    } as TokenProvider, 'test-db', options);
+    clients.push(client);
+    return client;
+  };
 
+  const connect = async (client: RealtimeClient) => {
+    const pending = client.connect();
+    const ws = ControlledWebSocket.instances.slice(-1)[0]!;
+    ws.open();
+    await flush();
+    ws.authenticate();
+    await pending;
+    return ws;
+  };
+
+  it('shares a handshake and gates all registrations on matching authentication acknowledgment', async () => {
+    const client = create();
     expect(client.getState()).toBe('disconnected');
     expect(client.getLastMessageTime()).toBe(0);
-  });
-
-  it('should accept custom options', () => {
-    const tokenProvider = { getToken: async () => 'test-token' };
-    const options: RealtimeClientOptions = {
-      maxReconnectAttempts: 10,
-      reconnectDelayMs: 2000,
-      activityTimeoutMs: 60000,
-    };
-    const client = new RealtimeClient('ws://localhost:8080/realtime/ws', tokenProvider as any, 'test-db', options);
-
-    // Options are private, so we verify behavior indirectly
-    expect(client.getState()).toBe('disconnected');
-  });
-
-  it('should update lastMessageTime on connect', async () => {
-    const tokenProvider = { getToken: async () => 'test-token' };
-    const client = new RealtimeClient('ws://localhost:8080/realtime/ws', tokenProvider as any, 'test-db');
-
-    const beforeConnect = Date.now();
+    const onConnect = mock(() => {});
+    client.on('onConnect', onConnect);
+    const a = client.subscribe(query);
+    const pending = client.connect();
+    expect(client.connect()).toBe(pending);
+    expect(ControlledWebSocket.instances).toHaveLength(1);
+    const ws = ControlledWebSocket.instances[0];
+    const b = client.subscribe(query);
+    ws.open();
+    await flush();
+    expect(ws.messages('auth')[0].payload).toEqual({ token: 'test-token', database: 'test-db' });
+    expect(ws.messages('subscribe')).toHaveLength(0);
+    expect(client.getState()).toBe('connecting');
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    ws.receive({ type: 'auth_ack', id: 'another-request' });
+    await flush();
+    expect(settled).toBe(false);
+    ws.authenticate();
+    await pending;
+    expect(client.getLastMessageTime()).toBe(clock.now);
+    expect(ws.messages('subscribe').map(message => message.id)).toEqual([a, b]);
+    ws.authenticate();
+    expect(ws.messages('subscribe')).toHaveLength(2);
+    expect(onConnect).toHaveBeenCalledTimes(1);
     await client.connect();
-    const afterConnect = Date.now();
+    expect(ControlledWebSocket.instances).toHaveLength(1);
+  });
 
-    expect(client.getLastMessageTime()).toBeGreaterThanOrEqual(beforeConnect);
-    expect(client.getLastMessageTime()).toBeLessThanOrEqual(afterConnect);
+  it('isolates subscription events, snapshots, readiness and errors while preserving global observers', async () => {
+    const client = create();
+    const a = { onEvent: mock(() => {}), onSnapshot: mock(() => {}), onReady: mock(() => {}), onError: mock(() => {}) };
+    const b = { onEvent: mock(() => {}), onSnapshot: mock(() => {}), onReady: mock(() => {}), onError: mock(() => {}) };
+    const globalEvent = mock(() => {});
+    const globalError = mock(() => {});
+    client.on('onEvent', globalEvent).on('onError', globalError);
+    const aId = client.subscribe(query, a);
+    const bId = client.subscribe(query, b);
+    const ws = await connect(client);
+    ws.receive(event(aId));
+    ws.receive({ type: 'snapshot', payload: JSON.stringify({ subId: bId, documents: [{ id: 'one' }] }) });
+    expect(a.onEvent).toHaveBeenCalledTimes(1);
+    expect(b.onEvent).not.toHaveBeenCalled();
+    expect(a.onSnapshot).not.toHaveBeenCalled();
+    expect(b.onSnapshot).toHaveBeenCalledTimes(1);
+    expect(globalEvent).toHaveBeenCalledTimes(1);
+    ws.ready(aId);
+    ws.ready(aId);
+    expect(a.onReady).toHaveBeenCalledTimes(1);
+    expect(b.onReady).not.toHaveBeenCalled();
+    ws.receive({ type: 'error', id: bId, payload: { message: 'Invalid collection' } });
+    expect(b.onError).toHaveBeenCalledTimes(1);
+    expect(a.onError).not.toHaveBeenCalled();
+    expect(globalError).toHaveBeenCalledTimes(1);
+    ws.ready(bId);
+    expect(b.onReady).not.toHaveBeenCalled();
+    client.unsubscribe(aId);
+    client.unsubscribe(aId);
+    ws.receive(event(aId));
+    ws.ready(aId);
+    expect(a.onEvent).toHaveBeenCalledTimes(1);
+    expect(globalEvent).toHaveBeenCalledTimes(1);
+    expect(ws.messages('unsubscribe')).toHaveLength(1);
+    expect(ws.readyState).toBe(ControlledWebSocket.OPEN);
+  });
 
+  it('does not send or restore a subscription removed before authentication', async () => {
+    const client = create();
+    const ready = mock(() => {});
+    const id = client.subscribe(query, { onReady: ready });
+    expect(ControlledWebSocket.instances).toHaveLength(0);
+    client.unsubscribe(id);
+    const ws = await connect(client);
+    expect(ws.messages('subscribe')).toHaveLength(0);
+    expect(ws.messages('unsubscribe')).toHaveLength(0);
+    ws.receive({ id, type: 'subscribe_ack', payload: { subId: id } });
+    expect(ready).not.toHaveBeenCalled();
+  });
+
+  it('restores a failed registration only on a later connection', async () => {
+    const client = create();
+    const ready = mock(() => {});
+    const error = mock(() => {});
+    const id = client.subscribe(query, { onReady: ready, onError: error });
+    const first = await connect(client);
+    first.receive({ type: 'error', id, payload: { message: 'Collection unavailable' } });
+    expect(error).toHaveBeenCalledTimes(1);
+    first.ready(id);
+    expect(ready).not.toHaveBeenCalled();
+    expect(first.messages('subscribe')).toHaveLength(1);
     client.disconnect();
+    const second = await connect(client);
+    second.ready(id);
+    expect(ready).toHaveBeenCalledTimes(1);
   });
 
-  it('should update lastMessageTime on message received', async () => {
-    const tokenProvider = { getToken: async () => 'test-token' };
-    const client = new RealtimeClient('ws://localhost:8080/realtime/ws', tokenProvider as any, 'test-db');
+  it('resubscribes retained registrations once per connection and ignores old socket callbacks', async () => {
+    const client = create({ reconnectDelayMs: 10 });
+    const ready = mock(() => {});
+    const callback = mock(() => {});
+    const id = client.subscribe(query, { onReady: ready, onEvent: callback });
+    const first = await connect(client);
+    first.ready(id);
+    const staleMessage = first.onmessage!;
+    const staleClose = first.onclose!;
+    first.close();
+    await clock.advance(10);
+    const second = ControlledWebSocket.instances[1];
+    second.open();
+    await flush();
+    second.authenticate();
+    second.ready(id);
+    second.ready(id);
+    staleMessage({ data: JSON.stringify(event(id)) });
+    staleClose();
+    expect(callback).not.toHaveBeenCalled();
+    expect(ready).toHaveBeenCalledTimes(2);
+    expect(client.getState()).toBe('connected');
+    expect(second.messages('subscribe')).toHaveLength(1);
+  });
 
-    await client.connect();
-    const initialTime = client.getLastMessageTime();
-
-    // Wait a bit to ensure time difference
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    // Get the internal WebSocket and simulate a message
-    // @ts-ignore - access private ws for testing
-    const ws = client['ws'] as MockWebSocket;
-    ws.simulateMessage({ type: 'auth_ack' });
-
-    expect(client.getLastMessageTime()).toBeGreaterThan(initialTime);
-
+  it('manual connect cancels a queued retry and disconnect preserves subscriptions without reconnecting', async () => {
+    const client = create({ reconnectDelayMs: 10 });
+    const id = client.subscribe(query);
+    const first = await connect(client);
+    first.close();
+    const second = await connect(client);
+    await clock.advance(20);
+    expect(ControlledWebSocket.instances).toHaveLength(2);
+    expect(second.messages('subscribe')[0].id).toBe(id);
     client.disconnect();
-  });
-
-  it('should send auth message with token on connect', async () => {
-    const tokenProvider = { getToken: async () => 'auth-token' };
-    const client = new RealtimeClient('ws://localhost:8080/realtime/ws', tokenProvider as any, 'test-db');
-
-    await client.connect();
-
-    // @ts-ignore - access private ws for testing
-    const ws = client['ws'] as MockWebSocket;
-    const payloads = ws.sentMessages.map((m) => JSON.parse(m));
-
-    const authMsg = payloads.find((m) => m.type === 'auth');
-    expect(authMsg).toBeDefined();
-    expect(authMsg.payload.token).toBe('auth-token');
-    expect(authMsg.payload.database).toBe('test-db');
-
     client.disconnect();
+    await clock.advance(10_000);
+    expect(ControlledWebSocket.instances).toHaveLength(2);
+    const third = await connect(client);
+    expect(third.messages('subscribe')[0].id).toBe(id);
   });
 
-  it('should refresh token and retry auth on unauthorized error once', async () => {
-    const tokenProvider = {
-      getToken: mock(async () => 'stale-token'),
-      refreshToken: mock(async () => 'fresh-token'),
-    } as any;
-    const client = new RealtimeClient('ws://localhost:8080/realtime/ws', tokenProvider as any, 'test-db');
+  for (const failure of ['close', 'error', 'disconnect', 'dispose'] as const) {
+    it(`settles a pending handshake on ${failure}`, async () => {
+      const client = create({ maxReconnectAttempts: 0 });
+      const pending = client.connect();
+      const rejected = pending.then(() => { throw new Error('Expected handshake rejection'); }, error => error);
+      const ws = ControlledWebSocket.instances[0];
+      if (failure === 'close') ws.close();
+      else if (failure === 'error') ws.onerror?.();
+      else client[failure]();
+      expect(await rejected).toBeInstanceOf(Error);
+      expect(clock.timers.size).toBe(0);
+    });
+  }
 
-    await client.connect();
+  it('uses a hard authentication deadline even when heartbeats keep arriving', async () => {
+    const client = create({ activityTimeoutMs: 90, maxReconnectAttempts: 0 });
+    const pending = client.connect();
+    const rejected = pending.then(() => { throw new Error('Expected handshake rejection'); }, error => error);
+    const ws = ControlledWebSocket.instances[0];
+    ws.open();
+    await flush();
+    for (let i = 0; i < 3; i++) {
+      await clock.advance(25);
+      ws.receive({ type: 'heartbeat' });
+    }
+    await clock.advance(16);
+    expect(await rejected).toBeInstanceOf(Error);
+    expect(ws.readyState).toBe(ControlledWebSocket.CLOSED);
+  });
 
-    // @ts-ignore
-    const ws = client['ws'] as MockWebSocket;
-    ws.sentMessages = []; // reset messages to inspect retry
+  it('keeps authenticated connections alive on heartbeat and reconnects after activity stops', async () => {
+    const client = create({ activityTimeoutMs: 90, reconnectDelayMs: 10 });
+    const disconnected = mock(() => {});
+    const callback = mock(() => {});
+    client.on('onDisconnect', disconnected).on('onEvent', callback);
+    const ws = await connect(client);
+    for (let i = 0; i < 6; i++) {
+      await clock.advance(30);
+      ws.receive({ type: 'heartbeat' });
+      expect(client.getLastMessageTime()).toBe(clock.now);
+    }
+    expect(disconnected).not.toHaveBeenCalled();
+    expect(callback).not.toHaveBeenCalled();
+    await clock.advance(140);
+    expect(disconnected).toHaveBeenCalledTimes(1);
+    expect(ControlledWebSocket.instances).toHaveLength(2);
+  });
 
-    // Simulate server auth error
-    ws.simulateMessage({ type: 'error', payload: { message: 'unauthorized' } });
-
-    // Allow async refresh to run
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    const payloads = ws.sentMessages.map((m) => JSON.parse(m));
-    const retry = payloads.find((m) => m.type === 'auth' && m.id === 'auth-retry');
-
-    expect(tokenProvider.refreshToken).toHaveBeenCalledTimes(1);
-    expect(retry).toBeDefined();
+  it('refreshes exactly once for correlated unauthorized authentication errors', async () => {
+    const refreshToken = mock(async () => 'fresh-token');
+    const client = create({ maxReconnectAttempts: 0 }, { refreshToken });
+    const pending = client.connect();
+    const rejected = pending.then(() => { throw new Error('Expected handshake rejection'); }, error => error);
+    const ws = ControlledWebSocket.instances[0];
+    ws.open();
+    await flush();
+    const first = ws.messages('auth')[0];
+    ws.receive({ type: 'error', id: 'unrelated', payload: { code: 'unauthorized', message: 'invalid token' } });
+    expect(refreshToken).not.toHaveBeenCalled();
+    ws.receive({ type: 'error', id: first.id, payload: { code: 'unauthorized', message: 'invalid token' } });
+    await flush();
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+    const retry = ws.messages('auth')[1];
     expect(retry.payload.token).toBe('fresh-token');
-
-    // Subsequent unauthorized should not trigger another refresh
-    ws.sentMessages = [];
-    ws.simulateMessage({ type: 'error', payload: { message: 'unauthorized again' } });
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(ws.sentMessages.length).toBe(0);
-
-    client.disconnect();
+    expect(retry.id).not.toBe(first.id);
+    ws.receive({ type: 'auth_ack', id: first.id });
+    expect(client.getState()).not.toBe('connected');
+    ws.receive({ type: 'error', id: retry.id, payload: { code: 'unauthorized', message: 'invalid token' } });
+    expect(await rejected).toBeInstanceOf(Error);
+    expect(refreshToken).toHaveBeenCalledTimes(1);
   });
 
-  it('should trigger reconnect on activity timeout', async () => {
-    const tokenProvider = { getToken: async () => 'test-token' };
-    // Very short timeout for testing
-    const client = new RealtimeClient('ws://localhost:8080/realtime/ws', tokenProvider as any, 'test-db', {
-      activityTimeoutMs: 50,
-    });
-
-    let disconnectCount = 0;
-    client.on('onDisconnect', () => {
-      disconnectCount++;
-    });
-
-    await client.connect();
-
-    // Wait for activity timeout to trigger
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    // Should have triggered disconnect due to inactivity
-    expect(disconnectCount).toBeGreaterThanOrEqual(1);
-  });
-
-  it('should not timeout if messages are received', async () => {
-    const tokenProvider = { getToken: async () => 'test-token' };
-    const client = new RealtimeClient('ws://localhost:8080/realtime/ws', tokenProvider as any, 'test-db', {
-      activityTimeoutMs: 100,
-    });
-
-    let disconnectCount = 0;
-    client.on('onDisconnect', () => {
-      disconnectCount++;
-    });
-
-    await client.connect();
-
-    // @ts-ignore - access private ws for testing
-    const ws = client['ws'] as MockWebSocket;
-
-    // Send messages periodically to keep connection alive
-    const interval = setInterval(() => {
-      if (ws.readyState === MockWebSocket.OPEN) {
-        ws.simulateMessage({ type: 'event', payload: {} });
+  for (const mode of ['missing token', 'token rejection', 'refresh rejection', 'invalid auth'] as const) {
+    it(`terminates authentication on ${mode}`, async () => {
+      const original = new Error('provider failed');
+      const provider = {
+        getToken: mock(async () => {
+          if (mode === 'token rejection') throw original;
+          return mode === 'missing token' ? null : 'token';
+        }),
+        refreshToken: mock(async () => { throw original; }),
+      };
+      const client = create({ maxReconnectAttempts: 0 }, provider);
+      const reported = mock(() => {});
+      client.subscribe(query, { onError: reported });
+      const pending = client.connect();
+      const rejected = pending.then(() => { throw new Error('Expected handshake rejection'); }, error => error);
+      const ws = ControlledWebSocket.instances[0];
+      ws.open();
+      await flush();
+      if (mode === 'refresh rejection' || mode === 'invalid auth') {
+        ws.receive({ type: 'error', id: ws.messages('auth')[0].id, payload: {
+          code: mode === 'invalid auth' ? 'invalid_auth' : 'unauthorized', message: 'invalid token',
+        } });
       }
-    }, 30);
-
-    // Wait longer than timeout
-    await new Promise((resolve) => setTimeout(resolve, 150));
-
-    clearInterval(interval);
-
-    // Should NOT have disconnected because we kept receiving messages
-    expect(disconnectCount).toBe(0);
-
-    client.disconnect();
-  });
-
-  it('should stop activity check on disconnect', async () => {
-    const tokenProvider = { getToken: async () => 'test-token' };
-    const client = new RealtimeClient('ws://localhost:8080/realtime/ws', tokenProvider as any, 'test-db', {
-      activityTimeoutMs: 50,
+      expect(await rejected).toBeInstanceOf(Error);
+      expect(reported).toHaveBeenCalledTimes(1);
+      expect(ws.messages('subscribe')).toHaveLength(0);
+      expect(ws.readyState).toBe(ControlledWebSocket.CLOSED);
     });
+  }
 
-    await client.connect();
+  for (const phase of ['token', 'refresh'] as const) {
+    for (const outcome of ['resolve', 'reject'] as const) {
+      it(`ignores a late ${phase} ${outcome} after disconnect and replacement`, async () => {
+        const late = deferred<string>();
+        let calls = 0;
+        const client = create({ maxReconnectAttempts: 0 }, {
+          getToken: async () => ++calls === 1 && phase === 'token' ? late.promise : 'token',
+          refreshToken: () => late.promise,
+        });
+        const pending = client.connect();
+        const rejected = pending.then(() => { throw new Error('Expected handshake rejection'); }, error => error);
+        const old = ControlledWebSocket.instances[0];
+        old.open();
+        await flush();
+        if (phase === 'refresh') old.receive({ type: 'error', id: old.messages('auth')[0].id,
+          payload: { code: 'unauthorized', message: 'invalid token' } });
+        client.disconnect();
+        expect(await rejected).toBeInstanceOf(Error);
+        const replacement = await connect(client);
+        const sent = replacement.sent.length;
+        if (outcome === 'resolve') late.resolve('late-token');
+        else late.reject(new Error('late provider failure'));
+        await flush();
+        expect(replacement.sent).toHaveLength(sent);
+        expect(old.messages('auth')).toHaveLength(phase === 'token' ? 0 : 1);
+        expect(client.getState()).toBe('connected');
+      });
+    }
+  }
 
-    // @ts-ignore - access private timer for testing
-    expect(client['activityCheckTimer']).not.toBeNull();
-
-    client.disconnect();
-
-    // @ts-ignore - access private timer for testing
-    expect(client['activityCheckTimer']).toBeNull();
+  it('exhausts failed handshake retries despite each socket opening', async () => {
+    const client = create({ maxReconnectAttempts: 2, reconnectDelayMs: 10 });
+    const pending = client.connect();
+    const rejected = pending.then(() => { throw new Error('Expected handshake rejection'); }, error => error);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const ws = ControlledWebSocket.instances[attempt];
+      ws.open();
+      await flush();
+      ws.close();
+      await clock.advance(10 * 2 ** attempt);
+    }
+    expect(await rejected).toBeInstanceOf(Error);
+    await clock.advance(1_000);
+    expect(ControlledWebSocket.instances).toHaveLength(3);
+    expect(clock.timers.size).toBe(0);
   });
 
-  it('should update lastMessageTime when receiving heartbeat message', async () => {
-    const tokenProvider = { getToken: async () => 'test-token' };
-    const client = new RealtimeClient('ws://localhost:8080/realtime/ws', tokenProvider as any, 'test-db');
-
-    await client.connect();
-    const initialTime = client.getLastMessageTime();
-
-    // Wait a bit to ensure time difference
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    // @ts-ignore - access private ws for testing
-    const ws = client['ws'] as MockWebSocket;
-    
-    // Simulate receiving a heartbeat message from server
-    ws.simulateMessage({ type: 'heartbeat' });
-
-    expect(client.getLastMessageTime()).toBeGreaterThan(initialTime);
-
-    client.disconnect();
+  it('isolates callback exceptions from protocol parsing and other observers', async () => {
+    const client = create();
+    const global = mock(() => {});
+    const error = new Error('consumer failure');
+    const reported = mock(() => {});
+    const id = client.subscribe(query, { onEvent: () => { throw error; } });
+    client.on('onEvent', global).on('onError', reported);
+    const ws = await connect(client);
+    ws.receive(event(id));
+    expect(global).toHaveBeenCalledTimes(1);
+    expect(reported).toHaveBeenCalledWith(error);
+    expect(logs).not.toHaveBeenCalled();
   });
 
-  it('should keep connection alive when receiving periodic heartbeat messages', async () => {
-    const tokenProvider = { getToken: async () => 'test-token' };
-    const client = new RealtimeClient('ws://localhost:8080/realtime/ws', tokenProvider as any, 'test-db', {
-      activityTimeoutMs: 100,
+  it('reports connection failure once to every active subscription even when one error callback throws', async () => {
+    const client = create({ maxReconnectAttempts: 0 });
+    const firstError = mock(() => { throw new Error('error callback failed'); });
+    const secondError = mock(() => {});
+    const globalError = mock(() => {});
+    client.subscribe(query, { onError: firstError });
+    client.subscribe(query, { onError: secondError });
+    client.on('onError', globalError);
+    const pending = client.connect();
+    const rejected = pending.then(() => { throw new Error('Expected handshake rejection'); }, error => error);
+    const ws = ControlledWebSocket.instances[0];
+    ws.onerror?.();
+    ws.close();
+    expect(await rejected).toBeInstanceOf(Error);
+    expect(firstError).toHaveBeenCalledTimes(1);
+    expect(secondError).toHaveBeenCalledTimes(1);
+    expect(globalError).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not report an old connection failure to subscriptions created by a state callback', async () => {
+    const client = create({ maxReconnectAttempts: 0 });
+    const newError = mock(() => {});
+    const ws = await connect(client);
+    let replacement: Promise<void> | undefined;
+    client.on('onStateChange', state => {
+      if (state !== 'disconnected' || replacement) return;
+      client.subscribe(query, { onError: newError });
+      replacement = client.connect();
+      void replacement.catch(() => {});
     });
-
-    let disconnectCount = 0;
-    client.on('onDisconnect', () => {
-      disconnectCount++;
-    });
-
-    await client.connect();
-
-    // @ts-ignore - access private ws for testing
-    const ws = client['ws'] as MockWebSocket;
-
-    // Simulate server sending heartbeat messages periodically (like server's 30s interval)
-    const interval = setInterval(() => {
-      if (ws.readyState === MockWebSocket.OPEN) {
-        ws.simulateMessage({ type: 'heartbeat' });
-      }
-    }, 30);
-
-    // Wait longer than timeout
-    await new Promise((resolve) => setTimeout(resolve, 150));
-
-    clearInterval(interval);
-
-    // Should NOT have disconnected because heartbeats kept the connection alive
-    expect(disconnectCount).toBe(0);
-
-    client.disconnect();
+    ws.close();
+    expect(newError).not.toHaveBeenCalled();
+    const next = ControlledWebSocket.instances[1];
+    next.open();
+    await flush();
+    next.authenticate();
+    await replacement;
+    expect(newError).not.toHaveBeenCalled();
   });
 
-  it('should not trigger any callback for heartbeat message', async () => {
-    const tokenProvider = { getToken: async () => 'test-token' };
-    const client = new RealtimeClient('ws://localhost:8080/realtime/ws', tokenProvider as any, 'test-db');
+  it('stops an error broadcast when a callback explicitly disconnects', async () => {
+    const client = create({ maxReconnectAttempts: 0 });
+    const firstError = mock(() => client.disconnect());
+    const secondError = mock(() => {});
+    const globalError = mock(() => {});
+    client.subscribe(query, { onError: firstError });
+    client.subscribe(query, { onError: secondError });
+    client.on('onError', globalError);
+    const ws = await connect(client);
+    ws.close();
+    expect(firstError).toHaveBeenCalledTimes(1);
+    expect(secondError).not.toHaveBeenCalled();
+    expect(globalError).not.toHaveBeenCalled();
+    expect(clock.timers.size).toBe(0);
+  });
 
-    let connectCount = 0;
-    let eventCount = 0;
-    let snapshotCount = 0;
-    let errorCount = 0;
+  it('suppresses remaining error reporting after an error callback disposes and throws', async () => {
+    const client = create({ maxReconnectAttempts: 0 });
+    const globalError = mock(() => {});
+    client.subscribe(query, { onError: () => {
+      client.dispose();
+      throw new Error('callback failed after disposal');
+    } });
+    client.on('onError', globalError);
+    const ws = await connect(client);
+    ws.close();
+    expect(globalError).not.toHaveBeenCalled();
+    expect(logs).not.toHaveBeenCalled();
+    expect(clock.timers.size).toBe(0);
+  });
 
-    client.on('onConnect', () => { connectCount++; });
-    client.on('onEvent', () => { eventCount++; });
-    client.on('onSnapshot', () => { snapshotCount++; });
-    client.on('onError', () => { errorCount++; });
-
-    await client.connect();
-
-    // @ts-ignore - access private ws for testing
-    const ws = client['ws'] as MockWebSocket;
-    
-    // Reset connect count after initial connection
-    connectCount = 0;
-
-    // Simulate multiple heartbeat messages
-    ws.simulateMessage({ type: 'heartbeat' });
-    ws.simulateMessage({ type: 'heartbeat' });
-    ws.simulateMessage({ type: 'heartbeat' });
-
-    // Heartbeat should not trigger any user-facing callbacks
-    expect(connectCount).toBe(0);
-    expect(eventCount).toBe(0);
-    expect(snapshotCount).toBe(0);
-    expect(errorCount).toBe(0);
-
+  it('allows disposal inside callbacks without continuing registration or dispatch', async () => {
+    const client = create();
+    const global = mock(() => {});
+    const id = client.subscribe(query, { onEvent: () => client.dispose() });
+    client.on('onEvent', global);
+    const ws = await connect(client);
+    ws.receive(event(id));
+    expect(global).not.toHaveBeenCalled();
+    expect(ws.readyState).toBe(ControlledWebSocket.CLOSED);
+    expect(() => client.subscribe(query)).toThrow();
+    expect(() => client.on('onEvent', global)).toThrow();
+    await expect(client.connect()).rejects.toBeInstanceOf(Error);
+    client.unsubscribe(id);
     client.disconnect();
+    client.dispose();
+  });
+
+  it('stops connecting when a state callback disposes the client', async () => {
+    const client = create();
+    client.on('onStateChange', state => { if (state === 'connecting') client.dispose(); });
+    await expect(client.connect()).rejects.toBeInstanceOf(Error);
+    expect(ControlledWebSocket.instances.every(ws => ws.readyState === ControlledWebSocket.CLOSED)).toBe(true);
+    expect(clock.timers.size).toBe(0);
+  });
+
+  it('a readiness callback can remove another subscription before its acknowledgment', async () => {
+    const client = create();
+    const secondReady = mock(() => {});
+    let second = '';
+    const first = client.subscribe(query, { onReady: () => client.unsubscribe(second) });
+    second = client.subscribe(query, { onReady: secondReady });
+    const ws = await connect(client);
+    ws.ready(first);
+    ws.ready(second);
+    expect(secondReady).not.toHaveBeenCalled();
+    expect(ws.messages('unsubscribe')).toHaveLength(1);
+    expect(client.getState()).toBe('connected');
+  });
+
+  it('convenience subscriptions each receive one shared connection failure', async () => {
+    const sdk = new SyntrixClient('https://localhost', { database: 'test-db' });
+    const rt = sdk.realtime();
+    clients.push(rt);
+    const firstError = mock(() => {});
+    const secondError = mock(() => {});
+    sdk.subscribe('orders', { onError: firstError });
+    sdk.subscribe('users', { onError: secondError });
+    const ws = ControlledWebSocket.instances[0];
+    ws.open();
+    await flush();
+    expect(firstError).toHaveBeenCalledTimes(1);
+    expect(secondError).toHaveBeenCalledTimes(1);
+    expect(ws.readyState).toBe(ControlledWebSocket.CLOSED);
+    expect(clock.timers.size).toBe(0);
+  });
+
+  it('convenience subscriptions share automatic connection, callbacks and logout cleanup', async () => {
+    const sdk = new SyntrixClient('https://localhost', { database: 'test-db', auth: { token: 'token' } });
+    const rt = sdk.realtime();
+    clients.push(rt);
+    const global = mock(() => {});
+    const a = { onEvent: mock(() => {}), onReady: mock(() => {}) };
+    const b = { onEvent: mock(() => {}), onReady: mock(() => {}) };
+    rt.on('onEvent', global);
+    const first = sdk.subscribe('orders', a);
+    const second = sdk.subscribe('users', b);
+    expect(ControlledWebSocket.instances).toHaveLength(1);
+    const pending = rt.connect();
+    const ws = ControlledWebSocket.instances[0];
+    expect(ws.url).toBe('wss://localhost/realtime/ws');
+    ws.open();
+    await flush();
+    ws.authenticate();
+    await pending;
+    expect(ws.messages('subscribe').map(message => message.payload.query.collection)).toEqual(['orders', 'users']);
+    ws.ready(first.subId);
+    ws.ready(second.subId);
+    expect(a.onReady).toHaveBeenCalledTimes(1);
+    expect(b.onReady).toHaveBeenCalledTimes(1);
+    ws.receive(event(first.subId));
+    expect(a.onEvent).toHaveBeenCalledTimes(1);
+    expect(b.onEvent).not.toHaveBeenCalled();
+    expect(global).toHaveBeenCalledTimes(1);
+    first.unsubscribe();
+    ws.receive(event(second.subId));
+    expect(b.onEvent).toHaveBeenCalledTimes(1);
+    const staleMessage = ws.onmessage!;
+    await sdk.logout();
+    staleMessage({ data: JSON.stringify(event(second.subId)) });
+    expect(b.onEvent).toHaveBeenCalledTimes(1);
+    await expect(rt.connect()).rejects.toBeInstanceOf(Error);
+    expect(clock.timers.size).toBe(0);
+    const replacement = sdk.realtime();
+    clients.push(replacement);
+    expect(replacement).not.toBe(rt);
   });
 });

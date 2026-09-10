@@ -15,8 +15,8 @@ Retire `example/chat-app/`, including its source, assets, package manifests,
 lockfile, and application documentation. Remove active instructions that present
 it as an available example. No replacement application is introduced.
 
-The [SDK realtime subscription lifecycle proposal](../../proposed/bug-fix/2026-09-07-sdk-realtime-subscription-lifecycle.md)
-retains the shared connection, callback, teardown, and reconnect-readiness work.
+The [SDK realtime subscription lifecycle decision](../bug-fix/2026-09-07-sdk-realtime-subscription-lifecycle.md)
+owns the shared connection, callback, teardown, and reconnect-readiness behavior.
 Application-specific RxDB and session cleanup obligations end with removal.
 
 ## Alternatives
@@ -29,7 +29,6 @@ separately tracked.
 ## Consequences
 
 - The repository no longer provides this Chat application or its setup workflow.
-- Shared SDK behavior is unchanged. Removing a consumer does not fix its
-  subscription defects or establish replay guarantees.
-- Completing the SDK lifecycle still requires changes and tests in the SDK;
-  a future application must own its local persistence and session lifecycle.
+- Removing a consumer does not fix shared subscription defects or establish
+  replay guarantees; the SDK lifecycle decision records the separate repair.
+- A future application must own its local persistence and session lifecycle.

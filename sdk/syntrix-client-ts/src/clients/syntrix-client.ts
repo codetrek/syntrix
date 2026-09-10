@@ -6,7 +6,7 @@ import { RestTransport } from '../internal/transport/rest-transport';
 import { StorageClient } from '../internal/storage-client';
 import { CollectionReference, DocumentReference } from '../api/types';
 import { CollectionReferenceImpl, DocumentReferenceImpl } from '../api/reference';
-import { RealtimeClient, RealtimeCallbacks, SubscribeOptions, ConnectionState } from '../replication/realtime';
+import { RealtimeClient, SubscriptionCallbacks, SubscribeOptions } from '../replication/realtime';
 import { RealtimeSSEClient, RealtimeSSEOptions } from '../replication/realtime-sse';
 
 export interface SyntrixClientConfig {
@@ -46,7 +46,7 @@ export class SyntrixClient implements AuthService {
 
   async logout(): Promise<void> {
     if (this.realtimeClient) {
-      this.realtimeClient.disconnect();
+      this.realtimeClient.dispose();
       this.realtimeClient = null;
     }
     return this.tokenProvider.logout();
@@ -86,24 +86,19 @@ export class SyntrixClient implements AuthService {
   // Convenience method for subscribing to a collection
   subscribe(
     collection: string,
-    callbacks: {
-      onEvent?: RealtimeCallbacks['onEvent'];
-      onSnapshot?: RealtimeCallbacks['onSnapshot'];
-      onError?: RealtimeCallbacks['onError'];
-    },
+    callbacks: SubscriptionCallbacks,
     options?: Partial<SubscribeOptions>
   ): { subId: string; unsubscribe: () => void } {
     const rt = this.realtime();
-
-    if (callbacks.onEvent) rt.on('onEvent', callbacks.onEvent);
-    if (callbacks.onSnapshot) rt.on('onSnapshot', callbacks.onSnapshot);
-    if (callbacks.onError) rt.on('onError', callbacks.onError);
 
     const subId = rt.subscribe({
       query: { collection, filters: options?.query?.filters || [] },
       includeData: options?.includeData ?? true,
       sendSnapshot: options?.sendSnapshot ?? false,
-    });
+    }, callbacks);
+
+    // The realtime client reports connection failures to the registered callbacks.
+    void rt.connect().catch(() => {});
 
     return {
       subId,
