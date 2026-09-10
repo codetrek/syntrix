@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,10 +14,13 @@ import (
 	"github.com/syntrixbase/syntrix/internal/indexer/manager"
 	"github.com/syntrixbase/syntrix/internal/indexer/mem_store"
 	"github.com/syntrixbase/syntrix/internal/indexer/store"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // mockLocalService implements LocalService for testing.
 type mockLocalService struct {
+	statsFn  func(context.Context) (manager.Stats, error)
 	searchFn func(ctx context.Context, database string, plan manager.Plan) ([]manager.DocRef, error)
 	healthFn func(ctx context.Context) (manager.Health, error)
 	mgr      *manager.Manager
@@ -33,6 +38,49 @@ func (m *mockLocalService) Health(ctx context.Context) (manager.Health, error) {
 		return m.healthFn(ctx)
 	}
 	return manager.Health{Status: "ok"}, nil
+}
+
+func (m *mockLocalService) Stats(ctx context.Context) (manager.Stats, error) {
+	if m.statsFn != nil {
+		return m.statsFn(ctx)
+	}
+	return manager.Stats{}, nil
+}
+
+func TestServer_Stats(t *testing.T) {
+	t.Run("delegates complete service statistics", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		server := NewServer(&mockLocalService{statsFn: func(got context.Context) (manager.Stats, error) {
+			assert.Equal(t, ctx, got)
+			return manager.Stats{TemplateCount: 3, EventsApplied: 1<<53 + 1, LastEventTime: math.MaxInt64}, nil
+		}})
+		got, err := server.Stats(ctx, &indexerv1.StatsRequest{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(3), got.TemplateCount)
+		assert.Equal(t, int64(1<<53+1), got.EventsApplied)
+		assert.Equal(t, int64(math.MaxInt64), got.LastEventTime)
+	})
+	for _, tc := range []struct {
+		name string
+		err  error
+		code codes.Code
+	}{
+		{"canceled", context.Canceled, codes.Canceled},
+		{"deadline", context.DeadlineExceeded, codes.DeadlineExceeded},
+		{"wrapped cancellation", fmt.Errorf("collector: %w", context.Canceled), codes.Canceled},
+		{"collector failure", assert.AnError, codes.Internal},
+		{"status", status.Error(codes.Unavailable, "collector unavailable"), codes.Unavailable},
+		{"wrapped status", fmt.Errorf("collector: %w", status.Error(codes.ResourceExhausted, "busy")), codes.ResourceExhausted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := NewServer(&mockLocalService{statsFn: func(context.Context) (manager.Stats, error) { return manager.Stats{}, tc.err }})
+			got, err := server.Stats(context.Background(), &indexerv1.StatsRequest{})
+			require.Error(t, err)
+			assert.Nil(t, got)
+			assert.Equal(t, tc.code, status.Code(err))
+		})
+	}
 }
 
 func (m *mockLocalService) Manager() *manager.Manager {

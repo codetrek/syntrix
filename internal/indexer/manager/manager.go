@@ -605,10 +605,14 @@ func (m *Manager) Close() error {
 	return m.store.Close()
 }
 
-// Stats returns manager statistics.
+// Stats contains aggregate readings for an Indexer service instance.
 type Stats struct {
+	// TemplateCount counts loaded templates, not instantiated indexes.
 	TemplateCount int
+	// EventsApplied counts events reaching the end of matching-template processing,
+	// including events with logged template write failures.
 	EventsApplied int64
+	// LastEventTime is local processing time in Unix seconds; zero means unrecorded.
 	LastEventTime int64
 }
 

@@ -35,7 +35,8 @@ type Service interface {
 	// Health returns current health status of the indexer.
 	Health(ctx context.Context) (Health, error)
 
-	// Stats returns index statistics.
+	// Stats returns aggregate readings for this service instance. Fields are sampled
+	// independently; event counters reset when a new instance is created.
 	Stats(ctx context.Context) (Stats, error)
 }
 

@@ -481,6 +481,108 @@ func (x *IndexHealth) GetDocCount() int64 {
 	return 0
 }
 
+type StatsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StatsRequest) Reset() {
+	*x = StatsRequest{}
+	mi := &file_indexer_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StatsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StatsRequest) ProtoMessage() {}
+
+func (x *StatsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_indexer_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StatsRequest.ProtoReflect.Descriptor instead.
+func (*StatsRequest) Descriptor() ([]byte, []int) {
+	return file_indexer_proto_rawDescGZIP(), []int{8}
+}
+
+// Fields are sampled independently; they are not a joint atomic snapshot.
+type StatsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Current loaded template count across all databases, not instantiated indexes.
+	TemplateCount int64 `protobuf:"varint,1,opt,name=template_count,json=templateCount,proto3" json:"template_count,omitempty"`
+	// Events reaching the end of matching-template processing in this service
+	// instance, including events with logged template write failures.
+	EventsApplied int64 `protobuf:"varint,2,opt,name=events_applied,json=eventsApplied,proto3" json:"events_applied,omitempty"`
+	// Local processing time in Unix seconds when the last event was counted.
+	// Zero means no event time has been recorded in this service instance.
+	LastEventTime int64 `protobuf:"varint,3,opt,name=last_event_time,json=lastEventTime,proto3" json:"last_event_time,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StatsResponse) Reset() {
+	*x = StatsResponse{}
+	mi := &file_indexer_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StatsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StatsResponse) ProtoMessage() {}
+
+func (x *StatsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_indexer_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StatsResponse.ProtoReflect.Descriptor instead.
+func (*StatsResponse) Descriptor() ([]byte, []int) {
+	return file_indexer_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *StatsResponse) GetTemplateCount() int64 {
+	if x != nil {
+		return x.TemplateCount
+	}
+	return 0
+}
+
+func (x *StatsResponse) GetEventsApplied() int64 {
+	if x != nil {
+		return x.EventsApplied
+	}
+	return 0
+}
+
+func (x *StatsResponse) GetLastEventTime() int64 {
+	if x != nil {
+		return x.LastEventTime
+	}
+	return 0
+}
+
 // GetStateRequest optionally filters the state query.
 type GetStateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -494,7 +596,7 @@ type GetStateRequest struct {
 
 func (x *GetStateRequest) Reset() {
 	*x = GetStateRequest{}
-	mi := &file_indexer_proto_msgTypes[8]
+	mi := &file_indexer_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -506,7 +608,7 @@ func (x *GetStateRequest) String() string {
 func (*GetStateRequest) ProtoMessage() {}
 
 func (x *GetStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_indexer_proto_msgTypes[8]
+	mi := &file_indexer_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -519,7 +621,7 @@ func (x *GetStateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetStateRequest.ProtoReflect.Descriptor instead.
 func (*GetStateRequest) Descriptor() ([]byte, []int) {
-	return file_indexer_proto_rawDescGZIP(), []int{8}
+	return file_indexer_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *GetStateRequest) GetDatabase() string {
@@ -551,7 +653,7 @@ type IndexerState struct {
 
 func (x *IndexerState) Reset() {
 	*x = IndexerState{}
-	mi := &file_indexer_proto_msgTypes[9]
+	mi := &file_indexer_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -563,7 +665,7 @@ func (x *IndexerState) String() string {
 func (*IndexerState) ProtoMessage() {}
 
 func (x *IndexerState) ProtoReflect() protoreflect.Message {
-	mi := &file_indexer_proto_msgTypes[9]
+	mi := &file_indexer_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -576,7 +678,7 @@ func (x *IndexerState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndexerState.ProtoReflect.Descriptor instead.
 func (*IndexerState) Descriptor() ([]byte, []int) {
-	return file_indexer_proto_rawDescGZIP(), []int{9}
+	return file_indexer_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *IndexerState) GetDesired() []*IndexSpec {
@@ -615,7 +717,7 @@ type IndexSpec struct {
 
 func (x *IndexSpec) Reset() {
 	*x = IndexSpec{}
-	mi := &file_indexer_proto_msgTypes[10]
+	mi := &file_indexer_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -627,7 +729,7 @@ func (x *IndexSpec) String() string {
 func (*IndexSpec) ProtoMessage() {}
 
 func (x *IndexSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_indexer_proto_msgTypes[10]
+	mi := &file_indexer_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -640,7 +742,7 @@ func (x *IndexSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndexSpec.ProtoReflect.Descriptor instead.
 func (*IndexSpec) Descriptor() ([]byte, []int) {
-	return file_indexer_proto_rawDescGZIP(), []int{10}
+	return file_indexer_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *IndexSpec) GetPattern() string {
@@ -677,7 +779,7 @@ type IndexField struct {
 
 func (x *IndexField) Reset() {
 	*x = IndexField{}
-	mi := &file_indexer_proto_msgTypes[11]
+	mi := &file_indexer_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -689,7 +791,7 @@ func (x *IndexField) String() string {
 func (*IndexField) ProtoMessage() {}
 
 func (x *IndexField) ProtoReflect() protoreflect.Message {
-	mi := &file_indexer_proto_msgTypes[11]
+	mi := &file_indexer_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -702,7 +804,7 @@ func (x *IndexField) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndexField.ProtoReflect.Descriptor instead.
 func (*IndexField) Descriptor() ([]byte, []int) {
-	return file_indexer_proto_rawDescGZIP(), []int{11}
+	return file_indexer_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *IndexField) GetField() string {
@@ -738,7 +840,7 @@ type IndexInfo struct {
 
 func (x *IndexInfo) Reset() {
 	*x = IndexInfo{}
-	mi := &file_indexer_proto_msgTypes[12]
+	mi := &file_indexer_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -750,7 +852,7 @@ func (x *IndexInfo) String() string {
 func (*IndexInfo) ProtoMessage() {}
 
 func (x *IndexInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_indexer_proto_msgTypes[12]
+	mi := &file_indexer_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -763,7 +865,7 @@ func (x *IndexInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndexInfo.ProtoReflect.Descriptor instead.
 func (*IndexInfo) Descriptor() ([]byte, []int) {
-	return file_indexer_proto_rawDescGZIP(), []int{12}
+	return file_indexer_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *IndexInfo) GetDatabase() string {
@@ -826,7 +928,7 @@ type PendingOperation struct {
 
 func (x *PendingOperation) Reset() {
 	*x = PendingOperation{}
-	mi := &file_indexer_proto_msgTypes[13]
+	mi := &file_indexer_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -838,7 +940,7 @@ func (x *PendingOperation) String() string {
 func (*PendingOperation) ProtoMessage() {}
 
 func (x *PendingOperation) ProtoReflect() protoreflect.Message {
-	mi := &file_indexer_proto_msgTypes[13]
+	mi := &file_indexer_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -851,7 +953,7 @@ func (x *PendingOperation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PendingOperation.ProtoReflect.Descriptor instead.
 func (*PendingOperation) Descriptor() ([]byte, []int) {
-	return file_indexer_proto_rawDescGZIP(), []int{13}
+	return file_indexer_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *PendingOperation) GetOpType() string {
@@ -919,7 +1021,7 @@ type ReloadRequest struct {
 
 func (x *ReloadRequest) Reset() {
 	*x = ReloadRequest{}
-	mi := &file_indexer_proto_msgTypes[14]
+	mi := &file_indexer_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -931,7 +1033,7 @@ func (x *ReloadRequest) String() string {
 func (*ReloadRequest) ProtoMessage() {}
 
 func (x *ReloadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_indexer_proto_msgTypes[14]
+	mi := &file_indexer_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -944,7 +1046,7 @@ func (x *ReloadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadRequest.ProtoReflect.Descriptor instead.
 func (*ReloadRequest) Descriptor() ([]byte, []int) {
-	return file_indexer_proto_rawDescGZIP(), []int{14}
+	return file_indexer_proto_rawDescGZIP(), []int{16}
 }
 
 // ReloadResponse contains the result of the reload.
@@ -960,7 +1062,7 @@ type ReloadResponse struct {
 
 func (x *ReloadResponse) Reset() {
 	*x = ReloadResponse{}
-	mi := &file_indexer_proto_msgTypes[15]
+	mi := &file_indexer_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -972,7 +1074,7 @@ func (x *ReloadResponse) String() string {
 func (*ReloadResponse) ProtoMessage() {}
 
 func (x *ReloadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_indexer_proto_msgTypes[15]
+	mi := &file_indexer_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -985,7 +1087,7 @@ func (x *ReloadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadResponse.ProtoReflect.Descriptor instead.
 func (*ReloadResponse) Descriptor() ([]byte, []int) {
-	return file_indexer_proto_rawDescGZIP(), []int{15}
+	return file_indexer_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ReloadResponse) GetTemplatesLoaded() int32 {
@@ -1018,7 +1120,7 @@ type InvalidateIndexRequest struct {
 
 func (x *InvalidateIndexRequest) Reset() {
 	*x = InvalidateIndexRequest{}
-	mi := &file_indexer_proto_msgTypes[16]
+	mi := &file_indexer_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1030,7 +1132,7 @@ func (x *InvalidateIndexRequest) String() string {
 func (*InvalidateIndexRequest) ProtoMessage() {}
 
 func (x *InvalidateIndexRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_indexer_proto_msgTypes[16]
+	mi := &file_indexer_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1043,7 +1145,7 @@ func (x *InvalidateIndexRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvalidateIndexRequest.ProtoReflect.Descriptor instead.
 func (*InvalidateIndexRequest) Descriptor() ([]byte, []int) {
-	return file_indexer_proto_rawDescGZIP(), []int{16}
+	return file_indexer_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *InvalidateIndexRequest) GetDatabase() string {
@@ -1078,7 +1180,7 @@ type InvalidateIndexResponse struct {
 
 func (x *InvalidateIndexResponse) Reset() {
 	*x = InvalidateIndexResponse{}
-	mi := &file_indexer_proto_msgTypes[17]
+	mi := &file_indexer_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1090,7 +1192,7 @@ func (x *InvalidateIndexResponse) String() string {
 func (*InvalidateIndexResponse) ProtoMessage() {}
 
 func (x *InvalidateIndexResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_indexer_proto_msgTypes[17]
+	mi := &file_indexer_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1103,7 +1205,7 @@ func (x *InvalidateIndexResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvalidateIndexResponse.ProtoReflect.Descriptor instead.
 func (*InvalidateIndexResponse) Descriptor() ([]byte, []int) {
-	return file_indexer_proto_rawDescGZIP(), []int{17}
+	return file_indexer_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *InvalidateIndexResponse) GetIndexesInvalidated() int32 {
@@ -1149,7 +1251,12 @@ const file_indexer_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\v2\x1f.syntrix.indexer.v1.IndexHealthR\x05value:\x028\x01\"@\n" +
 	"\vIndexHealth\x12\x14\n" +
 	"\x05state\x18\x01 \x01(\tR\x05state\x12\x1b\n" +
-	"\tdoc_count\x18\x02 \x01(\x03R\bdocCount\"G\n" +
+	"\tdoc_count\x18\x02 \x01(\x03R\bdocCount\"\x0e\n" +
+	"\fStatsRequest\"\x85\x01\n" +
+	"\rStatsResponse\x12%\n" +
+	"\x0etemplate_count\x18\x01 \x01(\x03R\rtemplateCount\x12%\n" +
+	"\x0eevents_applied\x18\x02 \x01(\x03R\reventsApplied\x12&\n" +
+	"\x0flast_event_time\x18\x03 \x01(\x03R\rlastEventTime\"G\n" +
 	"\x0fGetStateRequest\x12\x1a\n" +
 	"\bdatabase\x18\x01 \x01(\tR\bdatabase\x12\x18\n" +
 	"\apattern\x18\x02 \x01(\tR\apattern\"\xc5\x01\n" +
@@ -1195,10 +1302,11 @@ const file_indexer_proto_rawDesc = "" +
 	"\vtemplate_id\x18\x03 \x01(\tR\n" +
 	"templateId\"J\n" +
 	"\x17InvalidateIndexResponse\x12/\n" +
-	"\x13indexes_invalidated\x18\x01 \x01(\x05R\x12indexesInvalidated2\xc2\x03\n" +
+	"\x13indexes_invalidated\x18\x01 \x01(\x05R\x12indexesInvalidated2\x90\x04\n" +
 	"\x0eIndexerService\x12O\n" +
 	"\x06Search\x12!.syntrix.indexer.v1.SearchRequest\x1a\".syntrix.indexer.v1.SearchResponse\x12O\n" +
-	"\x06Health\x12!.syntrix.indexer.v1.HealthRequest\x1a\".syntrix.indexer.v1.HealthResponse\x12Q\n" +
+	"\x06Health\x12!.syntrix.indexer.v1.HealthRequest\x1a\".syntrix.indexer.v1.HealthResponse\x12L\n" +
+	"\x05Stats\x12 .syntrix.indexer.v1.StatsRequest\x1a!.syntrix.indexer.v1.StatsResponse\x12Q\n" +
 	"\bGetState\x12#.syntrix.indexer.v1.GetStateRequest\x1a .syntrix.indexer.v1.IndexerState\x12O\n" +
 	"\x06Reload\x12!.syntrix.indexer.v1.ReloadRequest\x1a\".syntrix.indexer.v1.ReloadResponse\x12j\n" +
 	"\x0fInvalidateIndex\x12*.syntrix.indexer.v1.InvalidateIndexRequest\x1a+.syntrix.indexer.v1.InvalidateIndexResponseB=Z;github.com/syntrixbase/syntrix/api/gen/indexer/v1;indexerv1b\x06proto3"
@@ -1215,7 +1323,7 @@ func file_indexer_proto_rawDescGZIP() []byte {
 	return file_indexer_proto_rawDescData
 }
 
-var file_indexer_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_indexer_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_indexer_proto_goTypes = []any{
 	(*SearchRequest)(nil),           // 0: syntrix.indexer.v1.SearchRequest
 	(*Filter)(nil),                  // 1: syntrix.indexer.v1.Filter
@@ -1225,40 +1333,44 @@ var file_indexer_proto_goTypes = []any{
 	(*HealthRequest)(nil),           // 5: syntrix.indexer.v1.HealthRequest
 	(*HealthResponse)(nil),          // 6: syntrix.indexer.v1.HealthResponse
 	(*IndexHealth)(nil),             // 7: syntrix.indexer.v1.IndexHealth
-	(*GetStateRequest)(nil),         // 8: syntrix.indexer.v1.GetStateRequest
-	(*IndexerState)(nil),            // 9: syntrix.indexer.v1.IndexerState
-	(*IndexSpec)(nil),               // 10: syntrix.indexer.v1.IndexSpec
-	(*IndexField)(nil),              // 11: syntrix.indexer.v1.IndexField
-	(*IndexInfo)(nil),               // 12: syntrix.indexer.v1.IndexInfo
-	(*PendingOperation)(nil),        // 13: syntrix.indexer.v1.PendingOperation
-	(*ReloadRequest)(nil),           // 14: syntrix.indexer.v1.ReloadRequest
-	(*ReloadResponse)(nil),          // 15: syntrix.indexer.v1.ReloadResponse
-	(*InvalidateIndexRequest)(nil),  // 16: syntrix.indexer.v1.InvalidateIndexRequest
-	(*InvalidateIndexResponse)(nil), // 17: syntrix.indexer.v1.InvalidateIndexResponse
-	nil,                             // 18: syntrix.indexer.v1.HealthResponse.IndexesEntry
+	(*StatsRequest)(nil),            // 8: syntrix.indexer.v1.StatsRequest
+	(*StatsResponse)(nil),           // 9: syntrix.indexer.v1.StatsResponse
+	(*GetStateRequest)(nil),         // 10: syntrix.indexer.v1.GetStateRequest
+	(*IndexerState)(nil),            // 11: syntrix.indexer.v1.IndexerState
+	(*IndexSpec)(nil),               // 12: syntrix.indexer.v1.IndexSpec
+	(*IndexField)(nil),              // 13: syntrix.indexer.v1.IndexField
+	(*IndexInfo)(nil),               // 14: syntrix.indexer.v1.IndexInfo
+	(*PendingOperation)(nil),        // 15: syntrix.indexer.v1.PendingOperation
+	(*ReloadRequest)(nil),           // 16: syntrix.indexer.v1.ReloadRequest
+	(*ReloadResponse)(nil),          // 17: syntrix.indexer.v1.ReloadResponse
+	(*InvalidateIndexRequest)(nil),  // 18: syntrix.indexer.v1.InvalidateIndexRequest
+	(*InvalidateIndexResponse)(nil), // 19: syntrix.indexer.v1.InvalidateIndexResponse
+	nil,                             // 20: syntrix.indexer.v1.HealthResponse.IndexesEntry
 }
 var file_indexer_proto_depIdxs = []int32{
 	1,  // 0: syntrix.indexer.v1.SearchRequest.filters:type_name -> syntrix.indexer.v1.Filter
 	2,  // 1: syntrix.indexer.v1.SearchRequest.order_by:type_name -> syntrix.indexer.v1.OrderByField
 	4,  // 2: syntrix.indexer.v1.SearchResponse.docs:type_name -> syntrix.indexer.v1.DocRef
-	18, // 3: syntrix.indexer.v1.HealthResponse.indexes:type_name -> syntrix.indexer.v1.HealthResponse.IndexesEntry
-	10, // 4: syntrix.indexer.v1.IndexerState.desired:type_name -> syntrix.indexer.v1.IndexSpec
-	12, // 5: syntrix.indexer.v1.IndexerState.actual:type_name -> syntrix.indexer.v1.IndexInfo
-	13, // 6: syntrix.indexer.v1.IndexerState.pending_ops:type_name -> syntrix.indexer.v1.PendingOperation
-	11, // 7: syntrix.indexer.v1.IndexSpec.fields:type_name -> syntrix.indexer.v1.IndexField
+	20, // 3: syntrix.indexer.v1.HealthResponse.indexes:type_name -> syntrix.indexer.v1.HealthResponse.IndexesEntry
+	12, // 4: syntrix.indexer.v1.IndexerState.desired:type_name -> syntrix.indexer.v1.IndexSpec
+	14, // 5: syntrix.indexer.v1.IndexerState.actual:type_name -> syntrix.indexer.v1.IndexInfo
+	15, // 6: syntrix.indexer.v1.IndexerState.pending_ops:type_name -> syntrix.indexer.v1.PendingOperation
+	13, // 7: syntrix.indexer.v1.IndexSpec.fields:type_name -> syntrix.indexer.v1.IndexField
 	7,  // 8: syntrix.indexer.v1.HealthResponse.IndexesEntry.value:type_name -> syntrix.indexer.v1.IndexHealth
 	0,  // 9: syntrix.indexer.v1.IndexerService.Search:input_type -> syntrix.indexer.v1.SearchRequest
 	5,  // 10: syntrix.indexer.v1.IndexerService.Health:input_type -> syntrix.indexer.v1.HealthRequest
-	8,  // 11: syntrix.indexer.v1.IndexerService.GetState:input_type -> syntrix.indexer.v1.GetStateRequest
-	14, // 12: syntrix.indexer.v1.IndexerService.Reload:input_type -> syntrix.indexer.v1.ReloadRequest
-	16, // 13: syntrix.indexer.v1.IndexerService.InvalidateIndex:input_type -> syntrix.indexer.v1.InvalidateIndexRequest
-	3,  // 14: syntrix.indexer.v1.IndexerService.Search:output_type -> syntrix.indexer.v1.SearchResponse
-	6,  // 15: syntrix.indexer.v1.IndexerService.Health:output_type -> syntrix.indexer.v1.HealthResponse
-	9,  // 16: syntrix.indexer.v1.IndexerService.GetState:output_type -> syntrix.indexer.v1.IndexerState
-	15, // 17: syntrix.indexer.v1.IndexerService.Reload:output_type -> syntrix.indexer.v1.ReloadResponse
-	17, // 18: syntrix.indexer.v1.IndexerService.InvalidateIndex:output_type -> syntrix.indexer.v1.InvalidateIndexResponse
-	14, // [14:19] is the sub-list for method output_type
-	9,  // [9:14] is the sub-list for method input_type
+	8,  // 11: syntrix.indexer.v1.IndexerService.Stats:input_type -> syntrix.indexer.v1.StatsRequest
+	10, // 12: syntrix.indexer.v1.IndexerService.GetState:input_type -> syntrix.indexer.v1.GetStateRequest
+	16, // 13: syntrix.indexer.v1.IndexerService.Reload:input_type -> syntrix.indexer.v1.ReloadRequest
+	18, // 14: syntrix.indexer.v1.IndexerService.InvalidateIndex:input_type -> syntrix.indexer.v1.InvalidateIndexRequest
+	3,  // 15: syntrix.indexer.v1.IndexerService.Search:output_type -> syntrix.indexer.v1.SearchResponse
+	6,  // 16: syntrix.indexer.v1.IndexerService.Health:output_type -> syntrix.indexer.v1.HealthResponse
+	9,  // 17: syntrix.indexer.v1.IndexerService.Stats:output_type -> syntrix.indexer.v1.StatsResponse
+	11, // 18: syntrix.indexer.v1.IndexerService.GetState:output_type -> syntrix.indexer.v1.IndexerState
+	17, // 19: syntrix.indexer.v1.IndexerService.Reload:output_type -> syntrix.indexer.v1.ReloadResponse
+	19, // 20: syntrix.indexer.v1.IndexerService.InvalidateIndex:output_type -> syntrix.indexer.v1.InvalidateIndexResponse
+	15, // [15:21] is the sub-list for method output_type
+	9,  // [9:15] is the sub-list for method input_type
 	9,  // [9:9] is the sub-list for extension type_name
 	9,  // [9:9] is the sub-list for extension extendee
 	0,  // [0:9] is the sub-list for field type_name
@@ -1275,7 +1387,7 @@ func file_indexer_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_indexer_proto_rawDesc), len(file_indexer_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

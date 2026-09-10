@@ -127,10 +127,22 @@ func (c *Client) Health(ctx context.Context) (manager.Health, error) {
 	}, nil
 }
 
-// Stats returns index statistics.
+// Stats returns aggregate statistics for the remote service instance.
 func (c *Client) Stats(ctx context.Context) (manager.Stats, error) {
-	// Not implemented in gRPC yet, returning empty stats
-	return manager.Stats{}, nil
+	resp, err := c.client.Stats(ctx, &indexerv1.StatsRequest{})
+	if err != nil {
+		return manager.Stats{}, fmt.Errorf("indexer stats at %q: %w", c.conn.Target(), err)
+	}
+
+	templateCount := int(resp.TemplateCount)
+	if resp.TemplateCount < 0 || int64(templateCount) != resp.TemplateCount {
+		return manager.Stats{}, fmt.Errorf("indexer stats at %q: invalid template count %d", c.conn.Target(), resp.TemplateCount)
+	}
+	return manager.Stats{
+		TemplateCount: templateCount,
+		EventsApplied: resp.EventsApplied,
+		LastEventTime: resp.LastEventTime,
+	}, nil
 }
 
 // IndexerState contains the complete indexer state.

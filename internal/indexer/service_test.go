@@ -1348,3 +1348,45 @@ func TestService_InvalidateDatabase_StoreError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to delete database indexes")
 	assert.Contains(t, err.Error(), "mock delete database error")
 }
+
+func TestService_Stats_Context(t *testing.T) {
+	svc := newTestService(config.Config{}, nil, testLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := svc.Stats(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	expired, stop := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer stop()
+	_, err = svc.Stats(expired)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestService_Stats_DoesNotReadStore(t *testing.T) {
+	svc := &service{manager: manager.New(nil)}
+	got, err := svc.Stats(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, Stats{}, got)
+}
+
+func TestService_Stats_EventCounting(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(config.Config{}, nil, testLogger())
+	require.NoError(t, svc.Manager().LoadTemplatesFromBytes([]byte(statsTemplates)))
+	unmatched := statsEvent("alpha", 0)
+	unmatched.FullDocument.Collection = "unmatched"
+	for _, event := range []*ChangeEvent{nil, {}, unmatched} {
+		require.NoError(t, svc.ApplyEvent(ctx, event, ""))
+	}
+	skipped, err := svc.Stats(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, skipped.EventsApplied)
+	assert.Zero(t, skipped.LastEventTime)
+	invalid := statsEvent("alpha", 1)
+	invalid.FullDocument.Data["timestamp"] = make(chan int)
+	invalid.FullDocument.Data["priority"] = make(chan int)
+	require.NoError(t, svc.ApplyEvent(ctx, invalid, ""))
+	counted, err := svc.Stats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), counted.EventsApplied)
+	assert.Positive(t, counted.LastEventTime)
+}
