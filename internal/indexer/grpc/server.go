@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 
 	indexerv1 "github.com/syntrixbase/syntrix/api/gen/indexer/v1"
 	"github.com/syntrixbase/syntrix/internal/indexer/encoding"
@@ -19,6 +20,7 @@ import (
 type LocalService interface {
 	Search(ctx context.Context, database string, plan manager.Plan) ([]manager.DocRef, error)
 	Health(ctx context.Context) (manager.Health, error)
+	Stats(ctx context.Context) (manager.Stats, error)
 	Manager() *manager.Manager
 }
 
@@ -79,6 +81,26 @@ func (s *Server) Health(ctx context.Context, req *indexerv1.HealthRequest) (*ind
 	return &indexerv1.HealthResponse{
 		Status:  string(health.Status),
 		Indexes: indexes,
+	}, nil
+}
+
+// Stats returns the service's aggregate statistics without scanning index data.
+func (s *Server) Stats(ctx context.Context, req *indexerv1.StatsRequest) (*indexerv1.StatsResponse, error) {
+	stats, err := s.svc.Stats(ctx)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, status.FromContextError(err).Err()
+		}
+		if st, ok := status.FromError(err); ok {
+			return nil, st.Err()
+		}
+		return nil, status.Errorf(codes.Internal, "stats collection failed: %v", err)
+	}
+
+	return &indexerv1.StatsResponse{
+		TemplateCount: int64(stats.TemplateCount),
+		EventsApplied: stats.EventsApplied,
+		LastEventTime: stats.LastEventTime,
 	}, nil
 }
 

@@ -378,12 +378,18 @@ func (s *service) Health(ctx context.Context) (Health, error) {
 
 // Stats returns index statistics.
 func (s *service) Stats(ctx context.Context) (Stats, error) {
+	if err := ctx.Err(); err != nil {
+		return Stats{}, err
+	}
 	mgrStats := s.manager.Stats()
 
 	// Augment with service-level stats
 	mgrStats.EventsApplied = s.eventsApplied.Load()
 	mgrStats.LastEventTime = s.lastEventTime.Load()
 
+	if err := ctx.Err(); err != nil {
+		return Stats{}, err
+	}
 	return mgrStats, nil
 }
 

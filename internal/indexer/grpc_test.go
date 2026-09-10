@@ -2,13 +2,20 @@ package indexer
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	indexerv1 "github.com/syntrixbase/syntrix/api/gen/indexer/v1"
+	"github.com/syntrixbase/syntrix/internal/core/storage"
+	"github.com/syntrixbase/syntrix/internal/indexer/config"
 	"github.com/syntrixbase/syntrix/internal/indexer/manager"
 	"github.com/syntrixbase/syntrix/internal/indexer/mem_store"
+	"google.golang.org/grpc"
 )
 
 // mockLocalService implements LocalService for testing.
@@ -152,4 +159,129 @@ func TestNewClient(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, client)
 	client.Close()
+}
+
+func statsRemoteClient(t *testing.T, svc LocalService) *Client {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := grpc.NewServer()
+	indexerv1.RegisterIndexerServiceServer(server, NewGRPCServer(svc))
+	stopped := make(chan struct{})
+	go func() { defer close(stopped); _ = server.Serve(listener) }()
+	client, err := NewClient(listener.Addr().String(), testLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, client.Close())
+		server.Stop()
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+			t.Error("gRPC server did not stop")
+		}
+	})
+	return client
+}
+
+const statsTemplates = `
+templates:
+  - name: messages_by_timestamp
+    collectionPattern: messages
+    fields:
+      - { field: timestamp, order: desc }
+  - name: messages_by_priority
+    collectionPattern: messages
+    fields:
+      - { field: priority, order: desc }
+`
+
+func statsEvent(database string, id int) *ChangeEvent {
+	docID := fmt.Sprintf("doc-%d", id)
+	return &ChangeEvent{Database: database, FullDocument: &storage.StoredDoc{
+		Id: docID, Database: database, Collection: "messages", Fullpath: "messages/" + docID,
+		Data: map[string]any{"id": docID, "timestamp": id, "priority": id},
+	}}
+}
+
+func TestRemoteStats_ServiceLifecycle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	svc := newTestService(config.Config{}, nil, testLogger())
+	remote := statsRemoteClient(t, svc)
+	empty, err := remote.Stats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, Stats{}, empty)
+	require.NoError(t, svc.Manager().LoadTemplatesFromBytes([]byte(statsTemplates)))
+	loaded, err := remote.Stats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, Stats{TemplateCount: 2}, loaded)
+	before := time.Now().Unix()
+	for i, db := range []string{"alpha", "beta"} {
+		require.NoError(t, svc.ApplyEvent(ctx, statsEvent(db, i), ""))
+	}
+	local, err := svc.Stats(ctx)
+	require.NoError(t, err)
+	got, err := remote.Stats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, local, got)
+	assert.Equal(t, int64(2), got.EventsApplied)
+	assert.GreaterOrEqual(t, got.LastEventTime, before)
+	assert.LessOrEqual(t, got.LastEventTime, time.Now().Unix())
+	require.NoError(t, svc.Manager().LoadTemplatesFromBytes([]byte(`templates:
+  - name: messages_by_timestamp
+    collectionPattern: messages
+    fields:
+      - { field: timestamp, order: desc }
+`)))
+	reloaded, err := remote.Stats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, reloaded.TemplateCount)
+	assert.Equal(t, got.EventsApplied, reloaded.EventsApplied)
+	assert.Equal(t, got.LastEventTime, reloaded.LastEventTime)
+	replacement := newTestService(config.Config{}, nil, testLogger())
+	require.NoError(t, replacement.Manager().LoadTemplatesFromBytes([]byte(statsTemplates)))
+	restarted, err := statsRemoteClient(t, replacement).Stats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, Stats{TemplateCount: 2}, restarted)
+}
+
+func TestRemoteStats_ConcurrentApplyEvent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	svc := newTestService(config.Config{}, nil, testLogger())
+	require.NoError(t, svc.Manager().LoadTemplatesFromBytes([]byte(statsTemplates)))
+	remote := statsRemoteClient(t, svc)
+	const count = 200
+	start := make(chan struct{})
+	finished := make(chan error, 1)
+	go func() {
+		<-start
+		for i := range count {
+			if err := svc.ApplyEvent(ctx, statsEvent("alpha", i), ""); err != nil {
+				finished <- err
+				return
+			}
+		}
+		finished <- nil
+	}()
+	close(start)
+	for range 20 {
+		sampled, err := remote.Stats(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 2, sampled.TemplateCount)
+		assert.GreaterOrEqual(t, sampled.EventsApplied, int64(0))
+		assert.LessOrEqual(t, sampled.EventsApplied, int64(count))
+	}
+	select {
+	case err := <-finished:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("event application did not finish")
+	}
+	local, err := svc.Stats(ctx)
+	require.NoError(t, err)
+	final, err := remote.Stats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(count), final.EventsApplied)
+	assert.Equal(t, local, final)
 }

@@ -5,8 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
+	"math"
 	"net"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,11 +25,19 @@ import (
 // mockServer implements IndexerServiceServer for testing.
 type mockServer struct {
 	indexerv1.UnimplementedIndexerServiceServer
+	statsFn           func(context.Context, *indexerv1.StatsRequest) (*indexerv1.StatsResponse, error)
 	searchFn          func(ctx context.Context, req *indexerv1.SearchRequest) (*indexerv1.SearchResponse, error)
 	healthFn          func(ctx context.Context, req *indexerv1.HealthRequest) (*indexerv1.HealthResponse, error)
 	getStateFn        func(ctx context.Context, req *indexerv1.GetStateRequest) (*indexerv1.IndexerState, error)
 	reloadFn          func(ctx context.Context, req *indexerv1.ReloadRequest) (*indexerv1.ReloadResponse, error)
 	invalidateIndexFn func(ctx context.Context, req *indexerv1.InvalidateIndexRequest) (*indexerv1.InvalidateIndexResponse, error)
+}
+
+func (m *mockServer) Stats(ctx context.Context, req *indexerv1.StatsRequest) (*indexerv1.StatsResponse, error) {
+	if m.statsFn != nil {
+		return m.statsFn(ctx, req)
+	}
+	return m.UnimplementedIndexerServiceServer.Stats(ctx, req)
 }
 
 func (m *mockServer) Search(ctx context.Context, req *indexerv1.SearchRequest) (*indexerv1.SearchResponse, error) {
@@ -534,11 +545,113 @@ func TestClient_TranslateError(t *testing.T) {
 }
 
 func TestClient_Stats(t *testing.T) {
-	client := &Client{}
-
-	t.Run("returns empty stats", func(t *testing.T) {
-		stats, err := client.Stats(context.Background())
-		require.NoError(t, err)
-		assert.Equal(t, 0, stats.TemplateCount)
+	for _, tc := range []struct {
+		name     string
+		response *indexerv1.StatsResponse
+	}{
+		{"empty", &indexerv1.StatsResponse{}},
+		{"exact int64 values", &indexerv1.StatsResponse{TemplateCount: int64(^uint(0) >> 1), EventsApplied: 1<<53 + 1, LastEventTime: math.MaxInt64}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := make(chan struct{}, 1)
+			client, cleanup := setupTestServer(t, &mockServer{statsFn: func(context.Context, *indexerv1.StatsRequest) (*indexerv1.StatsResponse, error) {
+				called <- struct{}{}
+				return tc.response, nil
+			}})
+			defer cleanup()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			got, err := client.Stats(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, manager.Stats{TemplateCount: int(tc.response.TemplateCount), EventsApplied: tc.response.EventsApplied, LastEventTime: tc.response.LastEventTime}, got)
+			select {
+			case <-called:
+			default:
+				t.Fatal("Stats did not reach the server")
+			}
+		})
+	}
+	t.Run("rejects invalid template count", func(t *testing.T) {
+		counts := []int64{-1}
+		if strconv.IntSize == 32 {
+			counts = append(counts, int64(math.MaxInt32)+1)
+		}
+		for _, count := range counts {
+			client, cleanup := setupTestServer(t, &mockServer{statsFn: func(context.Context, *indexerv1.StatsRequest) (*indexerv1.StatsResponse, error) {
+				return &indexerv1.StatsResponse{TemplateCount: count}, nil
+			}})
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_, err := client.Stats(ctx)
+			require.Error(t, err)
+			cancel()
+			cleanup()
+		}
+	})
+	for _, code := range []codes.Code{codes.Unavailable, codes.Internal, codes.ResourceExhausted} {
+		t.Run(code.String(), func(t *testing.T) {
+			client, cleanup := setupTestServer(t, &mockServer{statsFn: func(context.Context, *indexerv1.StatsRequest) (*indexerv1.StatsResponse, error) {
+				return nil, status.Error(code, "statistics failed")
+			}})
+			defer cleanup()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := client.Stats(ctx)
+			require.Error(t, err)
+			assert.Equal(t, code, status.Code(err))
+			assert.Contains(t, err.Error(), client.conn.Target())
+		})
+	}
+	t.Run("old server", func(t *testing.T) {
+		client, cleanup := setupTestServer(t, &mockServer{})
+		defer cleanup()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := client.Stats(ctx)
+		assert.Equal(t, codes.Unimplemented, status.Code(err))
+	})
+	t.Run("canceled in flight", func(t *testing.T) {
+		entered := make(chan struct{})
+		client, cleanup := setupTestServer(t, &mockServer{statsFn: func(ctx context.Context, _ *indexerv1.StatsRequest) (*indexerv1.StatsResponse, error) {
+			close(entered)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}})
+		defer cleanup()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		result := make(chan error, 1)
+		go func() { _, err := client.Stats(ctx); result <- err }()
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("request never reached server")
+		}
+		cancel()
+		select {
+		case err := <-result:
+			assert.Equal(t, codes.Canceled, status.Code(err))
+		case <-time.After(5 * time.Second):
+			t.Fatal("canceled request did not return")
+		}
+	})
+	t.Run("deadline", func(t *testing.T) {
+		client, cleanup := setupTestServer(t, &mockServer{statsFn: func(ctx context.Context, _ *indexerv1.StatsRequest) (*indexerv1.StatsResponse, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}})
+		defer cleanup()
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		_, err := client.Stats(ctx)
+		assert.Equal(t, codes.DeadlineExceeded, status.Code(err))
+	})
+	t.Run("connection closed", func(t *testing.T) {
+		client, cleanup := setupTestServer(t, &mockServer{})
+		defer cleanup()
+		require.NoError(t, client.Close())
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := client.Stats(ctx)
+		assert.Equal(t, codes.Canceled, status.Code(err))
 	})
 }

@@ -23,6 +23,9 @@ service IndexerService {
   // Health returns the current health status of the indexer.
   rpc Health(HealthRequest) returns (HealthResponse);
 
+  // Stats returns current aggregate statistics for this Indexer service instance.
+  rpc Stats(StatsRequest) returns (StatsResponse);
+
   // --- Declarative Index Management ---
 
   // GetState returns the complete index state including desired, actual, and pending operations.
@@ -120,6 +123,24 @@ message IndexHealth {
 
   // Number of documents in the index.
   int64 doc_count = 2;
+}
+
+// --- Statistics Messages ---
+
+message StatsRequest {}
+
+// Fields are sampled independently; they are not a joint atomic snapshot.
+message StatsResponse {
+  // Current loaded template count across all databases, not instantiated indexes.
+  int64 template_count = 1;
+
+  // Events reaching the end of matching-template processing in this service
+  // instance, including events with logged template write failures.
+  int64 events_applied = 2;
+
+  // Local processing time in Unix seconds when the last event was counted.
+  // Zero means no event time has been recorded in this service instance.
+  int64 last_event_time = 3;
 }
 
 // --- Declarative Index Management Messages ---

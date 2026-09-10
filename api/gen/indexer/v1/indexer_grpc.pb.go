@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	IndexerService_Search_FullMethodName          = "/syntrix.indexer.v1.IndexerService/Search"
 	IndexerService_Health_FullMethodName          = "/syntrix.indexer.v1.IndexerService/Health"
+	IndexerService_Stats_FullMethodName           = "/syntrix.indexer.v1.IndexerService/Stats"
 	IndexerService_GetState_FullMethodName        = "/syntrix.indexer.v1.IndexerService/GetState"
 	IndexerService_Reload_FullMethodName          = "/syntrix.indexer.v1.IndexerService/Reload"
 	IndexerService_InvalidateIndex_FullMethodName = "/syntrix.indexer.v1.IndexerService/InvalidateIndex"
@@ -45,6 +46,8 @@ type IndexerServiceClient interface {
 	Search(ctx context.Context, in *SearchRequest, opts ...grpc.CallOption) (*SearchResponse, error)
 	// Health returns the current health status of the indexer.
 	Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
+	// Stats returns current aggregate statistics for this Indexer service instance.
+	Stats(ctx context.Context, in *StatsRequest, opts ...grpc.CallOption) (*StatsResponse, error)
 	// GetState returns the complete index state including desired, actual, and pending operations.
 	// Use this to observe the current state and what the reconciler will do.
 	GetState(ctx context.Context, in *GetStateRequest, opts ...grpc.CallOption) (*IndexerState, error)
@@ -78,6 +81,16 @@ func (c *indexerServiceClient) Health(ctx context.Context, in *HealthRequest, op
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HealthResponse)
 	err := c.cc.Invoke(ctx, IndexerService_Health_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *indexerServiceClient) Stats(ctx context.Context, in *StatsRequest, opts ...grpc.CallOption) (*StatsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StatsResponse)
+	err := c.cc.Invoke(ctx, IndexerService_Stats_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -133,6 +146,8 @@ type IndexerServiceServer interface {
 	Search(context.Context, *SearchRequest) (*SearchResponse, error)
 	// Health returns the current health status of the indexer.
 	Health(context.Context, *HealthRequest) (*HealthResponse, error)
+	// Stats returns current aggregate statistics for this Indexer service instance.
+	Stats(context.Context, *StatsRequest) (*StatsResponse, error)
 	// GetState returns the complete index state including desired, actual, and pending operations.
 	// Use this to observe the current state and what the reconciler will do.
 	GetState(context.Context, *GetStateRequest) (*IndexerState, error)
@@ -157,6 +172,9 @@ func (UnimplementedIndexerServiceServer) Search(context.Context, *SearchRequest)
 }
 func (UnimplementedIndexerServiceServer) Health(context.Context, *HealthRequest) (*HealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Health not implemented")
+}
+func (UnimplementedIndexerServiceServer) Stats(context.Context, *StatsRequest) (*StatsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Stats not implemented")
 }
 func (UnimplementedIndexerServiceServer) GetState(context.Context, *GetStateRequest) (*IndexerState, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetState not implemented")
@@ -220,6 +238,24 @@ func _IndexerService_Health_Handler(srv interface{}, ctx context.Context, dec fu
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(IndexerServiceServer).Health(ctx, req.(*HealthRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IndexerService_Stats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StatsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IndexerServiceServer).Stats(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IndexerService_Stats_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IndexerServiceServer).Stats(ctx, req.(*StatsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -292,6 +328,10 @@ var IndexerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Health",
 			Handler:    _IndexerService_Health_Handler,
+		},
+		{
+			MethodName: "Stats",
+			Handler:    _IndexerService_Stats_Handler,
 		},
 		{
 			MethodName: "GetState",
