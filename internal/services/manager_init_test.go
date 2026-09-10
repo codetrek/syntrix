@@ -325,7 +325,7 @@ type fakeDocumentStore struct {
 	retention time.Duration
 }
 
-func (f *fakeDocumentStore) Get(ctx context.Context, database, path string) (*storage.StoredDoc, error) {
+func (f *fakeDocumentStore) Get(ctx context.Context, database, path string, _ ...storage.ReadOptions) (*storage.StoredDoc, error) {
 	return nil, nil
 }
 func (f *fakeDocumentStore) Create(ctx context.Context, database string, doc storage.StoredDoc) error {

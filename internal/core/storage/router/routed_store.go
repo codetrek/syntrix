@@ -17,12 +17,20 @@ func NewRoutedDocumentStore(router types.DocumentRouter) types.DocumentStore {
 	return &RoutedDocumentStore{router: router}
 }
 
-func (s *RoutedDocumentStore) Get(ctx context.Context, database string, path string) (*types.StoredDoc, error) {
-	store, err := s.router.Select(database, types.OpRead)
+func (s *RoutedDocumentStore) Get(ctx context.Context, database string, path string, opts ...types.ReadOptions) (*types.StoredDoc, error) {
+	readOpts, err := types.ResolveReadOptions(opts)
 	if err != nil {
 		return nil, err
 	}
-	return store.Get(ctx, database, path)
+	op := types.OpRead
+	if readOpts.Consistency == types.ReadAuthoritative {
+		op = types.OpWrite
+	}
+	store, err := s.router.Select(database, op)
+	if err != nil {
+		return nil, err
+	}
+	return store.Get(ctx, database, path, opts...)
 }
 
 func (s *RoutedDocumentStore) GetMany(ctx context.Context, database string, paths []string) ([]*types.StoredDoc, error) {

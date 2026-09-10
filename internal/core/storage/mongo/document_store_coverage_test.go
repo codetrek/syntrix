@@ -2,12 +2,19 @@ package mongo
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/syntrixbase/syntrix/internal/core/storage/types"
 	"github.com/syntrixbase/syntrix/pkg/model"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/event"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/readpref"
 )
 
 func TestDocumentStore_Delete_Coverage(t *testing.T) {
@@ -338,5 +345,127 @@ func TestDocumentStore_DeleteByDatabase(t *testing.T) {
 		deleted, err = store.DeleteByDatabase(ctx, "db_span", 0)
 		require.NoError(t, err)
 		assert.Equal(t, 1, deleted)
+	})
+}
+
+func TestDocumentStoreGetRejectsInvalidOptions(t *testing.T) {
+	store := &documentStore{}
+	for _, opts := range [][]types.ReadOptions{
+		{{Consistency: 255}},
+		{{}, {}},
+		{{Consistency: types.ReadAuthoritative}, {Consistency: types.ReadAuthoritative}},
+	} {
+		doc, err := store.Get(context.Background(), "app", "users/user1", opts...)
+		assert.Nil(t, doc)
+		assert.Error(t, err)
+	}
+}
+
+func TestDocumentStoreGetReadPreference(t *testing.T) {
+	env := setupTestEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var hello struct {
+		SetName string `bson:"setName"`
+	}
+	require.NoError(t, env.Client.Database("admin").RunCommand(ctx, bson.D{{Key: "hello", Value: 1}}).Decode(&hello))
+	require.NotEmpty(t, hello.SetName, "read preference verification requires a replica set")
+
+	var mu sync.Mutex
+	var commands []bson.Raw
+	monitor := &event.CommandMonitor{Started: func(_ context.Context, e *event.CommandStartedEvent) {
+		if e.CommandName == "find" && e.DatabaseName == env.DBName {
+			mu.Lock()
+			commands = append(commands, append(bson.Raw(nil), e.Command...))
+			mu.Unlock()
+		}
+	}}
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(testMongoURI).SetReplicaSet(hello.SetName).SetDirect(false).SetMonitor(monitor))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		assert.NoError(t, client.Disconnect(cleanupCtx))
+	})
+	require.NoError(t, client.Ping(ctx, readpref.Primary()))
+	// Unmatched secondary tags keep fixture reads on the primary while retaining a visible non-primary preference.
+	preference := readpref.SecondaryPreferred(readpref.WithTags("syntrix-test", env.DBName))
+	db := client.Database(env.DBName, options.Database().SetReadPreference(preference))
+	store := NewDocumentStore(client, db, "docs", "sys", 0).(*documentStore)
+	authoritative := types.ReadOptions{Consistency: types.ReadAuthoritative}
+
+	for _, collection := range []string{"users", "sys/databases"} {
+		t.Run(collection, func(t *testing.T) {
+			expected := types.NewStoredDoc("app", collection, "item", map[string]interface{}{"value": "current"})
+			expected.Version = 7
+			require.NoError(t, store.Create(ctx, "app", expected))
+			other := types.NewStoredDoc("other", collection, "item", map[string]interface{}{"value": "other"})
+			require.NoError(t, store.Create(ctx, "other", other))
+			mu.Lock()
+			commands = nil
+			mu.Unlock()
+			for _, opts := range [][]types.ReadOptions{nil, {authoritative}, {{}}} {
+				actual, err := store.Get(ctx, "app", expected.Fullpath, opts...)
+				require.NoError(t, err)
+				assert.Equal(t, expected.Id, actual.Id)
+				assert.Equal(t, int64(7), actual.Version)
+				assert.Equal(t, "current", actual.Data["value"])
+			}
+			mu.Lock()
+			observed := append([]bson.Raw(nil), commands...)
+			mu.Unlock()
+			require.Len(t, observed, 3)
+			for i, command := range observed {
+				expectedCollection := "docs"
+				if collection == "sys/databases" {
+					expectedCollection = "sys"
+				}
+				assert.Equal(t, expectedCollection, command.Lookup("find").StringValue())
+				filter := command.Lookup("filter").Document()
+				assert.Equal(t, expected.Id, filter.Lookup("_id").StringValue())
+				assert.Equal(t, "app", filter.Lookup("database").StringValue())
+				assert.True(t, filter.Lookup("deleted", "$ne").Boolean())
+				if i == 1 {
+					_, err := command.LookupErr("$readPreference")
+					assert.Error(t, err, "primary replica-set reads omit the wire read preference")
+				} else {
+					assert.Equal(t, "secondaryPreferred", command.Lookup("$readPreference", "mode").StringValue())
+				}
+			}
+			assert.Same(t, preference, db.ReadPreference())
+
+			actual, err := store.Get(ctx, "other", expected.Fullpath, authoritative)
+			require.NoError(t, err)
+			assert.Equal(t, "other", actual.Data["value"])
+			_, err = store.Get(ctx, "missing", expected.Fullpath, authoritative)
+			assert.ErrorIs(t, err, model.ErrNotFound)
+			require.NoError(t, store.Delete(ctx, "app", expected.Fullpath, nil))
+			_, err = store.Get(ctx, "app", expected.Fullpath, authoritative)
+			assert.ErrorIs(t, err, model.ErrNotFound)
+		})
+	}
+
+	t.Run("canceled context", func(t *testing.T) {
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		doc, err := store.Get(canceled, "app", "users/item", authoritative)
+		assert.Nil(t, doc)
+		assert.ErrorIs(t, err, context.Canceled)
+	})
+	t.Run("expired context", func(t *testing.T) {
+		expired, cancel := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+		defer cancel()
+		doc, err := store.Get(expired, "app", "users/item", authoritative)
+		assert.Nil(t, doc)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+	t.Run("database filter rejects inconsistent stored metadata", func(t *testing.T) {
+		malformed := types.NewStoredDoc("app", "users", "malformed", nil)
+		malformed.Database = "other"
+		_, err := db.Collection("docs").InsertOne(ctx, malformed)
+		require.NoError(t, err)
+		doc, err := store.Get(ctx, "app", malformed.Fullpath, authoritative)
+		assert.Nil(t, doc)
+		assert.ErrorIs(t, err, model.ErrNotFound)
 	})
 }

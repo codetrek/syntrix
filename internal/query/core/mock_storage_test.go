@@ -14,8 +14,20 @@ type MockStorageBackend struct {
 	mock.Mock
 }
 
-func (m *MockStorageBackend) Get(ctx context.Context, database, path string) (*storage.StoredDoc, error) {
+func (m *MockStorageBackend) Get(ctx context.Context, database, path string, opts ...storage.ReadOptions) (*storage.StoredDoc, error) {
 	args := m.Called(ctx, database, path)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*storage.StoredDoc), args.Error(1)
+}
+
+type routedReadStorage struct {
+	MockStorageBackend
+}
+
+func (m *routedReadStorage) Get(ctx context.Context, database, path string, opts ...storage.ReadOptions) (*storage.StoredDoc, error) {
+	args := m.Called(ctx, database, path, opts)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

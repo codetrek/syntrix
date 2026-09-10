@@ -19,7 +19,7 @@ This document details the replication HTTP protocol used by Syntrix. It separate
 Documents in responses and requests use a flattened JSON object with reserved metadata fields:
 
 - `id` (string): required document ID.
-- `version` (int64): optimistic concurrency version (optional on push, returned on pull/conflicts).
+- `version` (int64): optional version precondition on push; server-owned version on pull/conflicts.
 - `updatedAt` (int64, millis): server update timestamp (returned on pull/conflicts).
 - `createdAt` (int64, millis): server creation timestamp (returned on pull/conflicts).
 - `collection` (string): collection path (returned on pull/conflicts).
@@ -86,7 +86,7 @@ Documents in responses and requests use a flattened JSON object with reserved me
 - Rules:
   - `action` ∈ {"create", "update", "delete"}.
   - `document.id` is required for every change.
-  - `version` is optional; when provided, it is used as an optimistic concurrency hint.
+  - `document.version` is optional and case-sensitive; preserve its exact nonnegative int64 integer value and presence as the version precondition before stripping protected metadata.
   - No storage-layer fields (e.g., `_id`, `fullpath`, `parent`) are accepted or returned.
 - Response (conflicts only):
 
@@ -105,6 +105,33 @@ Documents in responses and requests use a flattened JSON object with reserved me
 }
 ```
 
+### Version Preconditions
+
+| Supplied `document.version` | Request handling |
+|----------------------------|------------------|
+| Omitted | Preserve an absent precondition |
+| Nonnegative int64 integer literal, including zero | Forward the exact value separately from document data |
+| Null, string, boolean, negative value, fraction, exponent notation, or out-of-range integer | Reject the request before any Engine call |
+
+Extract the reserved field from raw JSON so values beyond floating-point integer
+precision remain exact. Ordinary business numbers keep their existing decoding
+behavior. Protected fields are still removed from document data, and new stored
+documents retain server initialization at version 1. The supplied value is not
+assigned to stored version metadata. The existing gRPC encoding preserves absence
+as `-1` and retains explicit zero and supported positive int64 values.
+
+Push requests the database's write source for its initial and conflict lookups.
+Non-not-found conflict-read errors propagate as server errors. These reads do not
+lock data or establish transactions or linearizable reads. Existing live-target
+writes compare the version and apply it in the atomic write predicate. Explicit zero is an equality precondition, not an insert-only request;
+`create` with version 1 remains accepted. Omission retains the current optional,
+unconditional behavior. A malformed version anywhere in a batch prevents all
+Engine calls for that request; valid batches remain nontransactional.
+
+The [HTTP precondition decision](../../../../.agents/notes/implemented/bug-fix/2026-09-07-http-push-version-preconditions.md)
+records why extraction is local to replication decoding and preserves the
+existing document-number representation.
+
 ## Checkpointing
 
 - Clients treat checkpoint as an opaque stringified int64.
@@ -115,10 +142,15 @@ Documents in responses and requests use a flattened JSON object with reserved me
 
 - Push may return `conflicts` containing the authoritative server documents in flattened form.
 - Clients decide whether to retry, merge, or surface conflicts.
+- The initial not-found path can enter Create before checking the version, including
+  for deleted targets. Concurrent deletion can still leave incomplete conflict
+  results when the authoritative lookup reports absence. Strict create/update/delete predicates, authoritative
+  missing/tombstone results, and structured conflict reasons remain in the
+  [version-check proposal](../../../../.agents/notes/proposed/bug-fix/2026-09-07-replication-push-version-checks.md).
 
 ## Error Handling
 
-- 400: validation failures (missing collection/id, invalid checkpoint, invalid action).
+- 400: validation failures (missing collection/id, invalid checkpoint, invalid action, invalid supplied document.version).
 - 409: (future) may be used for explicit conflict signaling; currently conflicts are returned in 200 with the `conflicts` array.
 - 500: server errors.
 

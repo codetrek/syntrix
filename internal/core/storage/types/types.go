@@ -73,10 +73,25 @@ type StoredDoc struct {
 	Deleted bool `json:"deleted,omitempty" bson:"deleted,omitempty"`
 }
 
+type ReadConsistency int
+
+const (
+	ReadDefault ReadConsistency = iota
+	// ReadAuthoritative reads from the database's write source. It does not lock
+	// the document or establish a transaction or linearizable read guarantee.
+	ReadAuthoritative
+)
+
+type ReadOptions struct {
+	Consistency ReadConsistency
+}
+
 // DocumentStore defines the interface for document storage operations
 type DocumentStore interface {
-	// Get retrieves a document by its path
-	Get(ctx context.Context, database string, path string) (*StoredDoc, error)
+	// Get retrieves a live document by path. At most one options value is accepted;
+	// omission or ReadDefault preserves configured read routing. Unsupported options
+	// and authoritative-source failures must be returned without replica fallback.
+	Get(ctx context.Context, database string, path string, opts ...ReadOptions) (*StoredDoc, error)
 
 	// GetMany retrieves multiple documents by their paths within a collection.
 	// Returns documents in the same order as the provided paths.

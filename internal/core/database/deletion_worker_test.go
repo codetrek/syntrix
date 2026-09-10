@@ -97,7 +97,7 @@ type fullMockDocStore struct {
 	deleteByDBFunc func(ctx context.Context, database string, limit int) (int, error)
 }
 
-func (m *fullMockDocStore) Get(ctx context.Context, database string, path string) (*types.StoredDoc, error) {
+func (m *fullMockDocStore) Get(ctx context.Context, database string, path string, _ ...types.ReadOptions) (*types.StoredDoc, error) {
 	return nil, nil
 }
 func (m *fullMockDocStore) GetMany(ctx context.Context, database string, paths []string) ([]*types.StoredDoc, error) {

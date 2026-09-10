@@ -12,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/readpref"
 )
 
 type documentStore struct {
@@ -42,12 +43,22 @@ func (m *documentStore) getCollection(nameOrPath string) *mongo.Collection {
 	return m.db.Collection(m.dataCollection)
 }
 
-func (m *documentStore) Get(ctx context.Context, database string, fullpath string) (*types.StoredDoc, error) {
+func (m *documentStore) Get(ctx context.Context, database string, fullpath string, opts ...types.ReadOptions) (*types.StoredDoc, error) {
+	readOpts, err := types.ResolveReadOptions(opts)
+	if err != nil {
+		return nil, err
+	}
 	collection := m.getCollection(fullpath)
+	if readOpts.Consistency == types.ReadAuthoritative {
+		collection, err = collection.Clone(options.Collection().SetReadPreference(readpref.Primary()))
+		if err != nil {
+			return nil, err
+		}
+	}
 	id := types.CalculateDatabase(database, fullpath)
 
 	var doc types.StoredDoc
-	err := collection.FindOne(ctx, bson.M{"_id": id, "database": database, "deleted": bson.M{"$ne": true}}).Decode(&doc)
+	err = collection.FindOne(ctx, bson.M{"_id": id, "database": database, "deleted": bson.M{"$ne": true}}).Decode(&doc)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return nil, model.ErrNotFound

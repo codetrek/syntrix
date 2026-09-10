@@ -21,7 +21,7 @@ func (m *MockDocumentStore) Create(ctx context.Context, database string, doc sto
 	return args.Error(0)
 }
 
-func (m *MockDocumentStore) Get(ctx context.Context, database, id string) (*storage.StoredDoc, error) {
+func (m *MockDocumentStore) Get(ctx context.Context, database, id string, _ ...storage.ReadOptions) (*storage.StoredDoc, error) {
 	args := m.Called(ctx, database, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)

@@ -8,6 +8,8 @@ type StoredDoc = types.StoredDoc
 type User = types.User
 type RevokedToken = types.RevokedToken
 type DocumentStore = types.DocumentStore
+type ReadOptions = types.ReadOptions
+type ReadConsistency = types.ReadConsistency
 type UserStore = types.UserStore
 type TokenRevocationStore = types.TokenRevocationStore
 type DocumentProvider = types.DocumentProvider
@@ -30,6 +32,11 @@ type Router = types.Router
 type DocumentRouter = types.DocumentRouter
 type UserRouter = types.UserRouter
 type RevocationRouter = types.RevocationRouter
+
+const (
+	ReadDefault       = types.ReadDefault
+	ReadAuthoritative = types.ReadAuthoritative
+)
 
 const (
 	OpRead    = types.OpRead

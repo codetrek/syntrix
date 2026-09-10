@@ -51,7 +51,7 @@ type mockDocumentStore struct {
 	mock.Mock
 }
 
-func (m *mockDocumentStore) Get(ctx context.Context, database, path string) (*types.StoredDoc, error) {
+func (m *mockDocumentStore) Get(ctx context.Context, database, path string, _ ...types.ReadOptions) (*types.StoredDoc, error) {
 	args := m.Called(ctx, database, path)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)

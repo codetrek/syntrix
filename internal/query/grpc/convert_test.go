@@ -2,12 +2,16 @@ package grpc
 
 import (
 	"encoding/json"
+	"math"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	pb "github.com/syntrixbase/syntrix/api/gen/query/v1"
 	"github.com/syntrixbase/syntrix/internal/core/storage"
 	"github.com/syntrixbase/syntrix/pkg/model"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestStoredDocToProto(t *testing.T) {
@@ -396,37 +400,28 @@ func TestPullRequestConversions(t *testing.T) {
 }
 
 func TestPushRequestConversions(t *testing.T) {
-	t.Run("pushChangeToProto with baseVersion", func(t *testing.T) {
-		baseVersion := int64(5)
-		change := storage.ReplicationPushChange{
-			Doc: &storage.StoredDoc{
-				Id:         "doc1",
-				Collection: "users",
-				Data:       map[string]interface{}{"name": "Alice"},
-			},
-			BaseVersion: &baseVersion,
-		}
+	for _, version := range []int64{-1, 0, 5, 9007199254740993, math.MaxInt64} {
+		t.Run("base version roundtrip/"+strconv.FormatInt(version, 10), func(t *testing.T) {
+			change := storage.ReplicationPushChange{
+				Doc: &storage.StoredDoc{Id: "doc1", Collection: "users", Version: 1},
+			}
+			if version >= 0 {
+				change.BaseVersion = &version
+			}
+			encoded := pushChangeToProto(change)
+			assert.Equal(t, version, encoded.BaseVersion)
+			assert.Equal(t, int64(1), encoded.Document.Version)
 
-		result := pushChangeToProto(change)
-
-		assert.Equal(t, "doc1", result.Document.Id)
-		assert.Equal(t, int64(5), result.BaseVersion)
-	})
-
-	t.Run("pushChangeToProto without baseVersion", func(t *testing.T) {
-		change := storage.ReplicationPushChange{
-			Doc: &storage.StoredDoc{
-				Id:         "doc2",
-				Collection: "users",
-			},
-			BaseVersion: nil,
-		}
-
-		result := pushChangeToProto(change)
-
-		assert.Equal(t, "doc2", result.Document.Id)
-		assert.Equal(t, int64(-1), result.BaseVersion) // nil becomes -1
-	})
+			wire, err := proto.Marshal(encoded)
+			require.NoError(t, err)
+			var received pb.PushChange
+			require.NoError(t, proto.Unmarshal(wire, &received))
+			decoded := protoToPushChange(&received)
+			assert.Equal(t, change.BaseVersion, decoded.BaseVersion)
+			assert.Equal(t, "doc1", decoded.Doc.Id)
+			assert.Equal(t, int64(1), decoded.Doc.Version)
+		})
+	}
 
 	t.Run("protoToPushRequest", func(t *testing.T) {
 		data, _ := json.Marshal(map[string]interface{}{"name": "test"})
