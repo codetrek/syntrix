@@ -55,6 +55,9 @@ func NewServer(cfg config.GRPCConfig, eventSource EventSource, logger *slog.Logg
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if cfg.MaxConnections <= 0 {
+		cfg.MaxConnections = config.DefaultConfig().GRPC.MaxConnections
+	}
 
 	channelSize := cfg.ChannelSize
 	if channelSize <= 0 {
@@ -149,14 +152,36 @@ func (s *Server) Subscribe(req *pullerv1.SubscribeRequest, stream pullerv1.Pulle
 		return status.Errorf(codes.InvalidArgument, "invalid 'after' progress marker: %v", err)
 	}
 
+	// Serialize capacity checks and registration with other admissions and Shutdown.
+	s.mu.Lock()
+	if ctx.Err() != nil {
+		s.mu.Unlock()
+		return nil
+	}
+	if s.ctx.Err() != nil {
+		s.mu.Unlock()
+		return status.Error(codes.Unavailable, "puller service is shut down")
+	}
+	active := s.subs.Count()
+	if active >= s.cfg.MaxConnections {
+		s.mu.Unlock()
+		s.logger.Warn("subscription rejected",
+			"consumerId", req.GetConsumerId(),
+			"code", codes.ResourceExhausted.String(),
+			"activeSubscriptions", active,
+			"limit", s.cfg.MaxConnections,
+		)
+		return status.Error(codes.ResourceExhausted, "puller subscription limit reached")
+	}
+
 	channelSize := s.cfg.ChannelSize
 	if channelSize <= 0 {
 		channelSize = 10000
 	}
 
-	// Create subscriber
 	sub := core.NewSubscriber(req.GetConsumerId(), after, req.GetCoalesceOnCatchUp(), channelSize)
 	s.subs.Add(sub)
+	s.mu.Unlock()
 	defer s.subs.Remove(sub)
 
 	s.logger.Info("subscriber connected",

@@ -90,7 +90,7 @@ trigger:
 puller:
   grpc:
     address: ":50051"
-    max_connections: 50
+    max_connections: 50       # Active Subscribe RPCs per Puller gRPC Server; local subscriptions are separate
     channel_size: 5000
   backends:
     - name: "default_mongo"

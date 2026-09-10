@@ -224,7 +224,8 @@ func TestServer_Subscribe_ConsumerIDDoesNotIdentifyConnection(t *testing.T) {
 
 func TestServer_Subscribe_SendError(t *testing.T) {
 	t.Parallel()
-	srv := NewServer(config.GRPCConfig{}, &mockEventSource{}, nil)
+	srv := NewServer(config.GRPCConfig{MaxConnections: 1}, &mockEventSource{}, nil)
+	t.Cleanup(srv.cancel)
 	go srv.processEvents()
 
 	req := &pullerv1.SubscribeRequest{ConsumerId: "c1"}
@@ -259,6 +260,7 @@ func TestServer_Subscribe_SendError(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout waiting for Subscribe to return")
 	}
+	assertAdmissionSlotReusable(t, srv)
 }
 
 func TestServer_Subscribe_SubscriberClosed(t *testing.T) {
@@ -511,7 +513,8 @@ func TestServer_Subscribe_ReplayError(t *testing.T) {
 	source := &replayErrorEventSource{
 		replayErr: fmt.Errorf("database connection failed"),
 	}
-	srv := NewServer(config.GRPCConfig{}, source, nil)
+	srv := NewServer(config.GRPCConfig{MaxConnections: 1}, source, nil)
+	t.Cleanup(srv.cancel)
 	go srv.processEvents()
 
 	// Request with after position to trigger replay mode
@@ -539,6 +542,7 @@ func TestServer_Subscribe_ReplayError(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout waiting for Subscribe to return")
 	}
+	assertAdmissionSlotReusable(t, srv)
 }
 
 // iteratorWithError returns an error from Err()
@@ -581,7 +585,8 @@ func TestServer_Subscribe_IteratorError(t *testing.T) {
 			err:    fmt.Errorf("cursor exhausted unexpectedly"),
 		},
 	}
-	srv := NewServer(config.GRPCConfig{}, source, nil)
+	srv := NewServer(config.GRPCConfig{MaxConnections: 1}, source, nil)
+	t.Cleanup(srv.cancel)
 	go srv.processEvents()
 
 	req := &pullerv1.SubscribeRequest{
@@ -608,6 +613,7 @@ func TestServer_Subscribe_IteratorError(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout waiting for Subscribe to return")
 	}
+	assertAdmissionSlotReusable(t, srv)
 }
 
 func containsSubstr(s, substr string) bool {
@@ -661,7 +667,8 @@ func TestServer_Subscribe_SendEventError_DuringReplay(t *testing.T) {
 			},
 		},
 	}
-	srv := NewServer(config.GRPCConfig{}, source, nil)
+	srv := NewServer(config.GRPCConfig{MaxConnections: 1}, source, nil)
+	t.Cleanup(srv.cancel)
 	go srv.processEvents()
 
 	req := &pullerv1.SubscribeRequest{
@@ -692,6 +699,7 @@ func TestServer_Subscribe_SendEventError_DuringReplay(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout waiting for Subscribe to return")
 	}
+	assertAdmissionSlotReusable(t, srv)
 }
 
 func TestServer_Subscribe_HeartbeatError(t *testing.T) {
@@ -699,8 +707,10 @@ func TestServer_Subscribe_HeartbeatError(t *testing.T) {
 
 	source := &mockEventSource{}
 	srv := NewServer(config.GRPCConfig{
+		MaxConnections:    1,
 		HeartbeatInterval: 50 * time.Millisecond, // Short heartbeat interval
 	}, source, nil)
+	t.Cleanup(srv.cancel)
 	go srv.processEvents()
 
 	req := &pullerv1.SubscribeRequest{
@@ -735,6 +745,7 @@ func TestServer_Subscribe_HeartbeatError(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("Timeout waiting for Subscribe to return")
 	}
+	assertAdmissionSlotReusable(t, srv)
 }
 
 func TestServer_SubscriberCount(t *testing.T) {

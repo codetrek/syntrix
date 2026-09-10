@@ -82,4 +82,6 @@ logging document payloads or raw resume tokens.
 [History-gap recovery](2026-09-07-puller-history-gap-recovery.md) owns the proposed
 terminal continuity failure;
 [consumer settings](../bug-fix/2026-09-07-puller-admission-and-catch-up-settings.md)
-owns admission and catch-up policy.
+owns proposed local quota integration and catch-up policy. The implemented
+[gRPC admission limit](../../implemented/bug-fix/2026-09-07-puller-grpc-admission.md)
+remains scoped to active RPCs per Server.
