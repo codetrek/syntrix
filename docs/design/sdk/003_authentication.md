@@ -37,7 +37,18 @@
 
 ## Realtime Channel (/realtime/ws, /realtime/sse)
 - Shares the same `tokenProvider`/`refresh` strategy.
-- On auth failure: close the channel, invoke `onRealtimeAuthError`, let caller decide when to resume (after refreshing token). Avoid infinite reconnects without new token.
+- Implemented WebSocket authentication sends a token and database in an `auth`
+  message. `connect()` completes only after `auth_ack`; pending subscriptions wait
+  for that acknowledgement.
+- A structured `unauthorized` error matching the current auth request allows one
+  refresh and retry per connection attempt. Missing tokens, invalid auth, refresh
+  failure, or another rejection fail the attempt and notify active subscriptions
+  and the global error observer. Subscription failures do not trigger refresh.
+- The connection/authentication deadline is bounded by `activityTimeoutMs` and
+  cannot be extended by heartbeats. Stopped WebSockets ignore late token results;
+  shared credential mutations during logout remain covered by the
+  [authentication session race proposal](../../../.agents/notes/proposed/bug-fix/2026-09-10-sdk-authentication-session-race.md).
+- Planned SSE auth-failure hooks let callers decide when to resume after refresh.
 
 ## Replication (pull/push)
 - Pull/Push use the same auth layer; retries on 401/403 follow the refresh-once rule.
@@ -65,7 +76,8 @@
 - 401 on CRUD without refresh: propagate error, no retry.
 - Refresh failure: single retry attempt, then error, hook fired.
 - Concurrency: multiple parallel requests hit 401 -> only one refresh occurs; all retry once with new token.
-- Realtime: auth failure closes channel, fires hook; after `setToken` and `resume()`, subscription recovers.
+- WebSocket: matching unauthorized auth response refreshes once; terminal auth
+  failure ends the attempt; reconnect authenticates before restoring subscriptions.
 - Replication pull/push: 401 triggers refresh-once, checkpoint unchanged on failure, resumes on success.
 
 ## Integration Points

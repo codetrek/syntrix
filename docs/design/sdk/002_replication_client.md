@@ -1,6 +1,6 @@
 # Replication Client Design (RxDB + Syntrix replication/realtime)
 
-**Status:** Planned
+**Status:** Planned replication coordinator; implemented WebSocket lifecycle is identified below.
 
 ## Context & Why
 - We need offline-first replication for web clients using RxDB as local store.
@@ -104,7 +104,8 @@ App
 ### Realtime trigger policy
 - Event arrival only schedules a pull; event seq/lsn is not persisted as checkpoint.
 - Multiple events coalesced via throttle/debounce to a single pull.
-- On reconnect: immediately run a pull with last checkpoint, then resume listening.
+- On each subscription's `onReady`, schedule a pull with the last checkpoint to
+  reconcile changes missed before registration or during disconnection.
 - Periodic safety pull (e.g., every N minutes) to cover missed events.
 
 ## Error Handling & Resilience
@@ -149,12 +150,32 @@ The server sends WebSocket Ping frames; browsers automatically respond with Pong
 - **Heartbeat interval:** 15 seconds - server sends `: heartbeat\n\n` comments
 - Client should monitor incoming data; if no data (including heartbeats) arrives for an extended period, consider reconnecting.
 
-### Client-side Keepalive (SDK)
+### WebSocket Ownership and Keepalive (implemented SDK)
 
+- One `RealtimeClient` owns one socket. Convenience subscriptions start or reuse
+  its connection; low-level subscriptions leave `connect()` explicit.
+- Concurrent connection attempts share one promise. Socket open begins auth;
+  `auth_ack` completes connection and permits pending subscription registration.
+- Subscription callbacks are keyed by `subId`; global observers remain separate.
+  Each registration ACK triggers `onReady` once for that connection. Events can
+  precede the ACK; readiness guarantees neither replay nor snapshot completion.
+- Unsubscribe releases one subscription, leaving the shared connection open.
+  `disconnect()` stops transport work but retains logical subscriptions;
+  `dispose()` clears them permanently. Logout disposes the WebSocket client.
+- Timers and asynchronous handlers are bound to their connection attempt so
+  late completion cannot revive a stopped or disposed client.
 - Browser WebSocket API automatically responds to server Ping frames
 - Client tracks `lastMessageTime` on every incoming message (including server heartbeats)
-- **Activity timeout:** If no messages received within `activityTimeoutMs` (default: 90s), proactively close and trigger reconnect
-- Reconnect uses exponential backoff: base delay × 2^(attempt-1), capped at max attempts
+- **Activity timeout:** `activityTimeoutMs` (default: 90s) bounds the entire
+  connection/authentication attempt independently of heartbeats; after
+  authentication it detects inactivity and triggers reconnect.
+- Reconnect uses exponential backoff with jitter: base delay × 2^(attempt-1),
+  bounded by `maxReconnectAttempts`. Successful authentication resets attempts.
+
+Client-owned connection lifetime lets explicit connection users and convenience
+subscriptions coexist without one subscriber closing another's transport. See the
+[lifecycle decision](../../../.agents/notes/implemented/bug-fix/2026-09-07-sdk-realtime-subscription-lifecycle.md)
+for alternatives and the separate authentication-provider limitation.
 
 ### Reconnect Flow
 1. On disconnect detected (via `onclose` or activity timeout), set state to `disconnected`.
@@ -162,15 +183,17 @@ The server sends WebSocket Ping frames; browsers automatically respond with Pong
 3. On successful reconnect:
    - Re-authenticate (send auth message with fresh token)
    - Re-subscribe to all active subscriptions
-   - Trigger immediate pull to catch up on missed changes
-4. If max retries exceeded, stop and invoke `onError` hook.
+   - Notify each subscription with `onReady` after its registration ACK
+   - The application or planned coordinator schedules a pull to reconcile missed changes
+4. Connection and authentication failures notify active subscriptions and the
+   global error observer; automatic attempts stop at the configured limit.
 
-### Configuration (planned)
+### WebSocket Configuration (implemented)
 ```typescript
-interface RealtimeOptions {
+interface RealtimeClientOptions {
   maxReconnectAttempts?: number;  // default: 5
   reconnectDelayMs?: number;      // base delay, default: 1000
-  activityTimeoutMs?: number;     // client-side health check, default: 90000
+  activityTimeoutMs?: number;     // handshake deadline and inactivity, default: 90000
 }
 ```
 
@@ -186,7 +209,8 @@ interface RealtimeOptions {
 ## Testing Plan (to implement with the code)
 - Pull: checkpoint advance, tombstone handling, throttle coalescing, backoff on failures.
 - Push: outbox drain, retry/backoff, conflict upsert, idempotent duplicate suppression.
-- Realtime trigger: event-driven pull scheduling, debounce, reconnect flow (pull-then-subscribe), safety interval coverage.
+- Realtime trigger: event-driven pull scheduling, debounce, reconciliation after
+  registration ACK, safety interval coverage.
 - Concurrency: simultaneous pull/push without corrupting checkpoint or outbox.
 - Persistence: checkpoint/outbox survive reload, resume correctly.
 - Error paths: auth failure, 4xx on push, transient network failures on pull.

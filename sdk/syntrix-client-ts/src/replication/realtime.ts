@@ -63,274 +63,382 @@ export interface RealtimeClientOptions {
   activityTimeoutMs?: number;
 }
 
+export interface SubscriptionCallbacks {
+  onEvent?: (event: RealtimeEvent) => void;
+  onSnapshot?: (snapshot: SnapshotEvent) => void;
+  onError?: (error: Error) => void;
+  onReady?: () => void;
+}
+
+interface Subscription {
+  options: SubscribeOptions;
+  callbacks: SubscriptionCallbacks;
+  sent: boolean;
+  acknowledged: boolean;
+  failed: boolean;
+}
+
+interface ConnectionAttempt {
+  socket: WebSocket | null;
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  authenticated: boolean;
+  authId: string | null;
+  authRetryAttempted: boolean;
+}
+
 export class RealtimeClient {
-  private ws: WebSocket | null = null;
-  private wsUrl: string;
-  private tokenProvider: TokenProvider;
-  private database: string;
   private callbacks: RealtimeCallbacks = {};
-  private subscriptions: Map<string, SubscribeOptions> = new Map();
-  private messageHandlers: Map<string, (msg: BaseMessage) => void> = new Map();
+  private subscriptions = new Map<string, Subscription>();
+  private attempt: ConnectionAttempt | null = null;
   private subIdCounter = 0;
   private state: ConnectionState = 'disconnected';
+  private disposed = false;
+  private lifecycle = 0;
+  private reconnectEnabled = false;
   private reconnectAttempts = 0;
   private maxReconnectAttempts: number;
   private reconnectDelay: number;
   private activityTimeoutMs: number;
-  private lastMessageTime: number = 0;
+  private lastMessageTime = 0;
   private activityCheckTimer: ReturnType<typeof setInterval> | null = null;
-  private authRetryAttempted = false;
+  private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(wsUrl: string, tokenProvider: TokenProvider, database: string, options?: RealtimeClientOptions) {
-    this.wsUrl = wsUrl;
-    this.tokenProvider = tokenProvider;
-    this.database = database;
+  constructor(
+    private wsUrl: string,
+    private tokenProvider: TokenProvider,
+    private database: string,
+    options?: RealtimeClientOptions,
+  ) {
     this.maxReconnectAttempts = options?.maxReconnectAttempts ?? 5;
     this.reconnectDelay = options?.reconnectDelayMs ?? 1000;
     this.activityTimeoutMs = options?.activityTimeoutMs ?? 90000;
   }
 
-  /**
-   * Returns the timestamp of the last received message.
-   * Useful for observability and debugging connection health.
-   */
   getLastMessageTime(): number {
     return this.lastMessageTime;
   }
 
   on<K extends keyof RealtimeCallbacks>(event: K, callback: RealtimeCallbacks[K]): this {
+    this.assertUsable();
     this.callbacks[event] = callback;
     return this;
   }
 
-  private setState(newState: ConnectionState) {
-    if (this.state !== newState) {
-      this.state = newState;
-      this.callbacks.onStateChange?.(newState);
+  private assertUsable(): void {
+    if (this.disposed) throw new Error('Realtime client has been disposed');
+  }
+
+  private setState(state: ConnectionState): void {
+    if (this.state !== state) {
+      this.state = state;
+      this.invoke(this.callbacks.onStateChange, [state]);
     }
   }
 
-  async connect(): Promise<void> {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      return;
+  private invoke<T extends unknown[]>(callback: ((...args: T) => void) | undefined, args: T): void {
+    const lifecycle = this.lifecycle;
+    try {
+      callback?.(...args);
+    } catch (error) {
+      if (this.isCurrentLifecycle(lifecycle)) this.reportError(this.asError(error), null);
     }
+  }
 
+  private isCurrentLifecycle(lifecycle: number): boolean {
+    return !this.disposed && this.lifecycle === lifecycle;
+  }
+
+  private asError(error: unknown): Error {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+
+  // A null target reports a callback or protocol error only to the global observer.
+  private reportError(error: Error, target?: string | null): void {
+    this.captureErrorNotification(error, target)();
+  }
+
+  private captureErrorNotification(error: Error, target?: string | null): () => void {
+    const lifecycle = this.lifecycle;
+    const globalError = this.callbacks.onError;
+    const subscriptions = target === undefined
+      ? [...this.subscriptions.entries()]
+      : target === null ? [] : [...this.subscriptions.entries()].filter(([id]) => id === target);
+    return () => {
+      let handled = false;
+      const notify = (callback: ((error: Error) => void) | undefined) => {
+        if (!callback || !this.isCurrentLifecycle(lifecycle)) return;
+        handled = true;
+        try {
+          callback(error);
+        } catch (callbackError) {
+          if (this.isCurrentLifecycle(lifecycle)) {
+            console.error('[Realtime] Error callback failed:', callbackError);
+          }
+        }
+      };
+      for (const [id, sub] of subscriptions) {
+        if (this.subscriptions.get(id) === sub) notify(sub.callbacks.onError);
+      }
+      if (this.callbacks.onError === globalError) notify(globalError);
+      if (!handled && this.isCurrentLifecycle(lifecycle)) console.error('[Realtime]', error);
+    };
+  }
+
+  connect(): Promise<void> {
+    if (this.disposed) return Promise.reject(new Error('Realtime client has been disposed'));
+    this.clearReconnectTimer();
+    this.reconnectEnabled = true;
+    if (this.attempt) return this.attempt.promise;
+    this.lifecycle++;
+
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<void>((res, rej) => { resolve = res; reject = rej; });
+    const attempt: ConnectionAttempt = {
+      socket: null, promise, resolve, reject,
+      authenticated: false, authId: null, authRetryAttempted: false,
+    };
+    this.attempt = attempt;
+    this.handshakeTimer = setTimeout(() => {
+      this.fail(attempt, new Error('Realtime connection or authentication timed out'), true);
+    }, this.activityTimeoutMs);
     this.setState('connecting');
+    if (this.attempt !== attempt) return promise;
 
-    return new Promise((resolve, reject) => {
-      try {
-        this.ws = new WebSocket(this.wsUrl);
-
-        this.ws.onopen = async () => {
-          this.reconnectAttempts = 0;
-          this.lastMessageTime = Date.now();
-          this.startActivityCheck();
-          this.authRetryAttempted = false;
-          // Send auth message with database
-          const token = await this.tokenProvider.getToken();
-          if (token) {
-            this.sendMessage({ id: 'auth-init', type: MessageType.Auth, payload: { token, database: this.database } });
-          }
-          // Mark connected for liveness tracking, onConnect callback will fire on auth ack
-          this.setState('connected');
-          resolve();
-        };
-
-        this.ws.onmessage = (event) => {
-          this.lastMessageTime = Date.now();
-          try {
-            const msg: BaseMessage = JSON.parse(event.data);
-            this.handleMessage(msg);
-          } catch (error) {
-            console.error('[Realtime] Failed to parse message:', error);
-          }
-        };
-
-        this.ws.onerror = (event) => {
-          this.setState('error');
-          const error = new Error('WebSocket error');
-          this.callbacks.onError?.(error);
-          reject(error);
-        };
-
-        this.ws.onclose = () => {
-          this.stopActivityCheck();
-          this.setState('disconnected');
-          this.callbacks.onDisconnect?.();
-          this.attemptReconnect();
-        };
-      } catch (error) {
-        this.setState('error');
-        reject(error);
-      }
-    });
+    try {
+      const socket = new WebSocket(this.wsUrl);
+      attempt.socket = socket;
+      socket.onopen = () => {
+        if (this.attempt !== attempt) return;
+        this.lastMessageTime = Date.now();
+        void this.authenticate(attempt, false);
+      };
+      socket.onmessage = (event) => {
+        if (this.attempt !== attempt) return;
+        this.lastMessageTime = Date.now();
+        let msg: BaseMessage;
+        try {
+          msg = JSON.parse(event.data);
+          if (!msg || typeof msg.type !== 'string') throw new Error('Invalid realtime message');
+          if (typeof msg.payload === 'string') msg.payload = JSON.parse(msg.payload);
+        } catch (error) {
+          this.reportError(this.asError(error), null);
+          return;
+        }
+        this.handleMessage(attempt, msg);
+      };
+      socket.onerror = () => this.fail(attempt, new Error('WebSocket error'), true);
+      socket.onclose = () => this.fail(attempt, new Error('WebSocket closed'), true);
+    } catch (error) {
+      this.fail(attempt, this.asError(error), true);
+    }
+    return promise;
   }
 
-  private attemptReconnect() {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      return;
-    }
-
-    this.reconnectAttempts++;
-    // Exponential backoff with jitter (±50%) to spread reconnection attempts
-    // and avoid thundering herd when many clients reconnect simultaneously.
-    //
-    // With default reconnectDelay=1000ms:
-    //   Attempt 1: base=1s,  actual=0.5s~1.5s
-    //   Attempt 2: base=2s,  actual=1s~3s
-    //   Attempt 3: base=4s,  actual=2s~6s
-    //   Attempt 4: base=8s,  actual=4s~12s
-    //   Attempt 5: base=16s, actual=8s~24s
-    const baseDelay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
-    const jitter = 0.5 + Math.random(); // 0.5 ~ 1.5
-    const delay = Math.floor(baseDelay * jitter);
-
-    setTimeout(() => {
-      if (this.state === 'disconnected') {
-        this.connect().catch(() => {});
+  private async authenticate(attempt: ConnectionAttempt, refresh: boolean): Promise<void> {
+    try {
+      const token = refresh
+        ? await this.tokenProvider.refreshToken()
+        : await this.tokenProvider.getToken();
+      if (this.attempt !== attempt) return;
+      if (!token) {
+        this.fail(attempt, new Error('Realtime authentication requires a token'), false);
+        return;
       }
+      attempt.authId = refresh ? 'auth-retry' : 'auth-init';
+      this.sendMessage(attempt, {
+        id: attempt.authId, type: MessageType.Auth,
+        payload: { token, database: this.database },
+      });
+    } catch (error) {
+      this.fail(attempt, this.asError(error), false);
+    }
+  }
+
+  private fail(attempt: ConnectionAttempt, error: Error, retry: boolean): void {
+    if (this.attempt !== attempt) return;
+    const lifecycle = this.lifecycle;
+    const reportError = this.captureErrorNotification(error);
+    this.releaseAttempt(attempt, error);
+    if (!retry) this.reconnectEnabled = false;
+    this.scheduleReconnect();
+    this.setState('disconnected');
+    reportError();
+    if (this.isCurrentLifecycle(lifecycle) && !this.attempt) this.invoke(this.callbacks.onDisconnect, []);
+  }
+
+  private releaseAttempt(attempt: ConnectionAttempt, error: Error): void {
+    this.attempt = null;
+    if (this.handshakeTimer !== null) clearTimeout(this.handshakeTimer);
+    if (this.activityCheckTimer !== null) clearInterval(this.activityCheckTimer);
+    this.handshakeTimer = null;
+    this.activityCheckTimer = null;
+    for (const sub of this.subscriptions.values()) {
+      sub.sent = false;
+      sub.acknowledged = false;
+      sub.failed = false;
+    }
+    if (attempt.socket) {
+      attempt.socket.onopen = null;
+      attempt.socket.onmessage = null;
+      attempt.socket.onerror = null;
+      attempt.socket.onclose = null;
+      attempt.socket.close();
+    }
+    attempt.reject(error);
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+  }
+
+  private scheduleReconnect(): void {
+    if (!this.reconnectEnabled || this.disposed || this.reconnectAttempts >= this.maxReconnectAttempts) return;
+    this.reconnectAttempts++;
+    const baseDelay = this.reconnectDelay * 2 ** (this.reconnectAttempts - 1);
+    const delay = Math.floor(baseDelay * (0.5 + Math.random()));
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.reconnectEnabled || this.disposed || this.attempt) return;
+      // Connection failures are reported by fail, including automatic attempts.
+      void this.connect().catch(() => {});
     }, delay);
   }
 
   disconnect(): void {
-    this.stopActivityCheck();
-    if (this.ws) {
-      this.reconnectAttempts = this.maxReconnectAttempts; // Prevent reconnect
-      this.ws.close();
-      this.ws = null;
-    }
+    const lifecycle = ++this.lifecycle;
+    this.reconnectEnabled = false;
+    this.clearReconnectTimer();
+    const attempt = this.attempt;
+    if (attempt) this.releaseAttempt(attempt, new Error('Realtime connection disconnected'));
     this.setState('disconnected');
+    if (attempt && this.isCurrentLifecycle(lifecycle) && !this.attempt) this.invoke(this.callbacks.onDisconnect, []);
   }
 
-  /**
-   * Starts the activity check timer.
-   * If no messages are received within activityTimeoutMs, the connection
-   * is considered stale and will be closed to trigger reconnect.
-   */
-  private startActivityCheck(): void {
-    this.stopActivityCheck();
-    // Check every 10 seconds
-    const checkInterval = Math.min(10000, this.activityTimeoutMs / 3);
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.callbacks = {};
+    this.subscriptions.clear();
+    this.disconnect();
+  }
+
+  private startActivityCheck(attempt: ConnectionAttempt): void {
     this.activityCheckTimer = setInterval(() => {
-      if (this.state !== 'connected') {
-        return;
+      if (this.attempt === attempt && Date.now() - this.lastMessageTime > this.activityTimeoutMs) {
+        this.fail(attempt, new Error('Realtime connection activity timed out'), true);
       }
-      const elapsed = Date.now() - this.lastMessageTime;
-      if (elapsed > this.activityTimeoutMs) {
-        console.warn(`[Realtime] No activity for ${elapsed}ms, closing connection`);
-        // Close the connection to trigger reconnect
-        this.ws?.close();
-      }
-    }, checkInterval);
+    }, Math.min(10000, this.activityTimeoutMs / 3));
   }
 
-  private stopActivityCheck(): void {
-    if (this.activityCheckTimer) {
-      clearInterval(this.activityCheckTimer);
-      this.activityCheckTimer = null;
+  private sendMessage(attempt: ConnectionAttempt, msg: BaseMessage): boolean {
+    if (this.attempt !== attempt || attempt.socket?.readyState !== WebSocket.OPEN) return false;
+    try {
+      attempt.socket.send(JSON.stringify(msg));
+      return this.attempt === attempt;
+    } catch (error) {
+      this.fail(attempt, this.asError(error), true);
+      return false;
     }
   }
 
-  private sendMessage(msg: BaseMessage): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg));
-    }
-  }
-
-  private handleMessage(msg: BaseMessage): void {
-    // Check for pending handler
-    if (msg.id && this.messageHandlers.has(msg.id)) {
-      const handler = this.messageHandlers.get(msg.id)!;
-      this.messageHandlers.delete(msg.id);
-      handler(msg);
-      return;
-    }
-
+  private handleMessage(attempt: ConnectionAttempt, msg: BaseMessage): void {
     switch (msg.type) {
       case MessageType.AuthAck:
-        // Resubscribe existing subscriptions BEFORE firing onConnect callback
-        // This ensures we only resend subscriptions from before the reconnect,
-        // not new ones that might be added in the onConnect handler
-        for (const [subId, options] of this.subscriptions) {
-          this.sendSubscribe(subId, options);
-        }
+        if (attempt.authenticated || !attempt.authId || msg.id !== attempt.authId) return;
+        attempt.authId = null;
+        attempt.authenticated = true;
+        this.reconnectAttempts = 0;
+        if (this.handshakeTimer !== null) clearTimeout(this.handshakeTimer);
+        this.handshakeTimer = null;
+        this.startActivityCheck(attempt);
         this.setState('connected');
-        this.callbacks.onConnect?.();
-        break;
+        if (this.attempt !== attempt) return;
+        for (const [id, sub] of this.subscriptions) this.sendSubscribe(attempt, id, sub);
+        if (this.attempt !== attempt) return;
+        attempt.resolve();
+        this.invoke(this.callbacks.onConnect, []);
+        return;
+      case MessageType.SubscribeAck: {
+        const sub = msg.id ? this.subscriptions.get(msg.id) : undefined;
+        if (!attempt.authenticated || !sub?.sent || sub.acknowledged || sub.failed) return;
+        sub.acknowledged = true;
+        this.invoke(sub.callbacks.onReady, []);
+        return;
+      }
       case MessageType.Event:
-        if (msg.payload) {
-          // Payload is already parsed JSON object
-          const event: RealtimeEvent = typeof msg.payload === 'string'
-            ? JSON.parse(msg.payload)
-            : msg.payload;
-          this.callbacks.onEvent?.(event);
-        }
-        break;
-      case MessageType.Snapshot:
-        if (msg.payload) {
-          // Payload is already parsed JSON object
-          const snapshot: SnapshotEvent = typeof msg.payload === 'string'
-            ? JSON.parse(msg.payload)
-            : msg.payload;
-          this.callbacks.onSnapshot?.(snapshot);
-        }
-        break;
-      case MessageType.Error:
-        if (msg.payload) {
-          const error = typeof msg.payload === 'string'
-            ? JSON.parse(msg.payload)
-            : msg.payload;
-          const errMsg = error?.message || 'Unknown realtime error';
-          // Attempt a single refresh-and-auth on auth failures
-          if (!this.authRetryAttempted && typeof errMsg === 'string' && errMsg.toLowerCase().includes('unauthor')) {
-            this.authRetryAttempted = true;
-            this.tokenProvider.refreshToken()
-              .then((newToken) => {
-                this.sendMessage({ id: 'auth-retry', type: MessageType.Auth, payload: { token: newToken, database: this.database } });
-              })
-              .catch((e) => {
-                this.setState('error');
-                this.callbacks.onError?.(e as Error);
-                this.disconnect();
-              });
-          } else {
-            this.callbacks.onError?.(new Error(errMsg));
+      case MessageType.Snapshot: {
+        const subId = msg.payload?.subId;
+        const sub = this.subscriptions.get(subId);
+        if (!attempt.authenticated || !sub?.sent || sub.failed) return;
+        if (msg.type === MessageType.Event) {
+          this.invoke(sub.callbacks.onEvent, [msg.payload]);
+          if (this.attempt === attempt && this.subscriptions.get(subId) === sub) {
+            this.invoke(this.callbacks.onEvent, [msg.payload]);
+          }
+        } else {
+          this.invoke(sub.callbacks.onSnapshot, [msg.payload]);
+          if (this.attempt === attempt && this.subscriptions.get(subId) === sub) {
+            this.invoke(this.callbacks.onSnapshot, [msg.payload]);
           }
         }
-        break;
+        return;
+      }
+      case MessageType.Error: {
+        const error = new Error(msg.payload?.message ?? 'Unknown realtime error');
+        if (attempt.authId && msg.id === attempt.authId) {
+          attempt.authId = null;
+          if (msg.payload?.code === 'unauthorized' && !attempt.authRetryAttempted) {
+            attempt.authRetryAttempted = true;
+            void this.authenticate(attempt, true);
+          } else {
+            this.fail(attempt, error, false);
+          }
+        } else if (msg.id && this.subscriptions.get(msg.id)?.sent) {
+          this.subscriptions.get(msg.id)!.failed = true;
+          this.reportError(error, msg.id);
+        } else if (!msg.id) {
+          this.reportError(error);
+        }
+        return;
+      }
     }
   }
 
-  subscribe(options: SubscribeOptions): string {
+  subscribe(options: SubscribeOptions, callbacks: SubscriptionCallbacks = {}): string {
+    this.assertUsable();
     const subId = `sub-${++this.subIdCounter}`;
-    this.subscriptions.set(subId, options);
-
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.sendSubscribe(subId, options);
-    }
-
+    const sub: Subscription = { options, callbacks, sent: false, acknowledged: false, failed: false };
+    this.subscriptions.set(subId, sub);
+    if (this.attempt?.authenticated) this.sendSubscribe(this.attempt, subId, sub);
     return subId;
   }
 
-  private sendSubscribe(subId: string, options: SubscribeOptions): void {
-    this.sendMessage({
-      id: subId,
-      type: MessageType.Subscribe,
+  private sendSubscribe(attempt: ConnectionAttempt, subId: string, sub: Subscription): void {
+    if (this.attempt !== attempt || !attempt.authenticated || sub.sent || this.subscriptions.get(subId) !== sub) return;
+    sub.sent = true;
+    this.sendMessage(attempt, {
+      id: subId, type: MessageType.Subscribe,
       payload: {
-        query: options.query,
-        includeData: options.includeData ?? true,
-        sendSnapshot: options.sendSnapshot ?? false,
+        query: sub.options.query,
+        includeData: sub.options.includeData ?? true,
+        sendSnapshot: sub.options.sendSnapshot ?? false,
       },
     });
   }
 
   unsubscribe(subId: string): void {
+    const sub = this.subscriptions.get(subId);
     this.subscriptions.delete(subId);
-    this.sendMessage({
-      id: `unsub-${subId}`,
-      type: MessageType.Unsubscribe,
-      payload: { id: subId },
-    });
+    if (sub?.sent && this.attempt?.authenticated) {
+      this.sendMessage(this.attempt, {
+        id: `unsub-${subId}`, type: MessageType.Unsubscribe, payload: { id: subId },
+      });
+    }
   }
 
   getState(): ConnectionState {
@@ -347,7 +455,7 @@ export class RealtimeListener {
   }
 
   connect() {
-    this.client.connect();
+    void this.client.connect().catch(() => {});
   }
 
   disconnect() {

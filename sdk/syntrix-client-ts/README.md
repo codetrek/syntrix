@@ -32,6 +32,36 @@ const client = new TriggerClient('http://localhost:8080', 'pre-issued-token');
 await client.collection('users').doc('123').set({ name: 'Alice' });
 ```
 
-## Replication (WIP)
+## Realtime Subscriptions
 
-Replication features are currently in development.
+```typescript
+const client = new SyntrixClient('http://localhost:8080', {
+  database: 'my-database',
+  auth: { token: 'my-token' },
+});
+
+const subscription = client.subscribe('users', {
+  onReady: () => schedulePull(),
+  onEvent: (event) => console.log(event),
+  onError: (error) => console.error(error),
+});
+
+subscription.unsubscribe();
+client.realtime().dispose();
+```
+
+Convenience subscriptions share one automatically connected WebSocket and have
+independent callbacks. `onReady` signals registration after authentication, both
+initially and after reconnect; schedule reconciliation there when missed changes
+must be fetched. Readiness does not mean historical data or a snapshot is complete.
+
+The last unsubscribe leaves the connection open. Use `disconnect()` to stop it
+while retaining subscriptions for explicit reconnect, or `dispose()` for permanent
+cleanup. Logout disposes the client's WebSocket. Low-level `realtime().subscribe()`
+requires an explicit `connect()`; its promise resolves after authentication.
+See the [SDK reference](../../docs/reference/typescript_sdk.md#4-realtime-ws--sse)
+for error routing, timeouts, and the separate shared authentication race limitation.
+
+## Offline Replication (WIP)
+
+Durable offline replication features are currently in development.
