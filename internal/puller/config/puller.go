@@ -37,6 +37,8 @@ type Config struct {
 // GRPCConfig holds gRPC server configuration.
 // Note: Address is no longer used as Puller registers with the unified gRPC server.
 type GRPCConfig struct {
+	// MaxConnections limits active Subscribe RPCs per gRPC server, including catch-up.
+	// Each RPC counts independently of its consumer ID or transport connection.
 	MaxConnections int `yaml:"max_connections"`
 	// ChannelSize is the size of the subscriber channel.
 	// Defaults to 10000 if not set.

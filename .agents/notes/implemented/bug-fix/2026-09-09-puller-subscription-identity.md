@@ -51,6 +51,8 @@ manager tests cover duplicate/empty labels and concurrent broadcast/removal.
 
 Queued or in-flight events can still complete after cancellation. CloseAll
 retains its existing behavior and does not seal the manager against later Add.
-The subscription loops, checkpoint and event formats, replay, and settings are
-unchanged. Admission limits, lag thresholds, and coalescing policy remain in the
-[admission/catch-up proposal](../../proposed/bug-fix/2026-09-07-puller-admission-and-catch-up-settings.md).
+The identity change preserves subscription loops, checkpoint and event formats,
+and replay. [gRPC admission](2026-09-07-puller-grpc-admission.md) uses registration
+counts and seals admission during Server shutdown. Local quota integration,
+lag thresholds, and coalescing policy remain in the
+[consumer settings proposal](../../proposed/bug-fix/2026-09-07-puller-admission-and-catch-up-settings.md).

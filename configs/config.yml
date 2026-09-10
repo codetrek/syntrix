@@ -77,7 +77,7 @@ trigger:
 puller:
   grpc:
     address: ":50051"
-    max_connections: 100
+    max_connections: 100      # Active Subscribe RPCs per Puller gRPC Server; shared TCP streams count separately
     channel_size: 10000
   backends:
     - name: "default_mongo"
