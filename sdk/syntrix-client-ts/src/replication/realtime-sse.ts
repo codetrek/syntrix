@@ -1,5 +1,6 @@
 import { BaseMessage, MessageType, RealtimeCallbacks, RealtimeEvent, SnapshotEvent, ConnectionState } from './realtime';
 import { TokenProvider } from '../internal/auth/types';
+import { AuthSessionChangedError } from '../api/errors';
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -10,6 +11,7 @@ export interface RealtimeSSEOptions {
 
 export class RealtimeSSEClient {
   private controller: AbortController | null = null;
+  private sessionVersion: number | null = null;
   private state: ConnectionState = 'disconnected';
   private database: string;
 
@@ -22,75 +24,118 @@ export class RealtimeSSEClient {
   }
 
   disconnect(): void {
-    this.controller?.abort();
+    const controller = this.controller;
     this.controller = null;
+    this.sessionVersion = null;
     this.state = 'disconnected';
+    controller?.abort();
   }
 
   async connect(callbacks: RealtimeCallbacks = {}, options: RealtimeSSEOptions = {}): Promise<void> {
+    const sessionVersion = this.tokenProvider.getSessionVersion();
+    if (this.controller && !this.controller.signal.aborted && this.sessionVersion === sessionVersion) return;
     if (this.controller) {
-      return; // already connected
+      this.disconnect();
+      if (this.tokenProvider.getSessionVersion() !== sessionVersion) throw new AuthSessionChangedError();
+      if (this.controller) return;
     }
 
-    const fetchImpl: FetchLike = options.fetchImpl || fetch;
-    const collection = options.collection || '';
-    const url = this.buildUrl(collection);
-    const token = await this.tokenProvider.getToken();
-
-    this.controller = new AbortController();
-    this.setState('connecting', callbacks);
+    const controller = new AbortController();
+    this.controller = controller;
+    this.sessionVersion = sessionVersion;
+    const isCurrent = () => this.controller === controller && !controller.signal.aborted
+      && this.tokenProvider.getSessionVersion() === sessionVersion;
+    const assertCurrent = () => {
+      if (this.tokenProvider.getSessionVersion() !== sessionVersion) throw new AuthSessionChangedError();
+      if (this.controller !== controller || controller.signal.aborted) {
+        throw new DOMException('SSE connection disconnected', 'AbortError');
+      }
+    };
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let response: Response | undefined;
+    let failed = false;
 
     try {
-      const res = await fetchImpl(url, {
+      this.setState('connecting', callbacks);
+      assertCurrent();
+      const token = await this.tokenProvider.getToken();
+      assertCurrent();
+      const fetchImpl: FetchLike = options.fetchImpl || fetch;
+      response = await fetchImpl(this.buildUrl(options.collection || ''), {
         method: 'GET',
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        signal: this.controller.signal,
+        signal: controller.signal,
       });
+      assertCurrent();
+      if (!response.ok || !response.body) throw new Error(`SSE connection failed: ${response.status}`);
 
-      if (!res.ok || !res.body) {
-        throw new Error(`SSE connection failed: ${res.status}`);
-      }
-
+      reader = response.body.getReader();
       this.setState('connected', callbacks);
+      assertCurrent();
       callbacks.onConnect?.();
-
-      const reader = res.body.getReader();
+      assertCurrent();
       const decoder = new TextDecoder();
       let buffer = '';
 
       while (true) {
         const { value, done } = await reader.read();
+        assertCurrent();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         let idx = buffer.indexOf('\n\n');
         while (idx >= 0) {
+          assertCurrent();
           const chunk = buffer.slice(0, idx);
           buffer = buffer.slice(idx + 2);
-          this.processChunk(chunk, callbacks);
+          this.processChunk(chunk, callbacks, isCurrent);
+          assertCurrent();
           idx = buffer.indexOf('\n\n');
         }
       }
     } catch (error) {
-      this.setState('error', callbacks);
-      callbacks.onError?.(error as Error);
-      throw error;
+      failed = true;
+      const notificationVersion = this.tokenProvider.getSessionVersion();
+      const failure = notificationVersion === sessionVersion ? error : new AuthSessionChangedError();
+      if (this.controller === controller && !controller.signal.aborted) {
+        this.setState('error', callbacks);
+        if (this.controller === controller && !controller.signal.aborted
+          && this.tokenProvider.getSessionVersion() === notificationVersion) callbacks.onError?.(failure as Error);
+      }
+      throw failure;
     } finally {
-      this.controller = null;
-      this.setState('disconnected', callbacks);
-      callbacks.onDisconnect?.();
+      controller.abort();
+      try {
+        if (reader) await reader.cancel();
+        else if (response?.body) await response.body.cancel();
+      } catch (error) {
+        // Preserve the original authentication or transport failure when cancellation also fails.
+        if (!failed) throw error;
+      } finally {
+        reader?.releaseLock();
+        if (this.controller === controller) {
+          this.controller = null;
+          this.sessionVersion = null;
+          if (this.tokenProvider.getSessionVersion() === sessionVersion) {
+            this.setState('disconnected', callbacks);
+            if (!this.controller && this.tokenProvider.getSessionVersion() === sessionVersion) callbacks.onDisconnect?.();
+          } else {
+            this.state = 'disconnected';
+          }
+        }
+      }
     }
   }
 
-  private processChunk(chunk: string, callbacks: RealtimeCallbacks) {
+  private processChunk(chunk: string, callbacks: RealtimeCallbacks, isCurrent: () => boolean) {
     const dataLine = chunk.split('\n').find((l) => l.startsWith('data:'));
     if (!dataLine) return;
     const data = dataLine.slice(5).trim();
     if (!data) return;
     try {
       const msg: BaseMessage = JSON.parse(data);
-      this.handleMessage(msg, callbacks);
+      if (isCurrent()) this.handleMessage(msg, callbacks);
     } catch (err) {
-      callbacks.onError?.(err as Error);
+      if (isCurrent()) callbacks.onError?.(err as Error);
     }
   }
 

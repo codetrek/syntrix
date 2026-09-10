@@ -1,114 +1,204 @@
 import { describe, it, expect, mock } from 'bun:test';
-import axios, { AxiosError } from 'axios';
+import axios, { AxiosError, AxiosHeaders, InternalAxiosRequestConfig } from 'axios';
+import { AuthSessionChangedError, SyntrixError } from '../../api/errors';
 import { setupAuthInterceptor } from './interceptor';
+import { DefaultTokenProvider } from './provider';
 import { TokenProvider } from './types';
 
-describe('AuthInterceptor', () => {
-  it('should attach token to request', async () => {
-    const mockProvider = {
-      getToken: mock(async () => 'test-token'),
-      refreshToken: mock(async () => 'new-token'),
-      setToken: () => {},
-      setRefreshToken: () => {},
-    } as TokenProvider;
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+};
+const response = (config: InternalAxiosRequestConfig, status = 200) => ({
+  data: 'result', status, statusText: String(status), headers: {}, config,
+});
+const authFailure = (config: InternalAxiosRequestConfig, status = 401) =>
+  new AxiosError('Authentication failed', 'ERR_BAD_REQUEST', config, undefined, response(config, status));
+const fixture = () => {
+  let version = 0;
+  let token: string | null = 'A';
+  const provider: TokenProvider = {
+    getSessionVersion: () => version,
+    getToken: mock(async () => token),
+    refreshToken: mock(async () => { token = 'A-refreshed'; return token; }),
+    setToken: value => { version++; token = value; },
+    setRefreshToken: () => { version++; },
+  };
+  return { provider };
+};
 
-    const instance = axios.create();
-    // Mock adapter logic is tricky with axios instances directly in bun test without a library like axios-mock-adapter.
-    // Instead, we can inspect the interceptor chain or mock the internal request execution if possible.
-    // Or simpler: just verify the interceptor is registered and runs logic.
-
-    setupAuthInterceptor(instance, mockProvider);
-
-    // We can manually invoke the request interceptor
-    const reqInterceptor = (instance.interceptors.request as any).handlers[0].fulfilled;
-    const config = await reqInterceptor({ headers: {} });
-    expect(config.headers.Authorization).toBe('Bearer test-token');
+describe('AuthInterceptor session ownership', () => {
+  it('preserves the request session through a real Axios retry', async () => {
+    const { provider } = fixture();
+    const received: { token: unknown; version: unknown }[] = [];
+    const instance = axios.create({ adapter: async config => {
+      received.push({ token: config.headers.get('Authorization'), version: (config as any)._syntrixAuthSessionVersion });
+      if (received.length === 1) throw authFailure(config);
+      return response(config);
+    } });
+    setupAuthInterceptor(instance, provider);
+    expect((await instance.get('/document')).data).toBe('result');
+    expect(received.map(config => config.token)).toEqual(['Bearer A', 'Bearer A-refreshed']);
+    expect(received.map(config => config.version)).toEqual([0, 0]);
+    expect(provider.refreshToken).toHaveBeenCalledTimes(1);
   });
 
-  it('should retry on 401', async () => {
-    const mockProvider = {
-      getToken: mock(async () => 'old-token'),
-      refreshToken: mock(async () => 'refreshed-token'),
-      setToken: () => {},
-      setRefreshToken: () => {},
-    } as TokenProvider;
-
-    const instance = axios.create();
-    // Mock the instance itself to return success on retry
-    const mockRequest = mock(async (config) => ({ data: 'success' }));
-    // We can't easily replace the instance call inside the interceptor closure without more complex mocking.
-    // However, we can test the error interceptor logic directly.
-
-    setupAuthInterceptor(instance, mockProvider);
-    const errInterceptor = (instance.interceptors.response as any).handlers[0].rejected;
-
-    // Mock the axios instance call that happens inside the interceptor
-    // This is a bit hacky because `instance(config)` is called.
-    // We can spy on the instance if we wrap it or attach the interceptor to a mock.
-
-    // Let's try a different approach: pass a mock function as the axios instance?
-    // setupAuthInterceptor expects AxiosInstance which is a function + properties.
-
-    let retried = false;
-    const mockInstance: any = async (config: any) => {
-        retried = true;
-        return { data: 'retried-success' };
-    };
-    mockInstance.interceptors = {
-        request: { use: () => {} },
-        response: { use: () => {} }
-    };
-
-    // Re-setup with our mock instance
-    setupAuthInterceptor(mockInstance, mockProvider);
-
-    // But wait, setupAuthInterceptor calls `axiosInstance(config)`.
-    // So if we pass mockInstance, it should work.
-
-    // We need to manually trigger the error handler that was registered.
-    // Since we mocked `use`, we need to capture the handler.
-    let capturedErrorHandler: any;
-    mockInstance.interceptors.response.use = (success: any, error: any) => {
-        capturedErrorHandler = error;
-    };
-
-    setupAuthInterceptor(mockInstance, mockProvider);
-
-    const error: any = new Error('401');
-    error.response = { status: 401 };
-    error.config = { headers: {} };
-
-    const result = await capturedErrorHandler(error);
-
-    expect(mockProvider.refreshToken).toHaveBeenCalled();
-    expect(retried).toBe(true);
-    expect(result.data).toBe('retried-success');
-    expect(error.config.headers.Authorization).toBe('Bearer refreshed-token');
+  it('removes stale Authorization when there is no access token', async () => {
+    const provider = new DefaultTokenProvider({});
+    const adapter = mock(async (config: InternalAxiosRequestConfig) => {
+      expect(config.headers.has('Authorization')).toBe(false);
+      return response(config);
+    });
+    const instance = axios.create({ adapter, headers: { authorization: 'Bearer stale' } });
+    setupAuthInterceptor(instance, provider);
+    await instance.get('/public');
+    expect(adapter).toHaveBeenCalledTimes(1);
   });
 
-  it('should not retry if already retried', async () => {
-    const mockProvider = {
-        refreshToken: mock(async () => 'new'),
-    } as any;
-
-    const mockInstance: any = async () => {};
-    mockInstance.interceptors = { request: { use: () => {} }, response: { use: () => {} } };
-
-    let capturedErrorHandler: any;
-    mockInstance.interceptors.response.use = (s: any, e: any) => { capturedErrorHandler = e; };
-
-    setupAuthInterceptor(mockInstance, mockProvider);
-
-    const error: any = new Error('401');
-    error.response = { status: 401 };
-    error.config = { _retry: true }; // Already retried
-
-    try {
-        await capturedErrorHandler(error);
-        expect(true).toBe(false);
-    } catch (e) {
-        expect(e).toBe(error);
+  for (const status of [401, 403]) {
+    for (const alreadyRetried of [false, true]) {
+      it(`rejects an old ${status} after replacement, retry=${alreadyRetried}`, async () => {
+        const { provider } = fixture();
+        const entered = deferred<void>();
+        const finish = deferred<void>();
+        const adapter = mock(async (config: InternalAxiosRequestConfig) => {
+          entered.resolve();
+          await finish.promise;
+          throw authFailure(config, status);
+        });
+        const instance = axios.create({ adapter });
+        setupAuthInterceptor(instance, provider);
+        const result = instance.get('/document', { _retry: alreadyRetried } as any).catch(error => error);
+        await entered.promise;
+        provider.setToken('B');
+        finish.resolve();
+        expect(await result).toBeInstanceOf(AuthSessionChangedError);
+        expect(provider.refreshToken).not.toHaveBeenCalled();
+        expect(adapter).toHaveBeenCalledTimes(1);
+      });
     }
-    expect(mockProvider.refreshToken).not.toHaveBeenCalled();
+  }
+
+  for (const rejectToken of [false, true]) {
+    it(`checks session after a suspended token read, rejection=${rejectToken}`, async () => {
+      const { provider } = fixture();
+      const entered = deferred<void>();
+      const token = deferred<string>();
+      provider.getToken = async () => { entered.resolve(); return token.promise; };
+      const adapter = mock(async (config: InternalAxiosRequestConfig) => response(config));
+      const instance = axios.create({ adapter });
+      setupAuthInterceptor(instance, provider);
+      const result = instance.get('/document').catch(error => error);
+      await entered.promise;
+      provider.setToken('B');
+      if (rejectToken) token.reject(new Error('old token read failed'));
+      else token.resolve('A');
+      expect(await result).toBeInstanceOf(AuthSessionChangedError);
+      expect(adapter).not.toHaveBeenCalled();
+    });
+  }
+
+  for (const rejectRefresh of [false, true]) {
+    it(`rejects refresh from an invalidated request, rejection=${rejectRefresh}`, async () => {
+      const { provider } = fixture();
+      const entered = deferred<void>();
+      const refresh = deferred<string>();
+      provider.refreshToken = mock(async () => { entered.resolve(); return refresh.promise; });
+      const adapter = mock(async (config: InternalAxiosRequestConfig) => { throw authFailure(config); });
+      const instance = axios.create({ adapter });
+      setupAuthInterceptor(instance, provider);
+      const result = instance.get('/document').catch(error => error);
+      await entered.promise;
+      provider.setToken('B');
+      if (rejectRefresh) refresh.reject(new Error('old refresh failed'));
+      else refresh.resolve('A-refreshed');
+      expect(await result).toBeInstanceOf(AuthSessionChangedError);
+      expect(adapter).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  it('does not rebind the config when the session changes before retry admission', async () => {
+    const { provider } = fixture();
+    const adapter = mock(async (config: InternalAxiosRequestConfig) => { throw authFailure(config); });
+    const instance = axios.create({ adapter });
+    setupAuthInterceptor(instance, provider);
+    // Axios request interceptors run in reverse registration order. Change the
+    // session just before the retry re-enters our authentication interceptor.
+    instance.interceptors.request.use(config => {
+      if ((config as any)._retry) provider.setToken('B');
+      return config;
+    });
+    const result = await instance.get('/document').catch(error => error);
+    expect(result).toBeInstanceOf(AuthSessionChangedError);
+    expect(provider.refreshToken).toHaveBeenCalledTimes(1);
+    expect(adapter).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a request admitted during pending login after credentials are installed', async () => {
+    const originalPost = axios.post;
+    const login = deferred<any>();
+    const entered = deferred<void>();
+    const finish = deferred<void>();
+    const provider = new DefaultTokenProvider({ token: 'A', refreshToken: 'A-refresh' });
+    const refresh = mock(provider.refreshToken.bind(provider));
+    provider.refreshToken = refresh;
+    axios.post = mock(async () => login.promise) as any;
+    try {
+      const signingIn = provider.login('B', 'password');
+      const adapter = mock(async (config: InternalAxiosRequestConfig) => {
+        expect(config.headers.has('Authorization')).toBe(false);
+        entered.resolve();
+        await finish.promise;
+        throw authFailure(config);
+      });
+      const instance = axios.create({ adapter });
+      setupAuthInterceptor(instance, provider);
+      const result = instance.get('/document').catch(error => error);
+      await entered.promise;
+      login.resolve({ data: { access_token: 'B', refresh_token: 'B-refresh', expires_in: 60 } });
+      await signingIn;
+      finish.resolve();
+      expect(await result).toBeInstanceOf(AuthSessionChangedError);
+      expect(refresh).not.toHaveBeenCalled();
+      expect(adapter).toHaveBeenCalledTimes(1);
+    } finally {
+      axios.post = originalPost;
+      finish.resolve();
+    }
+  });
+
+  it('retains the existing single-retry rule within the same session', async () => {
+    const { provider } = fixture();
+    const adapter = mock(async (config: InternalAxiosRequestConfig) => { throw authFailure(config); });
+    const instance = axios.create({ adapter });
+    setupAuthInterceptor(instance, provider);
+    expect(await instance.get('/document').catch(error => error)).toBeInstanceOf(AxiosError);
+    expect(adapter).toHaveBeenCalledTimes(2);
+    expect(provider.refreshToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves a session invalidation error from a custom provider', async () => {
+    const { provider } = fixture();
+    const expected = new AuthSessionChangedError();
+    provider.refreshToken = async () => { throw expected; };
+    const instance = axios.create({ adapter: async config => { throw authFailure(config); } });
+    setupAuthInterceptor(instance, provider);
+    expect(await instance.get('/document').catch(error => error)).toBe(expected);
+  });
+
+  it('preserves non-authentication response handling', async () => {
+    const { provider } = fixture();
+    const instance = axios.create({ adapter: async config => {
+      throw new AxiosError('Rate limited', 'ERR_BAD_REQUEST', config, undefined, {
+        ...response(config, 429), headers: new AxiosHeaders({ 'retry-after': '3' }),
+      });
+    } });
+    setupAuthInterceptor(instance, provider);
+    const error = await instance.get('/document').catch(error => error);
+    expect(error).toBeInstanceOf(SyntrixError);
+    expect(error.retryAfter).toBe(3);
+    expect(provider.refreshToken).not.toHaveBeenCalled();
   });
 });

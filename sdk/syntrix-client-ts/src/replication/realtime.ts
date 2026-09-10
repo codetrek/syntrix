@@ -1,4 +1,5 @@
 import { TokenProvider } from '../internal/auth/types';
+import { AuthSessionChangedError } from '../api/errors';
 
 // Message types matching server protocol
 export const MessageType = {
@@ -79,6 +80,7 @@ interface Subscription {
 }
 
 interface ConnectionAttempt {
+  sessionVersion: number;
   socket: WebSocket | null;
   promise: Promise<void>;
   resolve: () => void;
@@ -140,10 +142,13 @@ export class RealtimeClient {
 
   private invoke<T extends unknown[]>(callback: ((...args: T) => void) | undefined, args: T): void {
     const lifecycle = this.lifecycle;
+    const sessionVersion = this.tokenProvider.getSessionVersion();
     try {
       callback?.(...args);
     } catch (error) {
-      if (this.isCurrentLifecycle(lifecycle)) this.reportError(this.asError(error), null);
+      if (this.isCurrentLifecycle(lifecycle) && this.tokenProvider.getSessionVersion() === sessionVersion) {
+        this.reportError(this.asError(error), null);
+      }
     }
   }
 
@@ -162,6 +167,9 @@ export class RealtimeClient {
 
   private captureErrorNotification(error: Error, target?: string | null): () => void {
     const lifecycle = this.lifecycle;
+    const sessionVersion = this.tokenProvider.getSessionVersion();
+    const isCurrent = () => this.isCurrentLifecycle(lifecycle)
+      && this.tokenProvider.getSessionVersion() === sessionVersion;
     const globalError = this.callbacks.onError;
     const subscriptions = target === undefined
       ? [...this.subscriptions.entries()]
@@ -169,12 +177,12 @@ export class RealtimeClient {
     return () => {
       let handled = false;
       const notify = (callback: ((error: Error) => void) | undefined) => {
-        if (!callback || !this.isCurrentLifecycle(lifecycle)) return;
+        if (!callback || !isCurrent()) return;
         handled = true;
         try {
           callback(error);
         } catch (callbackError) {
-          if (this.isCurrentLifecycle(lifecycle)) {
+          if (isCurrent()) {
             console.error('[Realtime] Error callback failed:', callbackError);
           }
         }
@@ -183,22 +191,24 @@ export class RealtimeClient {
         if (this.subscriptions.get(id) === sub) notify(sub.callbacks.onError);
       }
       if (this.callbacks.onError === globalError) notify(globalError);
-      if (!handled && this.isCurrentLifecycle(lifecycle)) console.error('[Realtime]', error);
+      if (!handled && isCurrent()) console.error('[Realtime]', error);
     };
   }
 
   connect(): Promise<void> {
     if (this.disposed) return Promise.reject(new Error('Realtime client has been disposed'));
+    const sessionVersion = this.tokenProvider.getSessionVersion();
     this.clearReconnectTimer();
     this.reconnectEnabled = true;
-    if (this.attempt) return this.attempt.promise;
+    if (this.attempt?.sessionVersion === sessionVersion) return this.attempt.promise;
+    if (this.attempt) this.releaseAttempt(this.attempt, new AuthSessionChangedError());
     this.lifecycle++;
 
     let resolve!: () => void;
     let reject!: (error: Error) => void;
     const promise = new Promise<void>((res, rej) => { resolve = res; reject = rej; });
     const attempt: ConnectionAttempt = {
-      socket: null, promise, resolve, reject,
+      sessionVersion, socket: null, promise, resolve, reject,
       authenticated: false, authId: null, authRetryAttempted: false,
     };
     this.attempt = attempt;
@@ -206,18 +216,18 @@ export class RealtimeClient {
       this.fail(attempt, new Error('Realtime connection or authentication timed out'), true);
     }, this.activityTimeoutMs);
     this.setState('connecting');
-    if (this.attempt !== attempt) return promise;
+    if (!this.ensureSession(attempt)) return promise;
 
     try {
       const socket = new WebSocket(this.wsUrl);
       attempt.socket = socket;
       socket.onopen = () => {
-        if (this.attempt !== attempt) return;
+        if (!this.ensureSession(attempt)) return;
         this.lastMessageTime = Date.now();
         void this.authenticate(attempt, false);
       };
       socket.onmessage = (event) => {
-        if (this.attempt !== attempt) return;
+        if (!this.ensureSession(attempt)) return;
         this.lastMessageTime = Date.now();
         let msg: BaseMessage;
         try {
@@ -240,10 +250,11 @@ export class RealtimeClient {
 
   private async authenticate(attempt: ConnectionAttempt, refresh: boolean): Promise<void> {
     try {
+      if (!this.ensureSession(attempt)) return;
       const token = refresh
         ? await this.tokenProvider.refreshToken()
         : await this.tokenProvider.getToken();
-      if (this.attempt !== attempt) return;
+      if (!this.ensureSession(attempt)) return;
       if (!token) {
         this.fail(attempt, new Error('Realtime authentication requires a token'), false);
         return;
@@ -258,16 +269,31 @@ export class RealtimeClient {
     }
   }
 
+  private ensureSession(attempt: ConnectionAttempt): boolean {
+    if (this.attempt !== attempt) return false;
+    if (this.tokenProvider.getSessionVersion() !== attempt.sessionVersion) {
+      this.fail(attempt, new AuthSessionChangedError(), false);
+      return false;
+    }
+    return true;
+  }
+
   private fail(attempt: ConnectionAttempt, error: Error, retry: boolean): void {
     if (this.attempt !== attempt) return;
+    if (this.tokenProvider.getSessionVersion() !== attempt.sessionVersion) {
+      error = new AuthSessionChangedError();
+      retry = false;
+    }
     const lifecycle = this.lifecycle;
+    const notificationVersion = this.tokenProvider.getSessionVersion();
     const reportError = this.captureErrorNotification(error);
     this.releaseAttempt(attempt, error);
     if (!retry) this.reconnectEnabled = false;
-    this.scheduleReconnect();
+    this.scheduleReconnect(attempt.sessionVersion);
     this.setState('disconnected');
     reportError();
-    if (this.isCurrentLifecycle(lifecycle) && !this.attempt) this.invoke(this.callbacks.onDisconnect, []);
+    if (this.isCurrentLifecycle(lifecycle) && !this.attempt
+      && this.tokenProvider.getSessionVersion() === notificationVersion) this.invoke(this.callbacks.onDisconnect, []);
   }
 
   private releaseAttempt(attempt: ConnectionAttempt, error: Error): void {
@@ -296,7 +322,7 @@ export class RealtimeClient {
     this.reconnectTimer = null;
   }
 
-  private scheduleReconnect(): void {
+  private scheduleReconnect(sessionVersion: number): void {
     if (!this.reconnectEnabled || this.disposed || this.reconnectAttempts >= this.maxReconnectAttempts) return;
     this.reconnectAttempts++;
     const baseDelay = this.reconnectDelay * 2 ** (this.reconnectAttempts - 1);
@@ -304,6 +330,11 @@ export class RealtimeClient {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (!this.reconnectEnabled || this.disposed || this.attempt) return;
+      if (this.tokenProvider.getSessionVersion() !== sessionVersion) {
+        this.reconnectEnabled = false;
+        this.reportError(new AuthSessionChangedError());
+        return;
+      }
       // Connection failures are reported by fail, including automatic attempts.
       void this.connect().catch(() => {});
     }, delay);
@@ -311,12 +342,14 @@ export class RealtimeClient {
 
   disconnect(): void {
     const lifecycle = ++this.lifecycle;
+    const sessionVersion = this.tokenProvider.getSessionVersion();
     this.reconnectEnabled = false;
     this.clearReconnectTimer();
     const attempt = this.attempt;
     if (attempt) this.releaseAttempt(attempt, new Error('Realtime connection disconnected'));
     this.setState('disconnected');
-    if (attempt && this.isCurrentLifecycle(lifecycle) && !this.attempt) this.invoke(this.callbacks.onDisconnect, []);
+    if (attempt && this.isCurrentLifecycle(lifecycle) && !this.attempt
+      && this.tokenProvider.getSessionVersion() === sessionVersion) this.invoke(this.callbacks.onDisconnect, []);
   }
 
   dispose(): void {
@@ -336,7 +369,7 @@ export class RealtimeClient {
   }
 
   private sendMessage(attempt: ConnectionAttempt, msg: BaseMessage): boolean {
-    if (this.attempt !== attempt || attempt.socket?.readyState !== WebSocket.OPEN) return false;
+    if (!this.ensureSession(attempt) || attempt.socket?.readyState !== WebSocket.OPEN) return false;
     try {
       attempt.socket.send(JSON.stringify(msg));
       return this.attempt === attempt;
@@ -347,6 +380,7 @@ export class RealtimeClient {
   }
 
   private handleMessage(attempt: ConnectionAttempt, msg: BaseMessage): void {
+    if (!this.ensureSession(attempt)) return;
     switch (msg.type) {
       case MessageType.AuthAck:
         if (attempt.authenticated || !attempt.authId || msg.id !== attempt.authId) return;
@@ -357,17 +391,19 @@ export class RealtimeClient {
         this.handshakeTimer = null;
         this.startActivityCheck(attempt);
         this.setState('connected');
-        if (this.attempt !== attempt) return;
+        if (!this.ensureSession(attempt)) return;
         for (const [id, sub] of this.subscriptions) this.sendSubscribe(attempt, id, sub);
-        if (this.attempt !== attempt) return;
+        if (!this.ensureSession(attempt)) return;
         attempt.resolve();
         this.invoke(this.callbacks.onConnect, []);
+        this.ensureSession(attempt);
         return;
       case MessageType.SubscribeAck: {
         const sub = msg.id ? this.subscriptions.get(msg.id) : undefined;
         if (!attempt.authenticated || !sub?.sent || sub.acknowledged || sub.failed) return;
         sub.acknowledged = true;
         this.invoke(sub.callbacks.onReady, []);
+        this.ensureSession(attempt);
         return;
       }
       case MessageType.Event:
@@ -377,12 +413,12 @@ export class RealtimeClient {
         if (!attempt.authenticated || !sub?.sent || sub.failed) return;
         if (msg.type === MessageType.Event) {
           this.invoke(sub.callbacks.onEvent, [msg.payload]);
-          if (this.attempt === attempt && this.subscriptions.get(subId) === sub) {
+          if (this.ensureSession(attempt) && this.subscriptions.get(subId) === sub) {
             this.invoke(this.callbacks.onEvent, [msg.payload]);
           }
         } else {
           this.invoke(sub.callbacks.onSnapshot, [msg.payload]);
-          if (this.attempt === attempt && this.subscriptions.get(subId) === sub) {
+          if (this.ensureSession(attempt) && this.subscriptions.get(subId) === sub) {
             this.invoke(this.callbacks.onSnapshot, [msg.payload]);
           }
         }

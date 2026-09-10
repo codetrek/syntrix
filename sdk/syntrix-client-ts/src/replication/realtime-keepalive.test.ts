@@ -1,5 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { DefaultTokenProvider } from '../internal/auth/provider';
+import { setupAuthInterceptor } from '../internal/auth/interceptor';
 import { SyntrixClient } from '../clients/syntrix-client';
+import { AuthSessionChangedError } from '../api/errors';
 import { TokenProvider } from '../internal/auth/types';
 import { BaseMessage, RealtimeClient, RealtimeClientOptions } from './realtime';
 
@@ -146,7 +150,7 @@ describe('Realtime subscription lifecycle', () => {
 
   const create = (options?: RealtimeClientOptions, provider?: Partial<TokenProvider>) => {
     const client = new RealtimeClient('ws://localhost/realtime/ws', {
-      getToken: async () => 'test-token', refreshToken: async () => 'fresh-token', ...provider,
+      getSessionVersion: () => 0, getToken: async () => 'test-token', refreshToken: async () => 'fresh-token', ...provider,
     } as TokenProvider, 'test-db', options);
     clients.push(client);
     return client;
@@ -161,6 +165,202 @@ describe('Realtime subscription lifecycle', () => {
     await pending;
     return ws;
   };
+
+  for (const phase of ['before open', 'token pending', 'auth acknowledgment'] as const) {
+    it(`rejects an authentication session changed during ${phase}`, async () => {
+      let session = 1;
+      const token = deferred<string>();
+      const getToken = mock(() => phase === 'token pending' ? token.promise : Promise.resolve('old-token'));
+      const client = create({ reconnectDelayMs: 10 }, { getSessionVersion: () => session, getToken });
+      client.subscribe(query);
+      const pending = client.connect();
+      const outcome = pending.then(() => undefined, error => error);
+      const ws = ControlledWebSocket.instances[0];
+      if (phase !== 'before open') {
+        ws.open();
+        await flush();
+      }
+      session++;
+      if (phase === 'before open') ws.open();
+      else if (phase === 'token pending') token.resolve('old-token');
+      else ws.authenticate();
+      await flush();
+      const error = await outcome;
+      expect(error).toBeInstanceOf(AuthSessionChangedError);
+      expect(error.code).toBe('AUTH_SESSION_CHANGED');
+      expect(ws.messages('subscribe')).toHaveLength(0);
+      if (phase === 'before open') expect(getToken).not.toHaveBeenCalled();
+      if (phase === 'token pending') expect(ws.messages('auth')).toHaveLength(0);
+      expect(ws.readyState).toBe(ControlledWebSocket.CLOSED);
+      await clock.advance(100);
+      expect(ControlledWebSocket.instances).toHaveLength(1);
+      expect(clock.timers.size).toBe(0);
+    });
+  }
+
+  it('does not refresh another session after an old authentication rejection', async () => {
+    let session = 1;
+    const refreshToken = mock(async () => 'new-session-token');
+    const client = create(undefined, { getSessionVersion: () => session, refreshToken });
+    const pending = client.connect();
+    const outcome = pending.then(() => undefined, error => error);
+    const ws = ControlledWebSocket.instances[0];
+    ws.open();
+    await flush();
+    session++;
+    ws.receive({ id: ws.messages('auth')[0].id, type: 'error',
+      payload: { code: 'unauthorized', message: 'invalid token' } });
+    expect(await outcome).toBeInstanceOf(AuthSessionChangedError);
+    expect(refreshToken).not.toHaveBeenCalled();
+    expect(ws.messages('auth')).toHaveLength(1);
+    expect(ws.readyState).toBe(ControlledWebSocket.CLOSED);
+  });
+
+  for (const result of ['resolve', 'reject'] as const) {
+    it(`rejects a session replaced while refresh is pending before its ${result}`, async () => {
+      let session = 1;
+      const refresh = deferred<string>();
+      const client = create(undefined, { getSessionVersion: () => session, refreshToken: () => refresh.promise });
+      const pending = client.connect();
+      const outcome = pending.then(() => undefined, error => error);
+      const ws = ControlledWebSocket.instances[0];
+      ws.open();
+      await flush();
+      ws.receive({ id: ws.messages('auth')[0].id, type: 'error',
+        payload: { code: 'unauthorized', message: 'invalid token' } });
+      session++;
+      if (result === 'resolve') refresh.resolve('old-session-refreshed-token');
+      else refresh.reject(new Error('old refresh failed'));
+      expect(await outcome).toBeInstanceOf(AuthSessionChangedError);
+      expect(ws.messages('auth')).toHaveLength(1);
+      expect(ws.readyState).toBe(ControlledWebSocket.CLOSED);
+      expect(clock.timers.size).toBe(0);
+    });
+  }
+
+  it('invalidates one shared HTTP and WebSocket refresh when the real provider logs out', async () => {
+    const onTokenRefresh = mock(() => {});
+    const onAuthError = mock(() => {});
+    const provider = new DefaultTokenProvider({
+      token: 'A', refreshToken: 'R1', onTokenRefresh, onAuthError,
+    }, 'https://localhost');
+    const refresh = deferred<{ data: { access_token: string; refresh_token: string } }>();
+    const originalPost = axios.post;
+    const post = mock(async (url: string, body: unknown) => {
+      if (url.endsWith('/refresh')) return refresh.promise;
+      expect(url).toBe('https://localhost/auth/v1/logout');
+      expect(body).toEqual({ refresh_token: 'R1' });
+      return { data: {} };
+    });
+    axios.post = post as typeof axios.post;
+    const refreshCalls = spyOn(provider, 'refreshToken');
+    try {
+      const client = new RealtimeClient('ws://localhost/realtime/ws', provider, 'test-db');
+      clients.push(client);
+      const wsResult = client.connect().then(() => undefined, error => error);
+      const ws = ControlledWebSocket.instances[0];
+      ws.open();
+      await flush();
+      expect(ws.messages('auth')[0].payload.token).toBe('A');
+      ws.receive({ id: ws.messages('auth')[0].id, type: 'error',
+        payload: { code: 'unauthorized', message: 'invalid token' } });
+      await flush();
+      expect(refreshCalls).toHaveBeenCalledTimes(1);
+
+      const adapter = mock(async (config: InternalAxiosRequestConfig) => {
+        expect(config.headers.get('Authorization')).toBe('Bearer A');
+        throw new AxiosError('Authentication failed', 'ERR_BAD_REQUEST', config, undefined, {
+          config, data: {}, headers: {}, status: 401, statusText: 'Unauthorized',
+        });
+      });
+      const http = axios.create({ adapter });
+      setupAuthInterceptor(http, provider);
+      const httpResult = http.get('/document').then(() => undefined, error => error);
+      await flush();
+      expect(refreshCalls).toHaveBeenCalledTimes(2);
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(post).toHaveBeenCalledWith('https://localhost/auth/v1/refresh', { refresh_token: 'R1' });
+
+      await provider.logout();
+      refresh.resolve({ data: { access_token: 'obsolete-access', refresh_token: 'obsolete-refresh' } });
+      expect(await httpResult).toBeInstanceOf(AuthSessionChangedError);
+      expect(await wsResult).toBeInstanceOf(AuthSessionChangedError);
+      expect(await provider.getToken()).toBeNull();
+      expect(provider.isAuthenticated()).toBe(false);
+      expect(onTokenRefresh).not.toHaveBeenCalled();
+      expect(onAuthError).not.toHaveBeenCalled();
+      expect(adapter).toHaveBeenCalledTimes(1);
+      expect(ws.messages('auth')).toHaveLength(1);
+      expect(ws.readyState).toBe(ControlledWebSocket.CLOSED);
+      expect(clock.timers.size).toBe(0);
+      expect(post).toHaveBeenCalledTimes(2);
+      await expect(provider.refreshToken()).rejects.toThrow('No refresh token available');
+    } finally {
+      refreshCalls.mockRestore();
+      axios.post = originalPost;
+    }
+  });
+
+  it('does not run a queued reconnect after its authentication session changes', async () => {
+    let session = 1;
+    const client = create({ reconnectDelayMs: 10 }, { getSessionVersion: () => session });
+    const first = await connect(client);
+    first.close();
+    session++;
+    await clock.advance(100);
+    expect(ControlledWebSocket.instances).toHaveLength(1);
+    expect(clock.timers.size).toBe(0);
+    expect(client.getState()).toBe('disconnected');
+  });
+
+  for (const authenticated of [false, true]) {
+    it(`explicit connect replaces a changed session with a ${authenticated ? 'previously authenticated' : 'pending'} attempt`, async () => {
+      let session = 1;
+      const client = create(undefined, {
+        getSessionVersion: () => session,
+        getToken: async () => `token-${session}`,
+      });
+      const oldPromise = client.connect();
+      const oldOutcome = oldPromise.then(() => undefined, error => error);
+      const oldSocket = ControlledWebSocket.instances[0];
+      oldSocket.open();
+      await flush();
+      if (authenticated) {
+        oldSocket.authenticate();
+        await oldPromise;
+      }
+      session++;
+      const replacement = client.connect();
+      expect(replacement).not.toBe(oldPromise);
+      expect(oldSocket.readyState).toBe(ControlledWebSocket.CLOSED);
+      expect(ControlledWebSocket.instances).toHaveLength(2);
+      const newSocket = ControlledWebSocket.instances[1];
+      newSocket.open();
+      await flush();
+      expect(newSocket.messages('auth')[0].payload.token).toBe('token-2');
+      newSocket.authenticate();
+      await replacement;
+      if (!authenticated) expect(await oldOutcome).toBeInstanceOf(AuthSessionChangedError);
+      expect(client.getState()).toBe('connected');
+    });
+  }
+
+  it('stops event dispatch when a subscription callback replaces the authentication session', async () => {
+    let session = 1;
+    const client = create(undefined, { getSessionVersion: () => session });
+    const global = mock(() => {});
+    const onEvent = mock(() => { session++; });
+    const id = client.subscribe(query, { onEvent });
+    client.on('onEvent', global);
+    const ws = await connect(client);
+    ws.receive(event(id));
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(global).not.toHaveBeenCalled();
+    ws.receive(event(id));
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(ws.readyState).toBe(ControlledWebSocket.CLOSED);
+    expect(clock.timers.size).toBe(0);
+  });
 
   it('shares a handshake and gates all registrations on matching authentication acknowledgment', async () => {
     const client = create();
