@@ -430,8 +430,11 @@ func TestBuffer_DeleteBefore(t *testing.T) {
 		keys = append(keys, evt.BufferKey())
 	}
 
-	// Wait for batch flush
-	time.Sleep(20 * time.Millisecond)
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		count, err := buf.Count()
+		assert.NoError(collect, err)
+		assert.Equal(collect, len(keys), count)
+	}, time.Second, time.Millisecond, "queued events must be persisted before deletion")
 
 	// Delete before the 3rd key (index 2)
 	deleted, err := buf.DeleteBefore(keys[2])
@@ -492,8 +495,11 @@ func TestBuffer_CountAfter(t *testing.T) {
 		keys = append(keys, evt.BufferKey())
 	}
 
-	// Wait for batch flush
-	time.Sleep(20 * time.Millisecond)
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		count, err := buf.Count()
+		assert.NoError(collect, err)
+		assert.Equal(collect, len(keys), count)
+	}, time.Second, time.Millisecond, "queued events must be persisted before counting by key")
 
 	// Count after empty key should return all
 	count, err := buf.CountAfter("")

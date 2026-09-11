@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/syntrixbase/syntrix/internal/core/storage"
 	"github.com/syntrixbase/syntrix/internal/indexer"
 	"github.com/syntrixbase/syntrix/internal/puller"
@@ -16,6 +18,7 @@ func TestIntegration_LargeDataset(t *testing.T) {
 	mockPullerSvc := newMockPuller(docCount + 100)
 	svc, ctx, cancel := setupIndexerService(t, mockPullerSvc)
 	defer cancel()
+	defer stopService(t, svc, mockPullerSvc)
 
 	// Generate 1000 documents with random timestamps
 	type docData struct {
@@ -39,17 +42,12 @@ func TestIntegration_LargeDataset(t *testing.T) {
 		mockPullerSvc.pushEvent(evt, fmt.Sprintf("p%d", i))
 	}
 
-	// Wait for events to be processed
-	time.Sleep(200 * time.Millisecond)
-
-	// Verify stats
-	stats, err := svc.Stats(ctx)
-	if err != nil {
-		t.Fatalf("failed to get stats: %v", err)
-	}
-	if stats.EventsApplied != docCount {
-		t.Errorf("expected %d events applied, got %d", docCount, stats.EventsApplied)
-	}
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		stats, err := svc.Stats(ctx)
+		if assert.NoError(c, err) {
+			assert.Equal(c, int64(docCount), stats.EventsApplied)
+		}
+	}, 5*time.Second, 10*time.Millisecond)
 
 	// Search with limit
 	plan := indexer.Plan{
@@ -77,8 +75,6 @@ func TestIntegration_LargeDataset(t *testing.T) {
 			t.Errorf("result[%d]: expected %s, got %s", i, expected, ref.ID)
 		}
 	}
-
-	stopService(t, svc, mockPullerSvc)
 }
 
 func TestIntegration_ConcurrentUpdates(t *testing.T) {
