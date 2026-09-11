@@ -8,6 +8,7 @@ import (
 
 	"github.com/syntrixbase/syntrix/pkg/model"
 	"github.com/zeebo/blake3"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 // ResolveReadOptions preserves default routing only when no other consistency is requested.
@@ -19,12 +20,28 @@ func ResolveReadOptions(opts []ReadOptions) (ReadOptions, error) {
 	if len(opts) == 1 {
 		resolved = opts[0]
 	}
+	if resolved.MaxBytes < 0 {
+		return ReadOptions{}, fmt.Errorf("read byte budget must not be negative")
+	}
 	switch resolved.Consistency {
 	case ReadDefault, ReadAuthoritative:
 		return resolved, nil
 	default:
 		return ReadOptions{}, fmt.Errorf("unsupported read consistency: %d", resolved.Consistency)
 	}
+}
+
+// StoredDocumentBytes defines the source read budget in BSON bytes, preserving
+// integer types and authoritative metadata. Missing result positions cost zero.
+func StoredDocumentBytes(doc *StoredDoc) (int64, error) {
+	if doc == nil {
+		return 0, nil
+	}
+	encoded, err := bson.Marshal(doc)
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(encoded)), nil
 }
 
 // LogicalDocumentID derives identity from stored metadata, which survives tombstones.

@@ -90,6 +90,35 @@ func TestTypedValueRoundTrip(t *testing.T) {
 	require.JSONEq(t, `{"type":"float64","value":0}`, string(zero))
 }
 
+func TestTypedValueEncodingCanonicalBytes(t *testing.T) {
+	for _, test := range []struct {
+		value any
+		wire  string
+	}{
+		{nil, `{"type":"null"}`},
+		{false, `{"type":"bool","value":false}`},
+		{true, `{"type":"bool","value":true}`},
+		{int64(0), `{"type":"int64","value":"0"}`},
+		{int64(math.MaxInt64), `{"type":"int64","value":"9223372036854775807"}`},
+		{int64(math.MinInt64), `{"type":"int64","value":"-9223372036854775808"}`},
+		{math.Copysign(0, -1), `{"type":"float64","value":0}`},
+		{math.SmallestNonzeroFloat64, `{"type":"float64","value":5e-324}`},
+		{float64(1e20), `{"type":"float64","value":100000000000000000000}`},
+		{float64(1e21), `{"type":"float64","value":1e+21}`},
+		{"<>&\u2028\u2029", `{"type":"string","value":"\u003c\u003e\u0026\u2028\u2029"}`},
+		{[]any{}, `{"type":"array","value":[]}`},
+		{map[string]any{}, `{"type":"object","value":{}}`},
+		{map[string]any{
+			"type": "int64", "value": "001",
+			"nested": []any{nil, false, int64(0), float64(0), "a\"\\\n"},
+		}, `{"type":"object","value":{"nested":{"type":"array","value":[{"type":"null"},{"type":"bool","value":false},{"type":"int64","value":"0"},{"type":"float64","value":0},{"type":"string","value":"a\"\\\n"}]},"type":{"type":"string","value":"int64"},"value":{"type":"string","value":"001"}}}`},
+	} {
+		encoded, err := EncodeTypedValue(test.value)
+		require.NoError(t, err)
+		require.Equal(t, test.wire, string(encoded), "%#v", test.value)
+	}
+}
+
 func TestTypedValueRejectsMalformedWire(t *testing.T) {
 	for _, input := range []string{
 		`null`, `[]`, `{}`, `{"type":"unknown","value":1}`, `{"type":"null","value":null}`,

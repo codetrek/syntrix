@@ -85,7 +85,14 @@ const (
 type ReadOptions struct {
 	Consistency ReadConsistency
 	ShowDeleted bool
+	// MaxBytes caps one read's populated result positions, including duplicate paths,
+	// using StoredDocumentBytes. Backend record overhead may be charged conservatively.
+	// Zero disables the cap. Exceeding a positive cap returns ErrReadBudget without
+	// partial results; implementations must enforce the cap before accumulating rows.
+	MaxBytes int64
 }
+
+var ErrReadBudget = errors.New("source read byte budget exceeded")
 
 // DocumentStore defines the interface for document storage operations
 type DocumentStore interface {

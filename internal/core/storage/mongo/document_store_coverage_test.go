@@ -2,6 +2,7 @@ package mongo
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -654,4 +655,77 @@ func TestDocumentStoreEnumerateCollections(t *testing.T) {
 		assert.EqualValues(t, 1, stats["nReturned"])
 		assert.LessOrEqual(t, stats["totalKeysExamined"].(int32), int32(1))
 	}
+}
+
+func TestDocumentStoreReadByteBudget(t *testing.T) {
+	env := setupTestEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store := NewDocumentStore(env.Client, env.DB, "bounded_data", "bounded_sys", time.Hour)
+	a := types.NewStoredDoc("app", "items", "a", map[string]interface{}{"body": strings.Repeat("a", 2048)})
+	b := types.NewStoredDoc("app", "sys/settings", "b", map[string]interface{}{"body": "system"})
+	require.NoError(t, store.Create(ctx, "app", a))
+	require.NoError(t, store.Create(ctx, "app", b))
+	aBytes, err := types.StoredDocumentBytes(&a)
+	require.NoError(t, err)
+	bBytes, err := types.StoredDocumentBytes(&b)
+	require.NoError(t, err)
+	for _, limit := range []int64{aBytes, aBytes - 1} {
+		doc, err := store.Get(ctx, "app", a.Fullpath, types.ReadOptions{Consistency: types.ReadAuthoritative, MaxBytes: limit})
+		if limit == aBytes {
+			require.NoError(t, err)
+			assert.Equal(t, a.Data, doc.Data)
+		} else {
+			assert.ErrorIs(t, err, types.ErrReadBudget)
+			assert.Nil(t, doc)
+		}
+	}
+	paths := []string{a.Fullpath, "items/missing", b.Fullpath, a.Fullpath}
+	total := 2*aBytes + bBytes
+	for _, limit := range []int64{total, total - 1} {
+		docs, err := store.GetMany(ctx, "app", paths, types.ReadOptions{Consistency: types.ReadAuthoritative, MaxBytes: limit})
+		if limit == total {
+			require.NoError(t, err)
+			require.Len(t, docs, 4)
+			assert.Equal(t, a.Fullpath, docs[0].Fullpath)
+			assert.Nil(t, docs[1])
+			assert.Equal(t, b.Fullpath, docs[2].Fullpath)
+			assert.Same(t, docs[0], docs[3])
+		} else {
+			assert.ErrorIs(t, err, types.ErrReadBudget)
+			assert.Nil(t, docs)
+		}
+	}
+	docs, err := store.GetMany(ctx, "app", []string{"items/missing"}, types.ReadOptions{MaxBytes: 1})
+	require.NoError(t, err)
+	assert.Equal(t, []*types.StoredDoc{nil}, docs)
+	require.NoError(t, store.Delete(ctx, "app", a.Fullpath, nil))
+	docs, err = store.GetMany(ctx, "app", []string{a.Fullpath}, types.ReadOptions{MaxBytes: 1})
+	require.NoError(t, err)
+	assert.Equal(t, []*types.StoredDoc{nil}, docs)
+	docs, err = store.GetMany(ctx, "app", []string{a.Fullpath}, types.ReadOptions{ShowDeleted: true, MaxBytes: 1})
+	assert.ErrorIs(t, err, types.ErrReadBudget)
+	assert.Nil(t, docs)
+	_, err = store.Get(ctx, "app", "items/missing", types.ReadOptions{MaxBytes: 1})
+	assert.ErrorIs(t, err, model.ErrNotFound)
+}
+
+func TestDocumentStoreReadBudgetChargesCanonicalMetadata(t *testing.T) {
+	env := setupTestEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store := NewDocumentStore(env.Client, env.DB, "bounded_data", "bounded_sys", time.Hour)
+	path := "items/a"
+	raw := bson.M{"_id": types.CalculateDatabase("app", path), "database": "app", "collection": "items", "fullpath": path, "version": int32(1)}
+	_, err := env.DB.Collection("bounded_data").InsertOne(ctx, raw)
+	require.NoError(t, err)
+	encoded, err := bson.Marshal(raw)
+	require.NoError(t, err)
+	opts := types.ReadOptions{MaxBytes: int64(len(encoded))}
+	doc, err := store.Get(ctx, "app", path, opts)
+	assert.ErrorIs(t, err, types.ErrReadBudget)
+	assert.Nil(t, doc)
+	docs, err := store.GetMany(ctx, "app", []string{path}, opts)
+	assert.ErrorIs(t, err, types.ErrReadBudget)
+	assert.Nil(t, docs)
 }

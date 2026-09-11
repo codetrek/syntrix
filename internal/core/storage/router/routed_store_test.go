@@ -847,7 +847,7 @@ func TestRoutedDocumentStoreGetManyReadOptions(t *testing.T) {
 						selected = otherPrimary
 					}
 				}
-				opts := types.ReadOptions{Consistency: consistency, ShowDeleted: true}
+				opts := types.ReadOptions{Consistency: consistency, ShowDeleted: true, MaxBytes: 1024}
 				doc := &types.StoredDoc{Deleted: true}
 				expected := []*types.StoredDoc{doc, doc, nil, doc}
 				selected.On("GetMany", ctx, database, paths, []types.ReadOptions{opts}).Return(expected, nil).Once()
@@ -868,7 +868,7 @@ func TestRoutedDocumentStoreGetManyReadOptions(t *testing.T) {
 
 func TestRoutedDocumentStoreGetManyErrors(t *testing.T) {
 	ctx := context.Background()
-	for _, opts := range [][]types.ReadOptions{{{}, {}}, {{Consistency: -1}}} {
+	for _, opts := range [][]types.ReadOptions{{{}, {}}, {{Consistency: -1}}, {{MaxBytes: -1}}} {
 		router := new(mockDocRouter)
 		_, err := NewRoutedDocumentStore(router).GetMany(ctx, "app", nil, opts...)
 		require.Error(t, err)
@@ -960,4 +960,21 @@ func TestRoutedDocumentStoreEnumerateCollections(t *testing.T) {
 	unsupported := NewRoutedDocumentStore(NewSingleDocumentRouter(new(mockDocumentStore))).(types.DocumentCollectionEnumerator)
 	_, err = unsupported.EnumerateCollections(ctx, "app", "", 1)
 	assert.ErrorContains(t, err, "does not support collection enumeration")
+}
+
+func TestRoutedDocumentStoreReadBudgetError(t *testing.T) {
+	ctx := context.Background()
+	primary, replica := new(mockDocumentStore), new(mockDocumentStore)
+	opts := types.ReadOptions{Consistency: types.ReadAuthoritative, ShowDeleted: true, MaxBytes: 1}
+	primary.On("Get", ctx, "app", "items/a", []types.ReadOptions{opts}).Return(nil, types.ErrReadBudget).Once()
+	primary.On("GetMany", ctx, "app", []string{"items/a", "items/b"}, []types.ReadOptions{opts}).Return(nil, types.ErrReadBudget).Once()
+	routed := NewRoutedDocumentStore(NewSplitDocumentRouter(primary, replica))
+	doc, err := routed.Get(ctx, "app", "items/a", opts)
+	assert.Nil(t, doc)
+	assert.ErrorIs(t, err, types.ErrReadBudget)
+	docs, err := routed.GetMany(ctx, "app", []string{"items/a", "items/b"}, opts)
+	assert.Nil(t, docs)
+	assert.ErrorIs(t, err, types.ErrReadBudget)
+	primary.AssertExpectations(t)
+	assert.Empty(t, replica.Calls)
 }

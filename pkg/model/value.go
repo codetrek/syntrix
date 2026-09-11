@@ -275,8 +275,8 @@ func EqualValues(a, b any) bool {
 }
 
 type typedValue struct {
-	Type  string          `json:"type"`
-	Value json.RawMessage `json:"value,omitempty"`
+	Type  string `json:"type"`
+	Value any    `json:"value,omitempty"`
 }
 
 // EncodeTypedValue tags every node, including objects, to avoid collisions with
@@ -286,54 +286,36 @@ func EncodeTypedValue(value any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return encodeTypedValue(normalized)
+	return json.Marshal(typedValueTree(normalized))
 }
 
-func encodeTypedValue(value any) ([]byte, error) {
-	node := typedValue{}
-	var payload any
+func typedValueTree(value any) typedValue {
 	switch v := value.(type) {
 	case nil:
-		node.Type = "null"
+		return typedValue{Type: "null"}
 	case bool:
-		node.Type, payload = "bool", v
+		return typedValue{Type: "bool", Value: v}
 	case string:
-		node.Type, payload = "string", v
+		return typedValue{Type: "string", Value: v}
 	case int64:
-		node.Type, payload = "int64", strconv.FormatInt(v, 10)
+		return typedValue{Type: "int64", Value: strconv.FormatInt(v, 10)}
 	case float64:
-		node.Type, payload = "float64", v
+		return typedValue{Type: "float64", Value: v}
 	case []any:
-		node.Type = "array"
-		items := make([]json.RawMessage, len(v))
+		items := make([]typedValue, len(v))
 		for i, item := range v {
-			encoded, err := encodeTypedValue(item)
-			if err != nil {
-				return nil, err
-			}
-			items[i] = encoded
+			items[i] = typedValueTree(item)
 		}
-		payload = items
+		return typedValue{Type: "array", Value: items}
 	case map[string]any:
-		node.Type = "object"
-		items := make(map[string]json.RawMessage, len(v))
+		items := make(map[string]typedValue, len(v))
 		for key, item := range v {
-			encoded, err := encodeTypedValue(item)
-			if err != nil {
-				return nil, err
-			}
-			items[key] = encoded
+			items[key] = typedValueTree(item)
 		}
-		payload = items
+		return typedValue{Type: "object", Value: items}
+	default:
+		panic(fmt.Sprintf("unexpected normalized value type %T", value))
 	}
-	if node.Type != "null" {
-		encoded, err := json.Marshal(payload)
-		if err != nil {
-			return nil, err
-		}
-		node.Value = encoded
-	}
-	return json.Marshal(node)
 }
 
 func DecodeTypedValue(data []byte) (any, error) {

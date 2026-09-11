@@ -66,12 +66,28 @@ func (m *documentStore) Get(ctx context.Context, database string, fullpath strin
 	if !readOpts.ShowDeleted {
 		filter["deleted"] = bson.M{"$ne": true}
 	}
-	err = collection.FindOne(ctx, filter).Decode(&doc)
+	result := collection.FindOne(ctx, filter)
+	if readOpts.MaxBytes > 0 {
+		raw, rawErr := result.Raw()
+		if rawErr == nil && int64(len(raw)) > readOpts.MaxBytes {
+			return nil, types.ErrReadBudget
+		}
+	}
+	err = result.Decode(&doc)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return nil, model.ErrNotFound
 		}
 		return nil, err
+	}
+	if readOpts.MaxBytes > 0 {
+		size, err := types.StoredDocumentBytes(&doc)
+		if err != nil {
+			return nil, err
+		}
+		if size > readOpts.MaxBytes {
+			return nil, types.ErrReadBudget
+		}
 	}
 
 	return &doc, nil
@@ -84,13 +100,16 @@ func (m *documentStore) GetMany(ctx context.Context, database string, paths []st
 	}
 	result := make([]*types.StoredDoc, len(paths))
 	groups := make(map[string][]string)
+	multiplicity := make(map[string]int64, len(paths))
 	ids := make([]string, len(paths))
 	for i, path := range paths {
 		ids[i] = types.CalculateDatabase(database, path)
+		multiplicity[ids[i]]++
 		name := m.getCollection(path).Name()
 		groups[name] = append(groups[name], ids[i])
 	}
 	documents := make(map[string]*types.StoredDoc, len(paths))
+	remainingBytes := readOpts.MaxBytes
 	for name, groupIDs := range groups {
 		collection := m.db.Collection(name)
 		if readOpts.Consistency == types.ReadAuthoritative {
@@ -110,9 +129,38 @@ func (m *documentStore) GetMany(ctx context.Context, database string, paths []st
 		err = func() error {
 			defer cursor.Close(ctx)
 			for cursor.Next(ctx) {
+				if readOpts.MaxBytes > 0 {
+					id, ok := cursor.Current.Lookup("_id").StringValueOK()
+					if !ok {
+						return fmt.Errorf("source read document has a non-string storage key")
+					}
+					count := multiplicity[id]
+					if count == 0 {
+						return fmt.Errorf("source read returned an unrequested document")
+					}
+					size := int64(len(cursor.Current))
+					if size > remainingBytes/count {
+						return types.ErrReadBudget
+					}
+					remainingBytes -= size * count
+				}
 				var doc types.StoredDoc
 				if err := cursor.Decode(&doc); err != nil {
 					return err
+				}
+				if readOpts.MaxBytes > 0 {
+					size, err := types.StoredDocumentBytes(&doc)
+					if err != nil {
+						return err
+					}
+					// Decoding typed metadata can expand its canonical encoding.
+					if extra := size - int64(len(cursor.Current)); extra > 0 {
+						count := multiplicity[doc.Id]
+						if extra > remainingBytes/count {
+							return types.ErrReadBudget
+						}
+						remainingBytes -= extra * count
+					}
 				}
 				documents[doc.Id] = &doc
 			}

@@ -76,6 +76,8 @@ func TestResolveReadOptions(t *testing.T) {
 		{name: "zero value", options: []ReadOptions{{}}},
 		{name: "explicit default", options: []ReadOptions{{Consistency: ReadDefault}}},
 		{name: "authoritative", options: []ReadOptions{{Consistency: ReadAuthoritative}}, expected: ReadOptions{Consistency: ReadAuthoritative}},
+		{name: "bounded authoritative", options: []ReadOptions{{Consistency: ReadAuthoritative, ShowDeleted: true, MaxBytes: 1024}}, expected: ReadOptions{Consistency: ReadAuthoritative, ShowDeleted: true, MaxBytes: 1024}},
+		{name: "negative byte budget", options: []ReadOptions{{MaxBytes: -1}}, invalid: true},
 		{name: "unknown consistency", options: []ReadOptions{{Consistency: 255}}, invalid: true},
 		{name: "duplicate default", options: []ReadOptions{{}, {}}, invalid: true},
 		{name: "duplicate authoritative", options: []ReadOptions{{Consistency: ReadAuthoritative}, {Consistency: ReadAuthoritative}}, invalid: true},
@@ -167,4 +169,22 @@ func TestCollectionEnumerationAdmission(t *testing.T) {
 			assert.Error(t, err)
 		})
 	}
+}
+
+func TestStoredDocumentBytes(t *testing.T) {
+	missing, err := StoredDocumentBytes(nil)
+	assert.NoError(t, err)
+	assert.Zero(t, missing)
+	doc := NewStoredDoc("app", "items", "a", map[string]interface{}{"number": int64(9007199254740993)})
+	size, err := StoredDocumentBytes(&doc)
+	assert.NoError(t, err)
+	assert.Positive(t, size)
+	doc.Data["number"] = int64(9007199254740992)
+	adjacentSize, err := StoredDocumentBytes(&doc)
+	assert.NoError(t, err)
+	assert.Equal(t, size, adjacentSize)
+	assert.Equal(t, int64(9007199254740992), doc.Data["number"])
+	doc.Data["invalid"] = make(chan int)
+	_, err = StoredDocumentBytes(&doc)
+	assert.Error(t, err)
 }
