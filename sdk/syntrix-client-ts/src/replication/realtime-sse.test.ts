@@ -42,6 +42,33 @@ const openStream = () => {
 };
 
 describe('RealtimeSSEClient', () => {
+  it('notifies once when an established HTTP SSE connection is explicitly disconnected', async () => {
+    const server = Bun.serve({
+      hostname: '127.0.0.1', port: 0,
+      fetch: () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new TextEncoder().encode(': connected\n\n')); },
+      }), { headers: { 'Content-Type': 'text/event-stream' } }),
+    });
+    const provider = { getSessionVersion: () => 0, getToken: async () => 'token' } as any;
+    const client = new RealtimeSSEClient(server.url.toString(), provider, 'test-db');
+    const connected = deferred<void>();
+    const onDisconnect = mock(() => {
+      expect(client.getState()).toBe('disconnected');
+      client.disconnect();
+    });
+    const pending = client.connect({ onConnect: () => connected.resolve(), onDisconnect }).catch(error => error);
+    try {
+      await connected.promise;
+      client.disconnect();
+      client.disconnect();
+      expect(await pending).toBeInstanceOf(DOMException);
+      expect(onDisconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      client.disconnect();
+      await server.stop(true);
+    }
+  });
+
   it('should emit events and snapshots from SSE stream', async () => {
     const eventMsg = `data: ${JSON.stringify({
       type: MessageType.Event,
@@ -72,6 +99,72 @@ describe('RealtimeSSEClient', () => {
 
     expect(eventSeen).toBe(true);
     expect(snapshotSeen).toBe(true);
+  });
+
+  it('preserves a replacement created by the disconnect notification and abort listeners', async () => {
+    const provider = { getSessionVersion: () => 0, getToken: async () => 'token' } as any;
+    const client = new RealtimeSSEClient('http://example.com', provider, 'test-db');
+    const oldStream = openStream();
+    const replacementStream = openStream();
+    const replacementFetch = mock(async () => replacementStream.response);
+    const replacementDisconnect = mock(() => {});
+    let replacement!: Promise<void>;
+    const onDisconnect = mock(() => {
+      replacement = client.connect({ onDisconnect: replacementDisconnect }, { fetchImpl: replacementFetch });
+    });
+    const original = client.connect({ onDisconnect }, { fetchImpl: async (_url, init) => {
+      init!.signal!.addEventListener('abort', () => {
+        oldStream.controller.close();
+        void client.connect({}, { fetchImpl: replacementFetch });
+      });
+      return oldStream.response;
+    } }).catch(error => error);
+    await flush();
+    client.disconnect();
+    expect(await original).toBeInstanceOf(DOMException);
+    await flush();
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(replacementFetch).toHaveBeenCalledTimes(1);
+    expect(client.getState()).toBe('connected');
+    replacementStream.controller.close();
+    await replacement;
+    expect(replacementDisconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('notifies once when disconnect is called from an established connection error callback', async () => {
+    const provider = { getSessionVersion: () => 0, getToken: async () => 'token' } as any;
+    const client = new RealtimeSSEClient('http://example.com', provider, 'test-db');
+    const stream = openStream();
+    const onDisconnect = mock(() => {});
+    const failure = new Error('Stream failed');
+    const pending = client.connect({ onError: () => client.disconnect(), onDisconnect }, {
+      fetchImpl: async () => stream.response,
+    }).catch(error => error);
+    await flush();
+    stream.controller.error(failure);
+    expect(await pending).toBe(failure);
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(stream.body.locked).toBe(false);
+  });
+
+  it('still aborts the old fetch when its disconnect notification throws', async () => {
+    const provider = { getSessionVersion: () => 0, getToken: async () => 'token' } as any;
+    const client = new RealtimeSSEClient('http://example.com', provider, 'test-db');
+    const stream = openStream();
+    const failure = new Error('Disconnect callback failed');
+    const onDisconnect = mock(() => { throw failure; });
+    const abort = mock(() => stream.controller.close());
+    const pending = client.connect({ onDisconnect }, { fetchImpl: async (_url, init) => {
+      init!.signal!.addEventListener('abort', abort);
+      return stream.response;
+    } }).catch(error => error);
+    await flush();
+    expect(() => client.disconnect()).toThrow(failure);
+    expect(await pending).toBeInstanceOf(DOMException);
+    client.disconnect();
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(stream.body.locked).toBe(false);
   });
 
   it('should surface fetch errors', async () => {
@@ -190,7 +283,7 @@ describe('RealtimeSSEClient', () => {
       else await expect(pending).rejects.toBeInstanceOf(DOMException);
       expect(onEvent).toHaveBeenCalledTimes(1);
       expect(onError).toHaveBeenCalledTimes(change === 'session' ? 1 : 0);
-      expect(onDisconnect).not.toHaveBeenCalled();
+      expect(onDisconnect).toHaveBeenCalledTimes(change === 'disconnect' ? 1 : 0);
     });
   }
 

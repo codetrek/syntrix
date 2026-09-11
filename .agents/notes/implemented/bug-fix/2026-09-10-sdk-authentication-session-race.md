@@ -55,6 +55,11 @@ checks remain necessary alongside session checks; the
 [realtime lifecycle decision](2026-09-07-sdk-realtime-subscription-lifecycle.md)
 owns subscription and transport lifetime.
 
+Explicitly disconnecting an established SSE connection in the same session emits
+`onDisconnect` once after detaching ownership and before aborting its fetch. This
+lets callbacks reconnect without obsolete cleanup affecting the replacement.
+Pending and obsolete-session connections remain silent during explicit teardown.
+
 ## Alternatives
 
 **Ignore late results only in WebSocket callbacks.** Credential mutation and

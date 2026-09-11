@@ -238,6 +238,9 @@ Notes:
 
 - SSE authentication is sent via Authorization header (sourced from the SDK token provider); query-string tokens are rejected.
 - `disconnect()` invalidates pending token acquisition and stops the active fetch.
+  For an established connection in the same session, it emits `onDisconnect`
+  exactly once before abort listeners can create a replacement. Pending or
+  obsolete-session connections do not emit this explicit-disconnect notification.
   Authentication, response, and read callbacks check both controller ownership and
   session version. Stale cleanup cannot clear a new connection, and stopped reads
   cannot deliver buffered events afterward.

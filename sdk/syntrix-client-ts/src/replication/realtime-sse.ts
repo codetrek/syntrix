@@ -12,6 +12,7 @@ export interface RealtimeSSEOptions {
 export class RealtimeSSEClient {
   private controller: AbortController | null = null;
   private sessionVersion: number | null = null;
+  private disconnectNotification: (() => void) | null = null;
   private state: ConnectionState = 'disconnected';
   private database: string;
 
@@ -25,10 +26,19 @@ export class RealtimeSSEClient {
 
   disconnect(): void {
     const controller = this.controller;
+    const notify = controller && !controller.signal.aborted
+      && this.sessionVersion === this.tokenProvider.getSessionVersion()
+      ? this.disconnectNotification : null;
     this.controller = null;
     this.sessionVersion = null;
+    this.disconnectNotification = null;
     this.state = 'disconnected';
-    controller?.abort();
+    // Notify before abort listeners can reconnect, after detaching the old owner.
+    try {
+      notify?.();
+    } finally {
+      controller?.abort();
+    }
   }
 
   async connect(callbacks: RealtimeCallbacks = {}, options: RealtimeSSEOptions = {}): Promise<void> {
@@ -70,6 +80,7 @@ export class RealtimeSSEClient {
       if (!response.ok || !response.body) throw new Error(`SSE connection failed: ${response.status}`);
 
       reader = response.body.getReader();
+      this.disconnectNotification = callbacks.onDisconnect ?? null;
       this.setState('connected', callbacks);
       assertCurrent();
       callbacks.onConnect?.();
@@ -115,6 +126,7 @@ export class RealtimeSSEClient {
         if (this.controller === controller) {
           this.controller = null;
           this.sessionVersion = null;
+          this.disconnectNotification = null;
           if (this.tokenProvider.getSessionVersion() === sessionVersion) {
             this.setState('disconnected', callbacks);
             if (!this.controller && this.tokenProvider.getSessionVersion() === sessionVersion) callbacks.onDisconnect?.();
