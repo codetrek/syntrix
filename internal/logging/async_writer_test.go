@@ -191,24 +191,112 @@ func TestAsyncWriter_ConcurrentWrites(t *testing.T) {
 }
 
 func TestAsyncWriter_GracefulClose(t *testing.T) {
-	w := &mockWriter{}
-	aw := NewAsyncWriter(w)
-
-	// Write messages
-	for i := 0; i < 50; i++ {
-		msg := []byte(fmt.Sprintf("message %d\n", i))
-		_, err := aw.Write(msg)
-		assert.NoError(t, err)
+	const batchSize, backlog = 4, 1025
+	w := &shutdownWriter{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		closed:  make(chan struct{}),
+	}
+	aw := NewAsyncWriterWithConfig(w, AsyncWriterConfig{
+		BufferSize:   backlog,
+		BatchSize:    batchSize,
+		FlushTimeout: time.Hour,
+	})
+	var releaseOnce, closeOnce sync.Once
+	var closeErr error
+	closeDone := make(chan struct{})
+	release := func() { releaseOnce.Do(func() { close(w.release) }) }
+	startClose := func() {
+		closeOnce.Do(func() {
+			go func() {
+				closeErr = aw.Close()
+				close(closeDone)
+			}()
+		})
+	}
+	t.Cleanup(func() {
+		release()
+		startClose()
+		select {
+		case <-closeDone:
+		case <-time.After(5 * time.Second):
+			t.Error("writer did not close during cleanup")
+		}
+	})
+	waitFor := func(ch <-chan struct{}, description string) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for %s", description)
+		}
+	}
+	var expected strings.Builder
+	writeMessage := func(i int) {
+		t.Helper()
+		message := fmt.Sprintf("message %d\n", i)
+		n, err := aw.Write([]byte(message))
+		require.NoError(t, err)
+		require.Equal(t, len(message), n)
+		expected.WriteString(message)
+	}
+	for i := 0; i < batchSize; i++ {
+		writeMessage(i)
+	}
+	waitFor(w.started, "the first underlying write")
+	for i := batchSize; i < batchSize+backlog; i++ {
+		writeMessage(i)
 	}
 
-	// Close immediately (should wait for all messages to be written)
-	err := aw.Close()
-	assert.NoError(t, err)
+	startClose()
+	waitFor(aw.stopChan, "the shutdown signal")
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned while the underlying write was blocked")
+	default:
+	}
+	select {
+	case <-w.closed:
+		t.Fatal("underlying writer closed before buffered writes completed")
+	default:
+	}
+	release()
+	waitFor(closeDone, "Close to finish")
+	require.NoError(t, closeErr)
+	require.NoError(t, w.gateErr)
+	assert.Equal(t, expected.String(), w.buf.String())
+	assert.Equal(t, expected.String(), w.contentAtClose)
+}
 
-	// Verify all messages were written
-	content := w.String()
-	count := strings.Count(content, "message")
-	assert.Equal(t, 50, count, "All messages should be written before close")
+type shutdownWriter struct {
+	buf            bytes.Buffer
+	firstWrite     sync.Once
+	started        chan struct{}
+	release        chan struct{}
+	closed         chan struct{}
+	gateErr        error
+	contentAtClose string
+}
+
+func (w *shutdownWriter) Write(p []byte) (int, error) {
+	w.firstWrite.Do(func() {
+		close(w.started)
+		select {
+		case <-w.release:
+		case <-time.After(5 * time.Second):
+			w.gateErr = fmt.Errorf("timed out waiting to release the first write")
+		}
+	})
+	if w.gateErr != nil {
+		return 0, w.gateErr
+	}
+	return w.buf.Write(p)
+}
+
+func (w *shutdownWriter) Close() error {
+	w.contentAtClose = w.buf.String()
+	close(w.closed)
+	return nil
 }
 
 func TestAsyncWriter_WriteAfterClose(t *testing.T) {
