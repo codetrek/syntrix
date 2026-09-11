@@ -124,7 +124,7 @@ func TestServer_ConvertEvent(t *testing.T) {
 			event: &events.StoreChangeEvent{
 				EventID:      "evt-456",
 				OpType:       events.StoreOperationUpdate,
-				FullDocument: &storage.StoredDoc{Data: map[string]any{"name": "test", "value": 123}},
+				FullDocument: &storage.StoredDoc{Id: storage.CalculateDatabase("database-1", "users/doc-1"), Database: "database-1", Collection: "users", Fullpath: "users/doc-1", Data: map[string]any{"name": "test", "value": 123}},
 			},
 			wantErr: false,
 		},

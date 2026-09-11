@@ -340,9 +340,9 @@ func TestCleaner_MaxSize(t *testing.T) {
 			},
 			// Add some payload to increase size
 			FullDocument: &storage.StoredDoc{
-				Id:       "doc-1",
-				Database: "database-1",
-				Data:     map[string]any{"data": "some payload"},
+				Id:       storage.CalculateDatabase("database-1", "testcoll/doc-1"),
+				Database: "database-1", Collection: "testcoll", Fullpath: "testcoll/doc-1",
+				Data: map[string]any{"data": "some payload"},
 			},
 		}
 		if err := buf.Write(context.Background(), evt, testToken); err != nil {

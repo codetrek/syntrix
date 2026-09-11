@@ -2,7 +2,6 @@
 package buffer
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -28,23 +27,22 @@ func (b *Buffer) Read(key string) (*events.StoreChangeEvent, error) {
 	}
 	defer closer.Close()
 
-	var evt events.StoreChangeEvent
-	if err := json.Unmarshal(value, &evt); err != nil {
+	evt, err := events.UnmarshalEvent(value)
+	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal event: %w", err)
 	}
 
-	return &evt, nil
+	return evt, nil
 }
 
 // ScanFrom returns an iterator starting from the given key (exclusive).
 // If afterKey is empty, starts from the beginning.
 func (b *Buffer) ScanFrom(afterKey string) (Iterator, error) {
 	b.mu.RLock()
+	defer b.mu.RUnlock()
 	if b.closed {
-		b.mu.RUnlock()
 		return nil, fmt.Errorf("buffer is closed")
 	}
-	b.mu.RUnlock()
 
 	iterOpts := &pebble.IterOptions{}
 	if afterKey != "" {
@@ -63,7 +61,7 @@ func (b *Buffer) ScanFrom(afterKey string) (Iterator, error) {
 	}
 
 	// Create snapshot iterator over pending events
-	snapshotIter := b.newSnapshotIterator(afterKey)
+	snapshotIter := b.newSnapshotIteratorLocked(afterKey)
 
 	// Return a deduplicating iterator that reads from DB then snapshot
 	return newDeduplicatingIterator(dbIter, snapshotIter), nil
@@ -85,7 +83,7 @@ func (b *Buffer) Head() (string, error) {
 	defer iter.Close()
 
 	for iter.Last(); iter.Valid(); iter.Prev() {
-		if isCheckpointKey(iter.Key()) {
+		if isMetadataKey(iter.Key()) {
 			continue
 		}
 		return string(iter.Key()), nil
@@ -109,7 +107,7 @@ func (b *Buffer) First() (string, error) {
 	defer iter.Close()
 
 	for iter.First(); iter.Valid(); iter.Next() {
-		if isCheckpointKey(iter.Key()) {
+		if isMetadataKey(iter.Key()) {
 			continue
 		}
 		return string(iter.Key()), nil
@@ -145,7 +143,7 @@ func (b *Buffer) Count() (int, error) {
 	defer iter.Close()
 
 	for iter.First(); iter.Valid(); iter.Next() {
-		if isCheckpointKey(iter.Key()) {
+		if isMetadataKey(iter.Key()) {
 			continue
 		}
 		count++
@@ -176,7 +174,7 @@ func (b *Buffer) CountAfter(afterKey string) (int, error) {
 	defer iter.Close()
 
 	for iter.First(); iter.Valid(); iter.Next() {
-		if isCheckpointKey(iter.Key()) {
+		if isMetadataKey(iter.Key()) {
 			continue
 		}
 		count++
@@ -189,4 +187,61 @@ func (b *Buffer) CountAfter(afterKey string) (int, error) {
 func (b *Buffer) Revalidate(ctx time.Duration) error {
 	// Not implemented for now, but placeholder if needed to check consistency
 	return nil
+}
+
+// ValidatePosition rejects a different buffer incarnation or unavailable history.
+func (b *Buffer) ValidatePosition(afterKey, lineage string) error {
+	b.retentionMu.Lock()
+	defer b.retentionMu.Unlock()
+	return b.validatePosition(afterKey, lineage)
+}
+
+func (b *Buffer) validatePosition(afterKey, lineage string) error {
+	b.mu.RLock()
+	closed := b.closed
+	b.mu.RUnlock()
+	if closed {
+		return fmt.Errorf("buffer is closed")
+	}
+	if lineage == "" || lineage != b.lineage {
+		return fmt.Errorf("buffer lineage changed; offline rebuild required")
+	}
+	floor, err := b.pruningFloor()
+	if err != nil {
+		return err
+	}
+	if floor != "" && afterKey < floor {
+		return fmt.Errorf("event history expired; offline rebuild required")
+	}
+	if afterKey == "" || afterKey == floor {
+		return nil
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	value, closer, err := b.db.Get([]byte(afterKey))
+	if err == nil {
+		_ = value
+		return closer.Close()
+	}
+	if err != pebble.ErrNotFound {
+		return err
+	}
+	for _, queue := range [][]*writeRequest{b.pending, b.flushing} {
+		for _, req := range queue {
+			if string(req.key) == afterKey {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("unknown event position; offline rebuild required")
+}
+
+// ScanFromLineage validates and opens the replay snapshot under the retention lock.
+func (b *Buffer) ScanFromLineage(afterKey, lineage string) (Iterator, error) {
+	b.retentionMu.Lock()
+	defer b.retentionMu.Unlock()
+	if err := b.validatePosition(afterKey, lineage); err != nil {
+		return nil, err
+	}
+	return b.ScanFrom(afterKey)
 }
