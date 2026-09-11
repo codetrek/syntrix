@@ -1,9 +1,11 @@
 package persist_store
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"log/slog"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +22,7 @@ type mockDB struct {
 	batches []*mockBatch
 
 	// Error injection
+	getErrKey   []byte
 	getErr      error
 	setErr      error
 	deleteErr   error
@@ -45,7 +48,7 @@ func (m *mockDB) Get(key []byte) (value []byte, closer io.Closer, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.getErr != nil {
+	if m.getErr != nil && (len(m.getErrKey) == 0 || bytes.HasPrefix(key, m.getErrKey)) {
 		return nil, nil, m.getErr
 	}
 
@@ -108,6 +111,7 @@ func (m *mockDB) NewIter(o *pebble.IterOptions) (Iterator, error) {
 		keys = append(keys, k)
 	}
 
+	sort.Strings(keys)
 	return &mockIterator{
 		keys:    keys,
 		data:    m.data,
@@ -770,64 +774,27 @@ func (m *mockDBWithCallCounter) Close() error {
 
 // ============ DeleteDatabase Error Path Tests ============
 
-// TestDeleteDatabaseListIndexesError tests DeleteDatabase when ListIndexes returns an error.
-func TestDeleteDatabaseListIndexesError(t *testing.T) {
+func TestDeleteDatabaseIteratorFailurePreservesError(t *testing.T) {
 	db := newMockDB()
 	ps := newMockPebbleStore(db)
-
-	// Inject error for NewIter to make ListIndexes fail
-	db.newIterErr = errors.New("mock list indexes iterator error")
-
-	err := ps.DeleteDatabase("testdb")
-
-	if err == nil {
-		t.Error("expected error from DeleteDatabase, got nil")
-	}
-	if err != nil && !contains(err.Error(), "failed to list indexes") {
-		t.Errorf("expected error to contain 'failed to list indexes', got: %v", err)
-	}
+	failure := errors.New("database deletion iterator failed")
+	db.newIterErr = failure
+	require.ErrorIs(t, ps.DeleteDatabase("testdb"), failure)
+	require.ErrorIs(t, ps.Flush(), failure)
 }
 
-// TestDeleteDatabaseDeleteIndexError tests DeleteDatabase when DeleteIndex fails but continues.
-func TestDeleteDatabaseDeleteIndexError(t *testing.T) {
+func TestDeleteDatabaseFailurePreservesAllNamespaces(t *testing.T) {
 	db := newMockDB()
 	ps := newMockPebbleStore(db)
-
-	// First, add some index entries so ListIndexes returns results
-	// Add a map entry: key = "m|{db}|{hash}", value = "{pattern}|{tmplID}"
-	pattern := "users/*"
-	tmplID := "tmpl1"
-	mapK := mapKey("testdb", pattern, tmplID)
-	db.data[string(mapK)] = []byte(pattern + "|" + tmplID)
-
-	// Also add an index entry so DeleteIndex has something to delete
-	orderKey := []byte{0x01, 0x02}
-	idxK := indexKey("testdb", pattern, tmplID, orderKey)
-	db.data[string(idxK)] = []byte("doc1")
-
-	// Add reverse entry
+	pattern, tmplID := "users/*", "tmpl1"
+	idxK := indexKey("testdb", pattern, tmplID, []byte{0x01, 0x02})
 	revK := reverseKey("testdb", pattern, tmplID, "doc1")
-	db.data[string(revK)] = orderKey
-
-	// Add state entry
-	stateK := stateKey("testdb", pattern, tmplID)
-	db.data[string(stateK)] = []byte("healthy")
-
-	// Now make DeleteIndex fail by injecting error on first NewIter after listing
-	// Use mockDBWithCallCounter to fail on second NewIter call (first is for ListIndexes)
-	dbWithCounter := &mockDBWithCallCounter{
-		mockDB:            db,
-		failNewIterOnCall: 2, // Fail on second call (DeleteIndex's deleteByPrefix)
-	}
-	ps.db = dbWithCounter
-
-	// DeleteDatabase should not return error even if DeleteIndex fails
-	err := ps.DeleteDatabase("testdb")
-
-	// Should not return error because DeleteIndex errors are logged but not propagated
-	if err != nil {
-		t.Errorf("expected no error from DeleteDatabase (errors should be logged), got: %v", err)
-	}
+	db.data[string(idxK)] = []byte("doc1")
+	db.data[string(revK)] = []byte{0x01, 0x02}
+	ps.db = &mockDBWithCallCounter{mockDB: db, failNewIterOnCall: 2}
+	require.Error(t, ps.DeleteDatabase("testdb"))
+	require.Contains(t, db.data, string(idxK))
+	require.Contains(t, db.data, string(revK))
 }
 
 // TestDeleteDatabaseEmptyDatabase tests DeleteDatabase on a database with no indexes.
@@ -904,4 +871,16 @@ func TestDeleteDatabaseWithDeleteIndexMultipleErrors(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected no error (errors should be logged), got: %v", err)
 	}
+}
+
+func (m *mockDB) NewSnapshot() Snapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	snapshot := newMockDB()
+	for key, value := range m.data {
+		snapshot.data[key] = append([]byte(nil), value...)
+	}
+	snapshot.newIterErr = m.newIterErr
+	snapshot.iterError = m.iterError
+	return snapshot
 }

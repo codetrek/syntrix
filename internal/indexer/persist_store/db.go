@@ -6,7 +6,14 @@ import (
 	"github.com/cockroachdb/pebble"
 )
 
+type Snapshot interface {
+	NewIter(o *pebble.IterOptions) (Iterator, error)
+	Close() error
+}
+
 type DB interface {
+	NewSnapshot() Snapshot
+
 	// Get gets the value for the given key. It returns ErrNotFound if the DB
 	// does not contain the key.
 	//
@@ -116,3 +123,17 @@ func (p *PebbleDB) NewBatch() Batch {
 func (p *PebbleDB) Close() error {
 	return p.db.Close()
 }
+
+func (p *PebbleDB) NewSnapshot() Snapshot {
+	return &pebbleSnapshot{snapshot: p.db.NewSnapshot()}
+}
+
+type pebbleSnapshot struct {
+	snapshot *pebble.Snapshot
+}
+
+func (s *pebbleSnapshot) NewIter(o *pebble.IterOptions) (Iterator, error) {
+	return s.snapshot.NewIter(o)
+}
+
+func (s *pebbleSnapshot) Close() error { return s.snapshot.Close() }
