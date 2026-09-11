@@ -338,44 +338,6 @@ func TestOrdersToProto(t *testing.T) {
 	})
 }
 
-func TestQueryToProto(t *testing.T) {
-	t.Run("simple query", func(t *testing.T) {
-		q := model.Query{
-			Collection: "users",
-			Limit:      100,
-		}
-		result := queryToProto(q)
-
-		assert.Equal(t, "users", result.Collection)
-		assert.Equal(t, int32(100), result.Limit)
-		assert.Empty(t, result.Filters)
-		assert.Empty(t, result.OrderBy)
-	})
-
-	t.Run("complex query", func(t *testing.T) {
-		q := model.Query{
-			Collection: "users",
-			Filters: model.Filters{
-				{Field: "age", Op: "gte", Value: 18},
-			},
-			OrderBy: []model.Order{
-				{Field: "createdAt", Direction: "desc"},
-			},
-			Limit:       50,
-			StartAfter:  "cursor123",
-			ShowDeleted: true,
-		}
-		result := queryToProto(q)
-
-		assert.Equal(t, "users", result.Collection)
-		assert.Len(t, result.Filters, 1)
-		assert.Len(t, result.OrderBy, 1)
-		assert.Equal(t, int32(50), result.Limit)
-		assert.Equal(t, "cursor123", result.StartAfter)
-		assert.True(t, result.ShowDeleted)
-	})
-}
-
 func TestPushChangeToProto(t *testing.T) {
 	for _, version := range []int64{-1, 0, 5, 9007199254740993, math.MaxInt64} {
 		t.Run(strconv.FormatInt(version, 10), func(t *testing.T) {

@@ -6,9 +6,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	pb "github.com/syntrixbase/syntrix/api/gen/query/v1"
 	grpctesting "github.com/syntrixbase/syntrix/api/gen/testing"
 	"github.com/syntrixbase/syntrix/internal/core/storage"
+	"github.com/syntrixbase/syntrix/internal/query/wire"
 	"github.com/syntrixbase/syntrix/pkg/model"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -248,85 +250,58 @@ func TestClient_DeleteDocument(t *testing.T) {
 }
 
 func TestClient_ExecuteQuery(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		mockClient := grpctesting.NewMockQueryServiceClient()
-		client := newTestClient(mockClient)
+	expected := model.QueryPage{Documents: []model.Document{{"id": "doc1", "version": int64(9007199254740993), "age": int64(25)}}, EffectiveOrder: []model.Order{{Field: "age", Direction: "asc"}}}
+	cursor := "opaque-cursor"
+	expected.NextCursor = &cursor
+	q := model.Query{Collection: "users", Filters: model.Filters{{Field: "age", Op: model.OpGte, Value: int64(18)}}, OrderBy: expected.EffectiveOrder, Limit: 100, ShowDeleted: true}
+	mockClient := grpctesting.NewMockQueryServiceClient()
+	client := newTestClient(mockClient)
+	encoded, err := wire.EncodePage(expected)
+	require.NoError(t, err)
+	mockClient.On("ExecuteQuery", mock.Anything, mock.MatchedBy(func(req *pb.ExecuteQueryRequest) bool {
+		decoded, err := wire.DecodeQuery(req.Query)
+		return err == nil && req.WireVersion == wire.Version && req.Database == "database1" && assert.ObjectsAreEqual(q, decoded)
+	})).Return(encoded, nil).Twice()
+	page, err := client.ExecuteQueryPage(context.Background(), "database1", q)
+	require.NoError(t, err)
+	assert.Equal(t, expected, page)
+	docs, err := client.ExecuteQuery(context.Background(), "database1", q)
+	require.NoError(t, err)
+	assert.Equal(t, expected.Documents, docs)
+	mockClient.AssertExpectations(t)
+}
 
-		mockClient.On("ExecuteQuery", mock.Anything, mock.Anything).Return(&pb.ExecuteQueryResponse{
-			Documents: []*pb.Document{
-				{Id: "doc1", Collection: "users", Data: []byte(`{"name":"Alice"}`)},
-				{Id: "doc2", Collection: "users", Data: []byte(`{"name":"Bob"}`)},
-			},
-		}, nil)
-
-		docs, err := client.ExecuteQuery(context.Background(), "database1", model.Query{
-			Collection: "users",
-			Limit:      10,
+func TestClient_ExecuteQueryRejectsMalformedResponse(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		response *pb.ExecuteQueryResponse
+	}{
+		{"unknown version", &pb.ExecuteQueryResponse{WireVersion: 99}},
+		{"legacy response", &pb.ExecuteQueryResponse{Documents: []*pb.Document{{Id: "legacy", Data: []byte(`{"name":"Alice"}`)}}}},
+		{"plain document", &pb.ExecuteQueryResponse{WireVersion: wire.Version, Documents: []*pb.Document{{Id: "legacy", Data: []byte(`{"name":"Alice"}`)}}}},
+		{"invalid typed value", &pb.ExecuteQueryResponse{WireVersion: wire.Version, Documents: []*pb.Document{{Data: []byte(`{"type":"unknown","value":1}`)}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mockClient := grpctesting.NewMockQueryServiceClient()
+			mockClient.On("ExecuteQuery", mock.Anything, mock.Anything).Return(tc.response, nil).Once()
+			page, err := newTestClient(mockClient).ExecuteQueryPage(context.Background(), "database1", model.Query{Collection: "users"})
+			require.Error(t, err)
+			assert.Empty(t, page.Documents)
+			mockClient.AssertExpectations(t)
 		})
-		assert.NoError(t, err)
-		assert.Len(t, docs, 2)
-		assert.Equal(t, "doc1", docs[0]["id"])
-		assert.Equal(t, "doc2", docs[1]["id"])
-		mockClient.AssertExpectations(t)
-	})
+	}
+}
 
-	t.Run("unsupported indexed operator", func(t *testing.T) {
-		mockClient := grpctesting.NewMockQueryServiceClient()
-		client := newTestClient(mockClient)
-		message := `invalid query: operator "in" is not supported by indexed queries`
-		mockClient.On("ExecuteQuery", mock.Anything, mock.Anything).
-			Return(nil, status.Error(codes.InvalidArgument, message)).Once()
-
-		docs, err := client.ExecuteQuery(context.Background(), "database1", model.Query{
-			Collection: "users",
-			Filters:    model.Filters{{Field: "role", Op: model.OpIn, Value: []string{"admin"}}},
-		})
-
-		assert.Nil(t, docs)
-		assert.ErrorIs(t, err, model.ErrInvalidQuery)
-		assert.EqualError(t, err, message)
-		mockClient.AssertExpectations(t)
-	})
-
-	t.Run("empty results", func(t *testing.T) {
-		mockClient := grpctesting.NewMockQueryServiceClient()
-		client := newTestClient(mockClient)
-
-		mockClient.On("ExecuteQuery", mock.Anything, mock.Anything).Return(&pb.ExecuteQueryResponse{
-			Documents: []*pb.Document{},
-		}, nil)
-
-		docs, err := client.ExecuteQuery(context.Background(), "database1", model.Query{
-			Collection: "users",
-		})
-		assert.NoError(t, err)
-		assert.Empty(t, docs)
-	})
-
-	t.Run("with filters and order", func(t *testing.T) {
-		mockClient := grpctesting.NewMockQueryServiceClient()
-		client := newTestClient(mockClient)
-
-		mockClient.On("ExecuteQuery", mock.Anything, mock.Anything).Return(&pb.ExecuteQueryResponse{
-			Documents: []*pb.Document{
-				{Id: "doc1", Data: []byte(`{"age":25}`)},
-			},
-		}, nil)
-
-		docs, err := client.ExecuteQuery(context.Background(), "database1", model.Query{
-			Collection: "users",
-			Filters: model.Filters{
-				{Field: "age", Op: "gte", Value: 18},
-			},
-			OrderBy: []model.Order{
-				{Field: "age", Direction: "asc"},
-			},
-			Limit:       100,
-			ShowDeleted: true,
-		})
-		assert.NoError(t, err)
-		assert.Len(t, docs, 1)
-	})
+func TestClient_ExecuteQueryEmptyPage(t *testing.T) {
+	mockClient := grpctesting.NewMockQueryServiceClient()
+	encoded, err := wire.EncodePage(model.QueryPage{Documents: []model.Document{}, EffectiveOrder: []model.Order{}})
+	require.NoError(t, err)
+	mockClient.On("ExecuteQuery", mock.Anything, mock.Anything).Return(encoded, nil).Once()
+	page, err := newTestClient(mockClient).ExecuteQueryPage(context.Background(), "database1", model.Query{Collection: "users"})
+	require.NoError(t, err)
+	assert.NotNil(t, page.Documents)
+	assert.Nil(t, page.NextCursor)
+	mockClient.AssertExpectations(t)
 }
 
 func TestClient_Pull(t *testing.T) {

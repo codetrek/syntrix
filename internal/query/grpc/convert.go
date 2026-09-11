@@ -293,37 +293,6 @@ func protoToOrders(orders []*pb.OrderBy) []model.Order {
 }
 
 // ============================================================================
-// Query conversions
-// ============================================================================
-
-// queryToProto converts a model.Query to proto Query.
-func queryToProto(q model.Query) *pb.Query {
-	return &pb.Query{
-		Collection:  q.Collection,
-		Filters:     filtersToProto(q.Filters),
-		OrderBy:     ordersToProto(q.OrderBy),
-		Limit:       int32(q.Limit),
-		StartAfter:  q.StartAfter,
-		ShowDeleted: q.ShowDeleted,
-	}
-}
-
-// protoToQuery converts a proto Query to model.Query.
-func protoToQuery(q *pb.Query) model.Query {
-	if q == nil {
-		return model.Query{}
-	}
-	return model.Query{
-		Collection:  q.Collection,
-		Filters:     protoToFilters(q.Filters),
-		OrderBy:     protoToOrders(q.OrderBy),
-		Limit:       int(q.Limit),
-		StartAfter:  q.StartAfter,
-		ShowDeleted: q.ShowDeleted,
-	}
-}
-
-// ============================================================================
 // Replication conversions
 // ============================================================================
 

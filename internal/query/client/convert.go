@@ -227,22 +227,6 @@ func ordersToProto(orders []model.Order) []*pb.OrderBy {
 }
 
 // ============================================================================
-// Query conversions
-// ============================================================================
-
-// queryToProto converts a model.Query to proto Query.
-func queryToProto(q model.Query) *pb.Query {
-	return &pb.Query{
-		Collection:  q.Collection,
-		Filters:     filtersToProto(q.Filters),
-		OrderBy:     ordersToProto(q.OrderBy),
-		Limit:       int32(q.Limit),
-		StartAfter:  q.StartAfter,
-		ShowDeleted: q.ShowDeleted,
-	}
-}
-
-// ============================================================================
 // Push change conversion
 // ============================================================================
 

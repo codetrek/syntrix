@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	pb "github.com/syntrixbase/syntrix/api/gen/query/v1"
 	"github.com/syntrixbase/syntrix/internal/core/storage"
 	"github.com/syntrixbase/syntrix/pkg/model"
@@ -51,6 +52,14 @@ func (m *MockService) PatchDocument(ctx context.Context, database string, data m
 func (m *MockService) DeleteDocument(ctx context.Context, database string, path string, pred model.Filters) error {
 	args := m.Called(ctx, database, path, pred)
 	return args.Error(0)
+}
+
+func (m *MockService) ExecuteQueryPage(ctx context.Context, database string, q model.Query) (model.QueryPage, error) {
+	args := m.Called(ctx, database, q)
+	if args.Get(0) == nil {
+		return model.QueryPage{}, args.Error(1)
+	}
+	return args.Get(0).(model.QueryPage), args.Error(1)
 }
 
 func (m *MockService) ExecuteQuery(ctx context.Context, database string, q model.Query) ([]model.Document, error) {
@@ -254,10 +263,11 @@ func TestServer_ExecuteQuery(t *testing.T) {
 			{"id": "doc1", "name": "First"},
 			{"id": "doc2", "name": "Second"},
 		}
-		mockSvc.On("ExecuteQuery", mock.Anything, "database1", mock.AnythingOfType("model.Query")).Return(docs, nil)
+		mockSvc.On("ExecuteQueryPage", mock.Anything, "database1", mock.AnythingOfType("model.Query")).Return(model.QueryPage{Documents: docs}, nil)
 
 		resp, err := server.ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{
-			Database: "database1",
+			Database:    "database1",
+			WireVersion: 2,
 			Query: &pb.Query{
 				Collection: "docs",
 				Limit:      10,
@@ -273,11 +283,12 @@ func TestServer_ExecuteQuery(t *testing.T) {
 		server := NewServer(mockSvc)
 
 		queryErr := fmt.Errorf("%w: operator %q is not supported by indexed queries", model.ErrInvalidQuery, "in")
-		mockSvc.On("ExecuteQuery", mock.Anything, "database1", mock.AnythingOfType("model.Query")).Return(nil, queryErr)
+		mockSvc.On("ExecuteQueryPage", mock.Anything, "database1", mock.AnythingOfType("model.Query")).Return(nil, queryErr)
 
 		resp, err := server.ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{
-			Database: "database1",
-			Query:    &pb.Query{Collection: ""},
+			Database:    "database1",
+			WireVersion: 2,
+			Query:       &pb.Query{Collection: ""},
 		})
 
 		assert.Nil(t, resp)
@@ -396,4 +407,26 @@ func TestStatusToError(t *testing.T) {
 		assert.Error(t, result)
 		assert.Contains(t, result.Error(), "service unavailable")
 	})
+}
+
+type documentOnlyService struct{ Service }
+
+func TestServer_ExecuteQueryRequiresPageService(t *testing.T) {
+	service := new(MockService)
+	response, err := NewServer(documentOnlyService{Service: service}).ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{WireVersion: 2, Database: "database1", Query: &pb.Query{Collection: "users"}})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	assert.Nil(t, response)
+	service.AssertNotCalled(t, "ExecuteQuery", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestServer_ExecuteQueryRejectsUnsupportedVersion(t *testing.T) {
+	for _, version := range []uint32{0, 1, 3} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			service := new(MockService)
+			response, err := NewServer(service).ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{WireVersion: version, Database: "database1", Query: &pb.Query{Collection: "users"}})
+			require.Equal(t, codes.InvalidArgument, status.Code(err))
+			assert.Nil(t, response)
+			service.AssertNotCalled(t, "ExecuteQueryPage", mock.Anything, mock.Anything, mock.Anything)
+		})
+	}
 }
