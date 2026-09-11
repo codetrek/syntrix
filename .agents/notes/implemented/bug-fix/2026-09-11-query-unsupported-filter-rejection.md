@@ -63,8 +63,10 @@ The existing explicit Store routes remain the only exceptions.
   operator-type change. Existing supported translations and index selection
   behavior remain subject to their current limitations.
 - This check does not establish correct execution for every conjunction of
-  otherwise supported operators. Full operator semantics, residual filtering,
-  ordering, and pagination remain owned by the linked proposal.
+  otherwise supported operators. [Same-field intersection](2026-09-11-indexed-filter-intersection.md)
+  owns repeated equality and range conditions on usable index fields. Full
+  operator semantics, residual filtering, ordering, and pagination remain owned
+  by the linked proposal.
 - Adding the missing operators still requires the execution and index work
   recorded there. Keeping the shared operator vocabulary and explicit planner
   error preserves the ability to add a strategy without changing other filter

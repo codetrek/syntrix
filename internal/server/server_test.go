@@ -9,6 +9,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 func TestNew(t *testing.T) {
@@ -141,32 +147,86 @@ func TestServer_HTTPMux(t *testing.T) {
 	assert.Equal(t, srv.httpMux, mux)
 }
 
+type blockingHealthServer struct {
+	healthpb.UnimplementedHealthServer
+	entered  chan struct{}
+	finished chan error
+}
+
+func (s *blockingHealthServer) Check(ctx context.Context, _ *healthpb.HealthCheckRequest) (*healthpb.HealthCheckResponse, error) {
+	close(s.entered)
+	<-ctx.Done()
+	s.finished <- ctx.Err()
+	return nil, status.FromContextError(ctx.Err()).Err()
+}
+
 func TestServer_Stop_ContextTimeout(t *testing.T) {
-	// Test Stop with an already cancelled context to trigger timeout path
-	cfg := Config{
-		Host:     "localhost",
-		HTTPPort: 0,
-		GRPCPort: 0,
+	srv := New(Config{GRPCMaxConcurrent: 1}, nil).(*serverImpl)
+	t.Cleanup(srv.grpcServer.Stop)
+
+	health := &blockingHealthServer{
+		entered:  make(chan struct{}),
+		finished: make(chan error, 1),
 	}
-	srv := New(cfg, nil)
-	require.NotNil(t, srv)
+	healthpb.RegisterHealthServer(srv.grpcServer, health)
+	listener := bufconn.Listen(1024 * 1024)
+	t.Cleanup(func() { _ = listener.Close() })
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- srv.grpcServer.Serve(listener) }()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Start server
+	conn, err := grpc.NewClient("passthrough:///shutdown-test",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return listener.DialContext(ctx)
+		}),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	callCtx, cancelCall := context.WithCancel(context.Background())
+	t.Cleanup(cancelCall)
+	callDone := make(chan error, 1)
 	go func() {
-		_ = srv.Start(ctx)
+		_, err := healthpb.NewHealthClient(conn).Check(callCtx, &healthpb.HealthCheckRequest{})
+		callDone <- err
 	}()
-	time.Sleep(100 * time.Millisecond)
 
-	// Stop with immediate timeout
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
-	defer stopCancel()
-	time.Sleep(5 * time.Millisecond) // Let timeout expire
+	watchdog, cancelWatchdog := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelWatchdog()
+	select {
+	case <-health.entered:
+	case <-watchdog.Done():
+		t.Fatal("RPC handler did not start")
+	}
 
-	_ = srv.Stop(stopCtx)
-	cancel()
+	// An active RPC keeps graceful shutdown pending until forced shutdown cancels it.
+	stopCtx, cancelStop := context.WithCancel(context.Background())
+	cancelStop()
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- srv.Stop(stopCtx) }()
+	select {
+	case err := <-stopDone:
+		require.NoError(t, err)
+	case <-watchdog.Done():
+		t.Fatal("Stop did not interrupt the active RPC")
+	}
+	select {
+	case err := <-health.finished:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-watchdog.Done():
+		t.Fatal("RPC handler was not canceled")
+	}
+	select {
+	case err := <-callDone:
+		require.Equal(t, codes.Unavailable, status.Code(err))
+	case <-watchdog.Done():
+		t.Fatal("RPC client did not return")
+	}
+	select {
+	case err := <-serveDone:
+		require.NoError(t, err)
+	case <-watchdog.Done():
+		t.Fatal("gRPC server did not stop")
+	}
 }
 
 func TestServer_AuthRateLimiter(t *testing.T) {
