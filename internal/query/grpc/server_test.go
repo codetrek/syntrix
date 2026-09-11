@@ -10,7 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 	pb "github.com/syntrixbase/syntrix/api/gen/query/v1"
 	"github.com/syntrixbase/syntrix/internal/core/storage"
+	"github.com/syntrixbase/syntrix/internal/indexer"
 	"github.com/syntrixbase/syntrix/pkg/model"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -358,6 +360,8 @@ func TestErrorToStatus(t *testing.T) {
 		{"exists", model.ErrExists, codes.AlreadyExists},
 		{"invalid query", model.ErrInvalidQuery, codes.InvalidArgument},
 		{"permission denied", model.ErrPermissionDenied, codes.PermissionDenied},
+		{"deadline", fmt.Errorf("query: %w", context.DeadlineExceeded), codes.DeadlineExceeded},
+		{"canceled", fmt.Errorf("query: %w", context.Canceled), codes.Canceled},
 		{"unknown error", assert.AnError, codes.Internal},
 	}
 
@@ -429,4 +433,66 @@ func TestServer_ExecuteQueryRejectsUnsupportedVersion(t *testing.T) {
 			service.AssertNotCalled(t, "ExecuteQueryPage", mock.Anything, mock.Anything, mock.Anything)
 		})
 	}
+}
+
+func TestServer_ExecuteQueryErrorDetails(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		code   codes.Code
+		reason string
+	}{
+		{"stale cursor", model.ErrStaleCursor, codes.FailedPrecondition, "STALE_CURSOR"},
+		{"work limit", model.ErrQueryWorkLimit, codes.ResourceExhausted, "QUERY_WORK_LIMIT"},
+		{"missing index", indexer.ErrNoMatchingIndex, codes.FailedPrecondition, "NO_MATCHING_INDEX"},
+		{"index unavailable", indexer.ErrIndexNotReady, codes.Unavailable, "INDEX_UNAVAILABLE"},
+		{"index rebuilding", indexer.ErrIndexRebuilding, codes.Unavailable, "INDEX_UNAVAILABLE"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := new(MockService)
+			service.On("ExecuteQueryPage", mock.Anything, "database1", model.Query{Collection: "users"}).Return(nil, fmt.Errorf("private execution detail: %w", tc.err)).Once()
+			response, err := NewServer(service).ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{Database: "database1", WireVersion: 2, Query: &pb.Query{Collection: "users"}})
+			require.Nil(t, response)
+			rpcStatus := status.Convert(err)
+			require.Equal(t, tc.code, rpcStatus.Code())
+			require.Len(t, rpcStatus.Details(), 1)
+			detail, ok := rpcStatus.Details()[0].(*errdetails.ErrorInfo)
+			require.True(t, ok)
+			assert.Equal(t, "syntrix.query", detail.Domain)
+			assert.Equal(t, tc.reason, detail.Reason)
+			assert.NotContains(t, rpcStatus.Message(), "private execution detail")
+			service.AssertExpectations(t)
+		})
+	}
+}
+
+func TestServer_ExecuteQuerySanitizesInternalErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		page model.QueryPage
+		err  error
+	}{
+		{"execution failure", model.QueryPage{}, fmt.Errorf("database password=secret path=/private/storage")},
+		{"response encoding failure", model.QueryPage{Documents: []model.Document{{"private-business-field": make(chan int)}}}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := new(MockService)
+			service.On("ExecuteQueryPage", mock.Anything, "database1", model.Query{Collection: "users"}).Return(tc.page, tc.err).Once()
+			response, err := NewServer(service).ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{Database: "database1", WireVersion: 2, Query: &pb.Query{Collection: "users"}})
+			require.Nil(t, response)
+			rpcStatus := status.Convert(err)
+			require.Equal(t, codes.Internal, rpcStatus.Code())
+			assert.Equal(t, "query execution failed", rpcStatus.Message())
+			assert.Empty(t, rpcStatus.Details())
+			service.AssertExpectations(t)
+		})
+	}
+}
+
+func TestServer_ExecuteQueryRejectsMalformedTypedFilter(t *testing.T) {
+	service := new(MockService)
+	response, err := NewServer(service).ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{Database: "database1", WireVersion: 2, Query: &pb.Query{Collection: "users", Filters: []*pb.Filter{{Field: "counter", Op: "==", Value: []byte(`9223372036854775807`)}}}})
+	require.Nil(t, response)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	service.AssertNotCalled(t, "ExecuteQueryPage", mock.Anything, mock.Anything, mock.Anything)
 }

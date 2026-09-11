@@ -28,12 +28,6 @@ type DB interface {
 	// SeekLT, First or Last.
 	NewIter(o *pebble.IterOptions) (Iterator, error)
 
-	// Delete deletes the value for the given key. Deletes are blind all will
-	// succeed even if the given key does not exist.
-	//
-	// It is safe to modify the contents of the arguments after Delete returns.
-	Delete(key []byte, o *pebble.WriteOptions) error
-
 	// Set sets the value for the given key. It overwrites any previous value
 	// for that key; a DB is not a multi-map.
 	//
@@ -106,10 +100,6 @@ func (p *PebbleDB) Get(key []byte) (value []byte, closer io.Closer, err error) {
 
 func (p *PebbleDB) NewIter(o *pebble.IterOptions) (iter Iterator, err error) {
 	return p.db.NewIter(o)
-}
-
-func (p *PebbleDB) Delete(key []byte, o *pebble.WriteOptions) error {
-	return p.db.Delete(key, o)
 }
 
 func (p *PebbleDB) Set(key, value []byte, o *pebble.WriteOptions) error {

@@ -256,37 +256,6 @@ func TestFilterConversions(t *testing.T) {
 	})
 }
 
-func TestOrderConversions(t *testing.T) {
-	t.Run("orderToProto", func(t *testing.T) {
-		order := model.Order{
-			Field:     "createdAt",
-			Direction: "desc",
-		}
-
-		result := orderToProto(order)
-
-		assert.Equal(t, "createdAt", result.Field)
-		assert.Equal(t, "desc", result.Direction)
-	})
-
-	t.Run("protoToOrder", func(t *testing.T) {
-		proto := &pb.OrderBy{
-			Field:     "name",
-			Direction: "asc",
-		}
-
-		result := protoToOrder(proto)
-
-		assert.Equal(t, "name", result.Field)
-		assert.Equal(t, "asc", result.Direction)
-	})
-
-	t.Run("protoToOrder nil", func(t *testing.T) {
-		result := protoToOrder(nil)
-		assert.Empty(t, result.Field)
-	})
-}
-
 func TestPullRequestConversions(t *testing.T) {
 	t.Run("pullRequestToProto", func(t *testing.T) {
 		req := storage.ReplicationPullRequest{

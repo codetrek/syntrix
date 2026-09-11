@@ -142,6 +142,56 @@ func TestValueNormalizationRejectsUnsupportedSources(t *testing.T) {
 	require.Equal(t, map[string]any{"ints": []any{int64(1), int64(2)}, "number": int64(math.MaxInt64)}, value)
 }
 
+func TestTypedValueNormalizesNativeNumbers(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value any
+		want  any
+	}{
+		{"nil", nil, nil},
+		{"int", int(-1), int64(-1)},
+		{"int8 minimum", int8(math.MinInt8), int64(math.MinInt8)},
+		{"int16 maximum", int16(math.MaxInt16), int64(math.MaxInt16)},
+		{"int32 minimum", int32(math.MinInt32), int64(math.MinInt32)},
+		{"float32 fraction", float32(0.1), float64(float32(0.1))},
+		{"float32 smallest", float32(math.SmallestNonzeroFloat32), float64(math.SmallestNonzeroFloat32)},
+		{"float32 maximum", float32(math.MaxFloat32), float64(math.MaxFloat32)},
+		{"float32 negative zero", float32(math.Copysign(0, -1)), float64(0)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			encoded, err := EncodeTypedValue(test.value)
+			require.NoError(t, err)
+			decoded, err := DecodeTypedValue(encoded)
+			require.NoError(t, err)
+			require.Equal(t, test.want, decoded)
+			if value, ok := decoded.(float64); ok && value == 0 {
+				require.False(t, math.Signbit(value))
+			}
+		})
+	}
+}
+
+func TestEncodeTypedValueRejectsInvalidNestedData(t *testing.T) {
+	for _, test := range []struct {
+		name, message string
+		value         any
+	}{
+		{"float32 NaN", "non-finite", float32(math.NaN())},
+		{"float32 infinity", "non-finite", float32(math.Inf(1))},
+		{"unsigned number", "unsupported value type", uint64(1)},
+		{"invalid decimal", "invalid number", json.Number("1.2.3")},
+		{"out of range decimal", "invalid number", json.Number("1e999")},
+		{"invalid object key", "object key is not valid UTF-8", map[string]any{string([]byte{0xff}): true}},
+		{"nested nonfinite", `object field "values": array element 1: non-finite`, map[string]any{"values": []any{int64(1), math.Inf(-1)}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			encoded, err := EncodeTypedValue(test.value)
+			require.ErrorContains(t, err, test.message)
+			require.Nil(t, encoded)
+		})
+	}
+}
+
 func TestDecodeJSONValuePreservesNumericTokens(t *testing.T) {
 	value, err := DecodeJSONValue([]byte(`{"integer":9223372036854775807,"float":1.0,"exponent":1e2}`))
 	require.NoError(t, err)

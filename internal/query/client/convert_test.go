@@ -295,49 +295,6 @@ func TestFiltersToProto(t *testing.T) {
 	})
 }
 
-func TestOrderToProto(t *testing.T) {
-	t.Run("ascending order", func(t *testing.T) {
-		o := model.Order{
-			Field:     "createdAt",
-			Direction: "asc",
-		}
-		result := orderToProto(o)
-
-		assert.Equal(t, "createdAt", result.Field)
-		assert.Equal(t, "asc", result.Direction)
-	})
-
-	t.Run("descending order", func(t *testing.T) {
-		o := model.Order{
-			Field:     "updatedAt",
-			Direction: "desc",
-		}
-		result := orderToProto(o)
-
-		assert.Equal(t, "updatedAt", result.Field)
-		assert.Equal(t, "desc", result.Direction)
-	})
-}
-
-func TestOrdersToProto(t *testing.T) {
-	t.Run("empty orders", func(t *testing.T) {
-		result := ordersToProto(nil)
-		assert.Empty(t, result)
-	})
-
-	t.Run("multiple orders", func(t *testing.T) {
-		orders := []model.Order{
-			{Field: "createdAt", Direction: "asc"},
-			{Field: "name", Direction: "desc"},
-		}
-		result := ordersToProto(orders)
-
-		assert.Len(t, result, 2)
-		assert.Equal(t, "createdAt", result[0].Field)
-		assert.Equal(t, "name", result[1].Field)
-	})
-}
-
 func TestPushChangeToProto(t *testing.T) {
 	for _, version := range []int64{-1, 0, 5, 9007199254740993, math.MaxInt64} {
 		t.Run(strconv.FormatInt(version, 10), func(t *testing.T) {

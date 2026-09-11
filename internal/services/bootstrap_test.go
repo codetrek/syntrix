@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -111,6 +114,91 @@ func TestArchiveDerivedStoresValidatesAllPathsBeforeMutation(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(archives[0], "data"))
 	require.NoError(t, err)
 	require.Equal(t, "preserved", string(data))
+}
+
+type archiveRecordHandler struct {
+	slog.Handler
+	record func(slog.Record)
+}
+
+func (h archiveRecordHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h archiveRecordHandler) Handle(_ context.Context, record slog.Record) error {
+	h.record(record)
+	return nil
+}
+
+func TestArchiveDerivedStoresRestoresEarlierArchivesOnFailure(t *testing.T) {
+	for _, conflict := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rollback-conflict=%t", conflict), func(t *testing.T) {
+			root := t.TempDir()
+			first := filepath.Join(root, "indexes")
+			// The source basename is valid, but its timestamped archive exceeds NAME_MAX.
+			second := filepath.Join(root, strings.Repeat("b", 240))
+			for _, dir := range []string{first, second} {
+				require.NoError(t, os.Mkdir(dir, 0700))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "data"), []byte("original"), 0600))
+			}
+			var archive string
+			var conflictErr error
+			previous := slog.Default()
+			previousWriter, previousFlags := log.Writer(), log.Flags()
+			defer func() {
+				slog.SetDefault(previous)
+				log.SetOutput(previousWriter)
+				log.SetFlags(previousFlags)
+			}()
+			slog.SetDefault(slog.New(archiveRecordHandler{Handler: previous.Handler(), record: func(record slog.Record) {
+				if record.Message != "Archived derived store before bootstrap" {
+					return
+				}
+				var path, backup string
+				record.Attrs(func(attr slog.Attr) bool {
+					switch attr.Key {
+					case "path":
+						path = attr.Value.String()
+					case "archive":
+						backup = attr.Value.String()
+					}
+					return true
+				})
+				if path != first {
+					return
+				}
+				archive = backup
+				if conflict {
+					// Simulate another process claiming the original path before rollback.
+					conflictErr = os.Mkdir(first, 0700)
+					if conflictErr == nil {
+						conflictErr = os.WriteFile(filepath.Join(first, "competitor"), []byte("keep"), 0600)
+					}
+				}
+			}}))
+			err := archiveDerivedStores([]string{first, second})
+			require.ErrorContains(t, err, "archive derived store")
+			require.ErrorContains(t, err, second)
+			require.NoError(t, conflictErr)
+			require.NotEmpty(t, archive)
+			data, readErr := os.ReadFile(filepath.Join(second, "data"))
+			require.NoError(t, readErr)
+			require.Equal(t, "original", string(data))
+			if conflict {
+				require.ErrorContains(t, err, "restore")
+				require.ErrorContains(t, err, archive)
+				data, readErr = os.ReadFile(filepath.Join(archive, "data"))
+				require.NoError(t, readErr)
+				require.Equal(t, "original", string(data))
+				data, readErr = os.ReadFile(filepath.Join(first, "competitor"))
+				require.NoError(t, readErr)
+				require.Equal(t, "keep", string(data))
+			} else {
+				require.NoDirExists(t, archive)
+				data, readErr = os.ReadFile(filepath.Join(first, "data"))
+				require.NoError(t, readErr)
+				require.Equal(t, "original", string(data))
+			}
+		})
+	}
 }
 
 func TestPrepareIndexBootstrapRequiresExplicitFence(t *testing.T) {

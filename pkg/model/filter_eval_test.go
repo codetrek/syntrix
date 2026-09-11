@@ -94,3 +94,20 @@ func TestFiltersPreserveRepeatedPredicatesAndSourceErrors(t *testing.T) {
 	})
 	require.Error(t, err)
 }
+
+func TestEvaluateFilterRejectsInvalidPredicateBeforeMissingValue(t *testing.T) {
+	for _, filter := range []Filter{
+		{Field: "value", Op: FilterOp("unknown"), Value: nil},
+		{Field: "nested.value", Op: OpEq, Value: nil},
+		{Field: "value", Op: OpEq, Value: []any{int64(1)}},
+		{Field: "value", Op: OpIn, Value: []any{map[string]any{"nested": true}}},
+		{Field: "value", Op: OpGt, Value: math.NaN()},
+	} {
+		matched, err := EvaluateFilter(filter, nil, false)
+		require.Error(t, err, "%#v", filter)
+		require.False(t, matched)
+	}
+	matched, err := EvaluateFilter(Filter{Field: "value", Op: OpEq, Value: int64(1)}, float32(math.Inf(1)), true)
+	require.ErrorContains(t, err, "non-finite")
+	require.False(t, matched)
+}

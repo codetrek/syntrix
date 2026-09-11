@@ -344,35 +344,6 @@ func (s *PebbleStore) deletePrefixInBatch(batch Batch, prefix []byte) (err error
 	return iter.Error()
 }
 
-// executeIndexDelete performs the actual index deletion.
-func (s *PebbleStore) executeIndexDelete(delOp indexDeleteOp) error {
-	// Delete all idx entries
-	idxPrefix := indexKeyPrefix(delOp.db, delOp.pattern, delOp.tmplID)
-	if err := s.deleteByPrefix(idxPrefix); err != nil {
-		return fmt.Errorf("failed to delete index entries: %w", err)
-	}
-
-	// Delete all rev entries
-	revPrefix := reverseKeyPrefix(delOp.db, delOp.pattern, delOp.tmplID)
-	if err := s.deleteByPrefix(revPrefix); err != nil {
-		return fmt.Errorf("failed to delete reverse entries: %w", err)
-	}
-
-	// Delete map entry
-	mKey := mapKey(delOp.db, delOp.pattern, delOp.tmplID)
-	if err := s.db.Delete(mKey, pebble.Sync); err != nil && err != pebble.ErrNotFound {
-		return fmt.Errorf("failed to delete map entry: %w", err)
-	}
-
-	// Delete state entry
-	sKey := stateKey(delOp.db, delOp.pattern, delOp.tmplID)
-	if err := s.db.Delete(sKey, pebble.Sync); err != nil && err != pebble.ErrNotFound {
-		return fmt.Errorf("failed to delete state entry: %w", err)
-	}
-
-	return nil
-}
-
 // applyOp applies a single pending operation to the batch.
 func (s *PebbleStore) applyOp(batch Batch, op *pendingOp) error {
 	if op.orderKey == nil {
@@ -873,42 +844,6 @@ func (s *PebbleStore) DeleteIndex(db, pattern, tmplID string) error {
 	}
 
 	return nil
-}
-
-// deleteByPrefix deletes all keys with the given prefix.
-func (s *PebbleStore) deleteByPrefix(prefix []byte) error {
-	upper := make([]byte, len(prefix))
-	copy(upper, prefix)
-	upper[len(upper)-1]++
-
-	iter, err := s.db.NewIter(&pebble.IterOptions{
-		LowerBound: prefix,
-		UpperBound: upper,
-	})
-	if err != nil {
-		return err
-	}
-	defer iter.Close()
-
-	batch := s.db.NewBatch()
-	for iter.First(); iter.Valid(); iter.Next() {
-		if err := batch.Delete(iter.Key(), nil); err != nil {
-			batch.Close()
-			return err
-		}
-	}
-
-	if err := iter.Error(); err != nil {
-		batch.Close()
-		return err
-	}
-
-	if err := batch.Commit(pebble.Sync); err != nil {
-		batch.Close()
-		return err
-	}
-
-	return batch.Close()
 }
 
 // SetState sets the state of an index.

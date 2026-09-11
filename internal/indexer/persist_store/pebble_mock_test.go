@@ -25,7 +25,6 @@ type mockDB struct {
 	getErrKey   []byte
 	getErr      error
 	setErr      error
-	deleteErr   error
 	newIterErr  error
 	closeErr    error
 	iterError   error // Error returned by Iterator.Error()
@@ -73,18 +72,6 @@ func (m *mockDB) Set(key, value []byte, o *pebble.WriteOptions) error {
 	cp := make([]byte, len(value))
 	copy(cp, value)
 	m.data[string(key)] = cp
-	return nil
-}
-
-func (m *mockDB) Delete(key []byte, o *pebble.WriteOptions) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.deleteErr != nil {
-		return m.deleteErr
-	}
-
-	delete(m.data, string(key))
 	return nil
 }
 
@@ -550,194 +537,11 @@ func TestApplyOpUpsertSetError(t *testing.T) {
 	}
 }
 
-// TestDeleteByPrefixIterError tests deleteByPrefix when NewIter fails.
-func TestDeleteByPrefixIterError(t *testing.T) {
-	db := newMockDB()
-	ps := newMockPebbleStore(db)
-
-	// Inject error for NewIter
-	db.newIterErr = errors.New("mock iter error")
-
-	err := ps.deleteByPrefix([]byte("prefix"))
-
-	if err == nil {
-		t.Error("expected error from deleteByPrefix, got nil")
-	}
-}
-
-// TestDeleteByPrefixBatchDeleteError tests deleteByPrefix when batch.Delete fails.
-func TestDeleteByPrefixBatchDeleteError(t *testing.T) {
-	db := newMockDB()
-	ps := newMockPebbleStore(db)
-
-	// Add some data with the prefix
-	db.data["prefix:key1"] = []byte("value1")
-	db.data["prefix:key2"] = []byte("value2")
-
-	// Inject error for batch.Delete
-	db.batchDelErr = errors.New("mock batch delete error")
-
-	err := ps.deleteByPrefix([]byte("prefix"))
-
-	if err == nil {
-		t.Error("expected error from deleteByPrefix, got nil")
-	}
-}
-
-// TestDeleteByPrefixIteratorError tests deleteByPrefix when iterator has error.
-func TestDeleteByPrefixIteratorError(t *testing.T) {
-	db := newMockDB()
-	ps := newMockPebbleStore(db)
-
-	// Add some data with the prefix
-	db.data["prefix:key1"] = []byte("value1")
-
-	// Inject error for iterator.Error()
-	db.iterError = errors.New("mock iterator error")
-
-	err := ps.deleteByPrefix([]byte("prefix"))
-
-	if err == nil {
-		t.Error("expected error from deleteByPrefix, got nil")
-	}
-}
-
-// TestDeleteByPrefixCommitError tests deleteByPrefix when batch.Commit fails.
-func TestDeleteByPrefixCommitError(t *testing.T) {
-	db := newMockDB()
-	ps := newMockPebbleStore(db)
-
-	// Add some data with the prefix
-	db.data["prefix:key1"] = []byte("value1")
-
-	// Inject error for batch.Commit
-	db.commitErr = errors.New("mock commit error")
-
-	err := ps.deleteByPrefix([]byte("prefix"))
-
-	if err == nil {
-		t.Error("expected error from deleteByPrefix, got nil")
-	}
-}
-
-// TestExecuteIndexDeleteFirstPrefixError tests executeIndexDelete when first deleteByPrefix fails.
-func TestExecuteIndexDeleteFirstPrefixError(t *testing.T) {
-	db := newMockDB()
-	ps := newMockPebbleStore(db)
-
-	delOp := indexDeleteOp{
-		db:      "testdb",
-		pattern: "users/*",
-		tmplID:  "tmpl1",
-		hash:    "hash1",
-	}
-
-	// Inject error for NewIter (will fail first deleteByPrefix)
-	db.newIterErr = errors.New("mock iter error")
-
-	err := ps.executeIndexDelete(delOp)
-
-	if err == nil {
-		t.Error("expected error from executeIndexDelete, got nil")
-	}
-}
-
-// TestExecuteIndexDeleteMapDeleteError tests executeIndexDelete when map entry delete fails.
-func TestExecuteIndexDeleteMapDeleteError(t *testing.T) {
-	db := newMockDB()
-	ps := newMockPebbleStore(db)
-
-	delOp := indexDeleteOp{
-		db:      "testdb",
-		pattern: "users/*",
-		tmplID:  "tmpl1",
-		hash:    "hash1",
-	}
-
-	// Inject error for direct Delete (map/state entries)
-	db.deleteErr = errors.New("mock delete error")
-
-	err := ps.executeIndexDelete(delOp)
-
-	if err == nil {
-		t.Error("expected error from executeIndexDelete, got nil")
-	}
-}
-
-// TestExecuteIndexDeleteSecondPrefixError tests executeIndexDelete when second deleteByPrefix (rev entries) fails.
-func TestExecuteIndexDeleteSecondPrefixError(t *testing.T) {
-	db := &mockDBWithCallCounter{mockDB: newMockDB()}
-	ps := newMockPebbleStore(db.mockDB)
-	ps.db = db // Replace with call counter wrapper
-
-	delOp := indexDeleteOp{
-		db:      "testdb",
-		pattern: "users/*",
-		tmplID:  "tmpl1",
-		hash:    "hash1",
-	}
-
-	// Fail on second NewIter call (for rev prefix)
-	db.failNewIterOnCall = 2
-
-	err := ps.executeIndexDelete(delOp)
-
-	if err == nil {
-		t.Error("expected error from executeIndexDelete, got nil")
-	}
-	// Should fail on "failed to delete reverse entries"
-	if err != nil && !contains(err.Error(), "reverse") {
-		t.Logf("error message: %v", err)
-	}
-}
-
-// TestExecuteIndexDeleteStateDeleteError tests executeIndexDelete when state entry delete fails.
-func TestExecuteIndexDeleteStateDeleteError(t *testing.T) {
-	db := &mockDBWithCallCounter{mockDB: newMockDB()}
-	ps := newMockPebbleStore(db.mockDB)
-	ps.db = db // Replace with call counter wrapper
-
-	delOp := indexDeleteOp{
-		db:      "testdb",
-		pattern: "users/*",
-		tmplID:  "tmpl1",
-		hash:    "hash1",
-	}
-
-	// Fail on second Delete call (for state key, after map key)
-	db.failDeleteOnCall = 2
-
-	err := ps.executeIndexDelete(delOp)
-
-	if err == nil {
-		t.Error("expected error from executeIndexDelete, got nil")
-	}
-	// Should fail on "failed to delete state entry"
-	if err != nil && !contains(err.Error(), "state") {
-		t.Logf("error message: %v", err)
-	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
 // mockDBWithCallCounter wraps mockDB to fail on specific call counts.
 type mockDBWithCallCounter struct {
 	*mockDB
 	newIterCallCount  int
 	failNewIterOnCall int
-	deleteCallCount   int
-	failDeleteOnCall  int
 }
 
 func (m *mockDBWithCallCounter) NewIter(o *pebble.IterOptions) (Iterator, error) {
@@ -746,14 +550,6 @@ func (m *mockDBWithCallCounter) NewIter(o *pebble.IterOptions) (Iterator, error)
 		return nil, errors.New("mock iter error on call")
 	}
 	return m.mockDB.NewIter(o)
-}
-
-func (m *mockDBWithCallCounter) Delete(key []byte, o *pebble.WriteOptions) error {
-	m.deleteCallCount++
-	if m.failDeleteOnCall > 0 && m.deleteCallCount == m.failDeleteOnCall {
-		return errors.New("mock delete error on call")
-	}
-	return m.mockDB.Delete(key, o)
 }
 
 func (m *mockDBWithCallCounter) Get(key []byte) (value []byte, closer io.Closer, err error) {
@@ -839,37 +635,6 @@ func TestDeleteDatabaseMultipleIndexes(t *testing.T) {
 
 	if err != nil {
 		t.Errorf("expected no error, got: %v", err)
-	}
-}
-
-// TestDeleteDatabaseWithDeleteIndexMultipleErrors tests that DeleteDatabase continues
-// even when multiple DeleteIndex calls fail.
-func TestDeleteDatabaseWithDeleteIndexMultipleErrors(t *testing.T) {
-	db := newMockDB()
-	ps := newMockPebbleStore(db)
-
-	// Add multiple index entries
-	indexes := []struct {
-		pattern string
-		tmplID  string
-	}{
-		{"users/*", "tmpl1"},
-		{"posts/*", "tmpl2"},
-	}
-
-	for _, idx := range indexes {
-		mapK := mapKey("testdb", idx.pattern, idx.tmplID)
-		db.data[string(mapK)] = []byte(idx.pattern + "|" + idx.tmplID)
-	}
-
-	// Inject delete error to make DeleteIndex fail
-	db.deleteErr = errors.New("mock delete error")
-
-	// DeleteDatabase should not return error, just log the failures
-	err := ps.DeleteDatabase("testdb")
-
-	if err != nil {
-		t.Errorf("expected no error (errors should be logged), got: %v", err)
 	}
 }
 

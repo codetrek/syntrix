@@ -81,3 +81,34 @@ func TestEventCodecSizeAdmission(t *testing.T) {
 	_, err = MarshalEvent(&StoreChangeEvent{EventID: strings.Repeat("x", MaxEventBytes)})
 	require.ErrorIs(t, err, ErrEventTooLarge)
 }
+
+func TestUpdateDescriptionCodecRejectsInvalidDeltas(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name    string
+		payload string
+		message string
+	}{
+		{name: "malformed envelope", payload: `{"wireVersion":`, message: "unexpected end"},
+		{name: "legacy envelope", payload: `{"updatedFields":{"data.n":9007199254740993}}`, message: "unsupported update description wire version"},
+		{name: "invalid typed value", payload: `{"wireVersion":2,"updatedFields":{"type":"object","value":{"data.n":{"type":"int64","value":"1.5"}}}}`, message: "invalid syntax"},
+		{name: "nonobject fields", payload: `{"wireVersion":2,"updatedFields":{"type":"array","value":[]}}`, message: "document fields must be an object"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			desc, err := UnmarshalUpdateDescription([]byte(test.payload))
+			require.ErrorContains(t, err, test.message)
+			require.Nil(t, desc)
+		})
+	}
+	encoded, err := MarshalUpdateDescription(&UpdateDescription{UpdatedFields: map[string]any{"data.unsupported": make(chan int)}})
+	require.ErrorContains(t, err, "unsupported value type")
+	require.Nil(t, encoded)
+}
+
+func TestUpdateDescriptionCodecAllowsAbsentUpdatedFields(t *testing.T) {
+	t.Parallel()
+	desc, err := UnmarshalUpdateDescription([]byte(`{"wireVersion":2,"updatedFields":{"type":"null"},"removedFields":["data.old"]}`))
+	require.NoError(t, err)
+	require.Nil(t, desc.UpdatedFields)
+	require.Equal(t, []string{"data.old"}, desc.RemovedFields)
+}

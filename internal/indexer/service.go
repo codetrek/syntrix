@@ -754,22 +754,35 @@ func (s *service) Health(ctx context.Context) (Health, error) {
 
 	st := s.manager.Store()
 	indexes := make(map[string]manager.IndexHealth)
-	databases, err := st.ListDatabases()
+	refs, err := st.ListQueryIndexes()
 	if err != nil {
 		return Health{Status: HealthUnhealthy}, err
 	}
-	for _, dbName := range databases {
-		dbIndexes, err := st.ListIndexes(dbName)
+	for _, ref := range refs {
+		if err := ctx.Err(); err != nil {
+			return Health{Status: HealthUnhealthy}, err
+		}
+		generation, exists, err := st.ReadGeneration(ref.Database, ref.Collection, ref.TemplateFingerprint)
 		if err != nil {
 			return Health{Status: HealthUnhealthy}, err
 		}
-		for _, idx := range dbIndexes {
-			key := dbName + "|" + idx.Pattern + "|" + idx.TemplateID
-			indexes[key] = manager.IndexHealth{
-				State:    string(idx.State),
-				DocCount: int64(idx.DocCount),
+		if exists && generation.ID != ref.Generation {
+			continue
+		}
+		state := store.IndexStateRebuilding
+		switch {
+		case exists && generation.Failure != "":
+			state = store.IndexStateFailed
+			status = HealthUnhealthy
+		case exists && generation.Ready:
+			state = store.IndexStateHealthy
+		default:
+			if status == HealthOK {
+				status = HealthDegraded
 			}
 		}
+		key := ref.Database + "|" + ref.Collection + "|" + ref.TemplateFingerprint + "|" + ref.Generation
+		indexes[key] = manager.IndexHealth{State: string(state), DocCount: -1}
 	}
 
 	return Health{

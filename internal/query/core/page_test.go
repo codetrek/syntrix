@@ -496,3 +496,16 @@ func TestMaterializationDoesNotRetryOtherSourceFailures(t *testing.T) {
 	require.ErrorIs(t, err, types.ErrReadBudget)
 	require.Equal(t, int64(2), stats.sourceReads)
 }
+
+func TestEncodeCursorRejectsOversizedOrdering(t *testing.T) {
+	cursor := queryCursor{Version: 2, Scope: "scope", Route: "index-v2", Template: "template", Generation: "generation", Branches: "branches", Position: []byte("position"), Order: []model.Order{{Field: strings.Repeat("field", maxCursorBytes), Direction: "asc"}}}
+	token, err := encodeCursor(cursor)
+	require.ErrorIs(t, err, model.ErrQueryWorkLimit)
+	require.Empty(t, token)
+	cursor.Order = []model.Order{{Field: "score", Direction: "asc"}}
+	token, err = encodeCursor(cursor)
+	require.NoError(t, err)
+	decoded, err := decodeCursor(token)
+	require.NoError(t, err)
+	require.Equal(t, cursor, decoded)
+}

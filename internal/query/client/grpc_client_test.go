@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,8 +11,10 @@ import (
 	pb "github.com/syntrixbase/syntrix/api/gen/query/v1"
 	grpctesting "github.com/syntrixbase/syntrix/api/gen/testing"
 	"github.com/syntrixbase/syntrix/internal/core/storage"
+	"github.com/syntrixbase/syntrix/internal/indexer"
 	"github.com/syntrixbase/syntrix/internal/query/wire"
 	"github.com/syntrixbase/syntrix/pkg/model"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -28,6 +31,9 @@ func TestStatusToError(t *testing.T) {
 		{"already exists", codes.AlreadyExists, model.ErrExists},
 		{"invalid argument", codes.InvalidArgument, model.ErrInvalidQuery},
 		{"permission denied", codes.PermissionDenied, model.ErrPermissionDenied},
+		{"canceled", codes.Canceled, context.Canceled},
+		{"deadline", codes.DeadlineExceeded, context.DeadlineExceeded},
+		{"resource exhausted", codes.ResourceExhausted, model.ErrQueryWorkLimit},
 	}
 
 	for _, tt := range tests {
@@ -407,4 +413,55 @@ func TestClient_Push(t *testing.T) {
 		assert.Len(t, resp.Conflicts, 1)
 		assert.Equal(t, "doc1", resp.Conflicts[0].Id)
 	})
+}
+
+func TestClient_ExecuteQueryPageErrorDetails(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		code     codes.Code
+		domain   string
+		reason   string
+		expected error
+	}{
+		{"stale cursor", codes.FailedPrecondition, "syntrix.query", "STALE_CURSOR", model.ErrStaleCursor},
+		{"work limit", codes.ResourceExhausted, "syntrix.query", "QUERY_WORK_LIMIT", model.ErrQueryWorkLimit},
+		{"missing index", codes.FailedPrecondition, "syntrix.query", "NO_MATCHING_INDEX", indexer.ErrNoMatchingIndex},
+		{"index unavailable", codes.Unavailable, "syntrix.query", "INDEX_UNAVAILABLE", indexer.ErrIndexNotReady},
+		{"foreign domain uses status code", codes.FailedPrecondition, "foreign.service", "STALE_CURSOR", model.ErrPreconditionFailed},
+		{"unknown reason uses status code", codes.FailedPrecondition, "syntrix.query", "FUTURE_REASON", model.ErrPreconditionFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rpcStatus, err := status.New(tc.code, "query failed").WithDetails(&errdetails.ErrorInfo{Domain: tc.domain, Reason: tc.reason})
+			require.NoError(t, err)
+			rpc := grpctesting.NewMockQueryServiceClient()
+			rpc.On("ExecuteQuery", mock.Anything, mock.Anything).Return(nil, rpcStatus.Err()).Once()
+			page, err := newTestClient(rpc).ExecuteQueryPage(context.Background(), "database1", model.Query{Collection: "users"})
+			require.ErrorIs(t, err, tc.expected)
+			assert.Equal(t, model.QueryPage{}, page)
+			rpc.AssertExpectations(t)
+		})
+	}
+	t.Run("unrelated detail uses status code", func(t *testing.T) {
+		rpcStatus, err := status.New(codes.DeadlineExceeded, "timed out").WithDetails(&errdetails.RetryInfo{})
+		require.NoError(t, err)
+		require.ErrorIs(t, statusToError(rpcStatus.Err()), context.DeadlineExceeded)
+	})
+}
+
+func TestClient_ExecuteQueryPageRejectsUnencodableRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		query model.Query
+	}{
+		{"limit outside wire domain", model.Query{Collection: "users", Limit: 1001}},
+		{"nonfinite filter", model.Query{Collection: "users", Filters: model.Filters{{Field: "amount", Op: model.OpEq, Value: math.NaN()}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rpc := grpctesting.NewMockQueryServiceClient()
+			page, err := newTestClient(rpc).ExecuteQueryPage(context.Background(), "database1", tc.query)
+			require.ErrorIs(t, err, model.ErrInvalidQuery)
+			assert.Equal(t, model.QueryPage{}, page)
+			rpc.AssertNotCalled(t, "ExecuteQuery", mock.Anything, mock.Anything)
+		})
+	}
 }

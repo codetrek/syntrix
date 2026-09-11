@@ -91,6 +91,7 @@ func TestBuffer_Write_CommitFailureStopsPendingBatch(t *testing.T) {
 
 			assert.Equal(t, 1, batchCount)
 			assert.ErrorIs(t, buf.Write(context.Background(), &events.StoreChangeEvent{EventID: "evt-3"}, token2), batchErr)
+			assert.ErrorIs(t, buf.Flush(context.Background()), batchErr)
 			_, err = buf.LoadCheckpoint()
 			assert.ErrorIs(t, err, batchErr)
 			if closeDuringCommit {

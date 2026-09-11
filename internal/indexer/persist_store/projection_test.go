@@ -367,3 +367,60 @@ func TestIndexDeletionRemainsVisibleWhileBatchCommits(t *testing.T) {
 	release.Do(func() { close(blocked.release) })
 	require.NoError(t, s.Flush())
 }
+
+func TestMalformedReversePostingSetStopsAtomicProjection(t *testing.T) {
+	for name, corrupt := range map[string][]byte{
+		"unterminated count":  {0x80},
+		"impossible count":    {2},
+		"unterminated length": {1, 0x80},
+		"empty key":           {1, 0},
+		"truncated key":       {1, 2, 'a'},
+		"trailing bytes":      {0, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			db := newMockDB()
+			s := newMockPebbleStore(db)
+			ref := queryRef("items")
+			require.NoError(t, s.ApplyDocumentProjection([]store.Projection{projection(ref, "doc", "old/doc")}, "old"))
+			s.doFlush()
+			reverse := append(projectionPrefix("reverse", ref), encodePathComponent("doc")...)
+			db.data[string(reverse)] = corrupt
+			require.NoError(t, s.ApplyDocumentProjection([]store.Projection{projection(ref, "doc", "new/doc"), projection(queryRef("other"), "doc", "new/doc")}, "new"))
+			s.doFlush()
+			err := s.Flush()
+			require.ErrorContains(t, err, "reverse posting")
+			require.Equal(t, "old", string(db.data[keyProgress]))
+			require.Contains(t, db.data, string(append(projectionPrefix("posting", ref), []byte("old/doc")...)))
+			require.NotContains(t, db.data, string(append(projectionPrefix("posting", ref), []byte("new/doc")...)))
+			require.ErrorIs(t, s.Close(), err)
+		})
+	}
+}
+
+func TestOverlayCursorExclusionConsumesSharedWorkBudget(t *testing.T) {
+	s := newProjectionTestStore(t)
+	ref := queryRef("items")
+	require.NoError(t, s.ApplyDocumentProjection([]store.Projection{projection(ref, "doc", "a/doc", "b/doc")}, ""))
+	view, err := s.ReadView(context.Background(), ref, store.ReadBudget{MaxExamined: 1})
+	require.NoError(t, err)
+	defer view.Close()
+	iter, err := view.Scan(context.Background(), store.SearchOptions{StartAfter: []byte("a/doc")})
+	require.NoError(t, err)
+	_, _, err = iter.Next()
+	require.ErrorIs(t, err, store.ErrWorkLimit)
+	require.EqualValues(t, 1, iter.Examined())
+	require.NoError(t, iter.Close())
+	require.NoError(t, iter.Close())
+}
+
+func TestProgressOnlyProjectionFlushNotificationCoalesces(t *testing.T) {
+	db := newMockDB()
+	s := newMockPebbleStore(db)
+	require.NoError(t, s.ApplyDocumentProjection(nil, "first"))
+	require.NoError(t, s.ApplyDocumentProjection(nil, "second"))
+	require.Len(t, s.notifyCh, 1)
+	s.doFlush()
+	require.NoError(t, s.Flush())
+	require.Equal(t, "second", string(db.data[keyProgress]))
+	require.NoError(t, s.Close())
+}

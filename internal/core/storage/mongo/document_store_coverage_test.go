@@ -614,6 +614,24 @@ func TestDocumentStoreSourceScanRejectsCorruptIdentity(t *testing.T) {
 	assert.ErrorContains(t, err, "fullpath does not belong")
 }
 
+func TestDocumentStoreSourceScanRequiresSourceIndex(t *testing.T) {
+	env := setupTestEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store := NewDocumentStore(env.Client, env.DB, "scan_data", "scan_sys", time.Hour).(*documentStore)
+	require.NoError(t, store.EnsureIndexes(ctx))
+	require.NoError(t, store.Create(ctx, "app", types.NewStoredDoc("app", "users", "a", nil)))
+	_, err := env.DB.Collection("scan_data").Indexes().DropOne(ctx, sourceScanIndexName)
+	require.NoError(t, err)
+
+	// Removing a ready source index invalidates the bounded-scan guarantee.
+	page, err := store.ScanDocuments(ctx, "app", types.SourceScanRequest{Collection: "users", Limit: 1})
+	require.ErrorContains(t, err, "hint")
+	assert.Empty(t, page.Documents)
+	assert.Empty(t, page.NextAfter)
+	assert.False(t, page.Exhausted)
+}
+
 func TestDocumentStoreEnumerateCollections(t *testing.T) {
 	env := setupTestEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

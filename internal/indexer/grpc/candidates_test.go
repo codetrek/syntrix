@@ -195,16 +195,17 @@ func TestCandidateServiceRequired(t *testing.T) {
 
 func TestCandidateTypedErrors(t *testing.T) {
 	for _, tc := range []struct {
-		err    error
-		code   codes.Code
-		reason string
+		err        error
+		code       codes.Code
+		reason     string
+		completion string
 	}{
-		{manager.ErrStaleCursor, codes.FailedPrecondition, "STALE_CURSOR"},
-		{store.ErrWorkLimit, codes.ResourceExhausted, "WORK_LIMIT"},
-		{manager.ErrNoMatchingIndex, codes.NotFound, "NO_MATCHING_INDEX"},
-		{manager.ErrIndexNotReady, codes.Unavailable, "INDEX_NOT_READY"},
-		{manager.ErrIndexRebuilding, codes.Unavailable, "INDEX_REBUILDING"},
-		{manager.ErrInvalidPlan, codes.InvalidArgument, "INVALID_PLAN"},
+		{manager.ErrStaleCursor, codes.FailedPrecondition, "STALE_CURSOR", "stale_cursor"},
+		{store.ErrWorkLimit, codes.ResourceExhausted, "WORK_LIMIT", "work_limit"},
+		{manager.ErrNoMatchingIndex, codes.NotFound, "NO_MATCHING_INDEX", "no_complete_index_plan"},
+		{manager.ErrIndexNotReady, codes.Unavailable, "INDEX_NOT_READY", "index_unavailable"},
+		{manager.ErrIndexRebuilding, codes.Unavailable, "INDEX_REBUILDING", "index_unavailable"},
+		{manager.ErrInvalidPlan, codes.InvalidArgument, "INVALID_PLAN", "invalid_query"},
 	} {
 		st := status.Convert(candidateError(fmt.Errorf("wrapped: %w", tc.err)))
 		assert.Equal(t, tc.code, st.Code())
@@ -213,5 +214,48 @@ func TestCandidateTypedErrors(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "syntrix.indexer", info.Domain)
 		assert.Equal(t, tc.reason, info.Reason)
+		assert.Equal(t, tc.completion, candidateCompletionReason(st.Err()))
 	}
+}
+
+func TestCandidateCompletionReasonSanitizesTransportFailures(t *testing.T) {
+	for _, tc := range []struct {
+		err    error
+		reason string
+	}{
+		{nil, "exhausted"},
+		{status.Error(codes.Canceled, "private cursor value"), "canceled"},
+		{status.Error(codes.DeadlineExceeded, "private filter value"), "deadline_exceeded"},
+		{fmt.Errorf("private source document"), "internal_error"},
+	} {
+		require.Equal(t, tc.reason, candidateCompletionReason(tc.err))
+	}
+	foreign, err := status.New(codes.Internal, "private source document").WithDetails(&errdetails.ErrorInfo{Domain: "untrusted", Reason: "STALE_CURSOR"})
+	require.NoError(t, err)
+	require.Equal(t, "internal_error", candidateCompletionReason(foreign.Err()))
+}
+
+type candidateSendProbe struct {
+	candidateContextStream
+	sends   int
+	failure error
+}
+
+func (p *candidateSendProbe) Send(*indexerv1.CandidateResponse) error { p.sends++; return p.failure }
+
+func TestCandidateSendPreservesByteLimitAndTransportFailure(t *testing.T) {
+	probe := &candidateSendProbe{}
+	response := &indexerv1.CandidateResponse{Payload: &indexerv1.CandidateResponse_Group{Group: &indexerv1.CandidateGroup{Id: "one", Position: bytes.Repeat([]byte{1}, candidateMessageLimit)}}}
+	err := sendCandidate(probe, response)
+	require.Equal(t, codes.ResourceExhausted, status.Code(err))
+	require.Equal(t, "work_limit", candidateCompletionReason(err))
+	require.Zero(t, probe.sends)
+	failure := fmt.Errorf("transport send failed")
+	probe.failure = failure
+	response.GetGroup().Position = response.GetGroup().Position[:candidateMessageLimit-32]
+	require.ErrorIs(t, sendCandidate(probe, response), failure)
+	require.Equal(t, 1, probe.sends)
+	probe.failure = nil
+	require.NoError(t, sendCandidate(probe, response))
+	require.Equal(t, 2, probe.sends)
 }

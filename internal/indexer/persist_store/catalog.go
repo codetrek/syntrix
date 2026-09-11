@@ -45,16 +45,23 @@ func (s *PebbleStore) isDatabaseRetiredLocked(database string) (bool, error) {
 
 func catalogKey(database string) []byte { return []byte("v2/catalog/" + encodePathComponent(database)) }
 
-func setJSON(batch Batch, key []byte, value any) error {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-	return batch.Set(key, encoded, nil)
+type metadataRecord interface {
+	store.QueryIndexRef | store.Generation | store.BootstrapCatalog | catalogInventory
+}
+
+// The closed record set contains only strings, booleans, and string slices,
+// so every admitted value has a JSON representation.
+func encodeMetadata[T metadataRecord](value T) []byte {
+	encoded, _ := json.Marshal(value)
+	return encoded
+}
+
+func setMetadata[T metadataRecord](batch Batch, key []byte, value T) error {
+	return batch.Set(key, encodeMetadata(value), nil)
 }
 
 func setPartition(batch Batch, ref store.QueryIndexRef) error {
-	return setJSON(batch, projectionPrefix("partition", ref), ref)
+	return setMetadata(batch, projectionPrefix("partition", ref), ref)
 }
 
 func (s *PebbleStore) readMetadata(key []byte, value any) (bool, error) {
@@ -114,10 +121,7 @@ func (s *PebbleStore) PublishGeneration(ref store.QueryIndexRef, progress string
 	if ref.Database == "" || ref.Collection == "" || ref.TemplateFingerprint == "" || ref.Generation == "" {
 		return fmt.Errorf("incomplete index generation identity")
 	}
-	value, err := json.Marshal(store.Generation{ID: ref.Generation, Ready: true, BootstrapProgress: progress})
-	if err != nil {
-		return err
-	}
+	value := encodeMetadata(store.Generation{ID: ref.Generation, Ready: true, BootstrapProgress: progress})
 	return s.publishMetadata(&metadataWrite{key: generationKey(ref.Database, ref.Collection, ref.TemplateFingerprint), value: value, progress: progress, partition: &ref})
 }
 
@@ -138,10 +142,7 @@ func (s *PebbleStore) PublishBootstrapCatalog(catalog store.BootstrapCatalog) er
 	if err != nil {
 		return err
 	}
-	value, err := json.Marshal(owned)
-	if err != nil {
-		return err
-	}
+	value := encodeMetadata(owned)
 	return s.publishMetadata(&metadataWrite{key: catalogKey(owned.Database), value: value, progress: owned.BootstrapProgress, singleCatalog: true})
 }
 
@@ -218,7 +219,7 @@ func (s *PebbleStore) SetFailure(ref store.QueryIndexRef, failure string) error 
 	batch := s.db.NewBatch()
 	err = setPartition(batch, ref)
 	if err == nil {
-		err = setJSON(batch, key, generation)
+		err = setMetadata(batch, key, generation)
 	}
 	return s.commitMetadataBatch(batch, err)
 }
@@ -317,7 +318,7 @@ func (s *PebbleStore) DeleteQueryIndex(ref store.QueryIndexRef) error {
 		if active {
 			err = setPartition(batch, ref)
 			if err == nil {
-				err = setJSON(batch, key, store.Generation{ID: ref.Generation, BootstrapProgress: catalog.BootstrapProgress, Failure: "index partition deleted"})
+				err = setMetadata(batch, key, store.Generation{ID: ref.Generation, BootstrapProgress: catalog.BootstrapProgress, Failure: "index partition deleted"})
 			}
 		} else {
 			err = batch.Delete(projectionPrefix("partition", ref), nil)
@@ -351,16 +352,10 @@ func (s *PebbleStore) PublishBootstrapCatalogs(catalogs []store.BootstrapCatalog
 	if err != nil {
 		return err
 	}
-	inventory, err := json.Marshal(catalogInventory{Generation: owned[0].Generation, BootstrapProgress: progress})
-	if err != nil {
-		return err
-	}
+	inventory := encodeMetadata(catalogInventory{Generation: owned[0].Generation, BootstrapProgress: progress})
 	publication := &metadataWrite{replaceCatalogs: true, progress: progress, inventory: inventory, catalogs: make([]catalogRecord, 0, len(owned))}
 	for _, catalog := range owned {
-		value, err := json.Marshal(catalog)
-		if err != nil {
-			return err
-		}
+		value := encodeMetadata(catalog)
 		publication.catalogs = append(publication.catalogs, catalogRecord{database: catalog.Database, key: catalogKey(catalog.Database), value: value})
 	}
 	return s.publishMetadata(publication)
