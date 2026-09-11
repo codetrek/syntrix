@@ -4,11 +4,28 @@ Status: proposed
 
 ## Problem
 
-The [filter reference](../../../../docs/reference/filters.md) and [model operators](../../../../pkg/model/filter.go) accept `!=`, `in`, and `contains`. The [Query planner](../../../../internal/query/core/engine.go) handles equality and range operators, then executes `continue // Skip unsupported ops` for the rest. Except for the separate ID-only lookup path, an accepted predicate can disappear before index search. The resulting plan can return extra documents or select a different index. This finding follows from source inspection; no runtime reproduction is claimed.
+The shared [model operators](../../../../pkg/model/filter.go) include `!=`, `in`,
+and `contains`, but indexed Query has no execution strategy for them. The original
+source inspection found that planning discarded these predicates, potentially
+widening results or selecting a different index. The
+[unsupported-operator rejection decision](../../implemented/bug-fix/2026-09-11-query-unsupported-filter-rejection.md)
+prevents that omission by rejecting indexed queries before search. Unordered
+ID-only `==` and `in` queries retain their direct Store path.
+
+The [filter reference](../../../../docs/reference/filters.md#query-availability)
+records these execution limits. General membership, not-equal, and array
+membership queries remain unavailable through indexed Query; complete operator
+semantics and predicate-combination correctness remain the subject of this
+proposal.
 
 ## Proposal
 
-Give planning an explicit error result and require every accepted predicate to have an execution strategy. Implement the documented operator set through index-aware plans: union equality ranges for `in`, disjoint ranges for `!=`, and array-membership indexing for `contains`. Specify missing-field, null, numeric, and array semantics consistently with storage filtering. Composite predicates must retain conjunction semantics.
+Retain the planner's explicit unsupported-operator error until each accepted
+predicate has an execution strategy. Implement the shared operator set through
+index-aware plans: union equality ranges for `in`, disjoint ranges for `!=`, and
+array-membership indexing for `contains`. Specify missing-field, null, numeric,
+and array semantics consistently with storage filtering. Composite predicates
+must retain conjunction semantics.
 
 Merge and deduplicate candidate streams before applying the requested order and limit. When predicates require residual evaluation against fetched documents, continue candidate traversal until enough matching documents are collected or the index is exhausted; never treat an arbitrary candidate limit as the final result limit. Preserve explicit no-matching-index and unsupported-plan failures when no valid strategy exists.
 
@@ -16,7 +33,10 @@ Update Indexer protocol operators, template validation, ordering/cursor handling
 
 ## Alternatives
 
-**Reject the three operators everywhere.** This prevents silent widening but removes behavior already promised by the public filter contract. It is appropriate only if that product requirement is deliberately withdrawn.
+**Reject the three operators everywhere.** This removes behavior promised by the
+shared filter contract, including ID-only membership and other filter consumers.
+The implemented rejection is limited to indexed Query and does not withdraw the
+full indexed-execution requirement retained here.
 
 **Run unsupported queries as unrestricted storage scans.** Storage can evaluate more predicates, but this changes the required-index and predictable-cost policy in the [Query integration design](../../../../docs/design/server/query/02.indexer-integration.md).
 

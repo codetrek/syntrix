@@ -144,6 +144,15 @@ Both clients return `DocumentReference` and `CollectionReference` objects with t
 - **`orderBy(field, direction): QueryBuilder<T>`** — sort.
 - **`limit(n: number): QueryBuilder<T>`** — limit results.
 
+`where()` accepts the shared filter syntax. On execution, indexed queries using
+`!=`, `in`, or `contains` reject with HTTP 400 and code `BAD_REQUEST`; no partial
+result is returned. Unordered queries whose filters all target `id` with `==` or
+`in` retain their direct Store path. See
+[query availability](filters.md#query-availability) for supported query shapes.
+Query `update()` and `delete()` fetch matching documents first; a query rejection
+prevents their document writes. These restrictions do not change the operators
+available to document write conditions or realtime filters.
+
 ## 4. Realtime (WS & SSE)
 
 ### WebSocket (default)

@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/syntrixbase/syntrix/internal/core/storage"
 	"github.com/syntrixbase/syntrix/internal/core/storage/types"
@@ -211,7 +212,10 @@ func (e *Engine) executeWithStorage(ctx context.Context, database string, q mode
 
 // executeWithIndexer uses the indexer to find document IDs and fetches them.
 func (e *Engine) executeWithIndexer(ctx context.Context, database string, q model.Query) ([]model.Document, error) {
-	plan := e.queryToPlan(q)
+	plan, err := e.queryToPlan(q)
+	if err != nil {
+		return nil, err
+	}
 
 	refs, err := e.indexer.Search(ctx, database, plan)
 	if err != nil {
@@ -246,7 +250,7 @@ func (e *Engine) executeWithIndexer(ctx context.Context, database string, q mode
 }
 
 // queryToPlan converts a model.Query to an indexer.Plan.
-func (e *Engine) queryToPlan(q model.Query) indexer.Plan {
+func (e *Engine) queryToPlan(q model.Query) (indexer.Plan, error) {
 	plan := indexer.Plan{
 		Collection:  q.Collection,
 		Limit:       q.Limit,
@@ -269,7 +273,7 @@ func (e *Engine) queryToPlan(q model.Query) indexer.Plan {
 		case "<=":
 			op = indexer.FilterLte
 		default:
-			continue // Skip unsupported ops
+			return indexer.Plan{}, fmt.Errorf("%w: operator %q is not supported by indexed queries", model.ErrInvalidQuery, f.Op)
 		}
 		plan.Filters = append(plan.Filters, indexer.Filter{
 			Field: f.Field,
@@ -290,7 +294,7 @@ func (e *Engine) queryToPlan(q model.Query) indexer.Plan {
 		})
 	}
 
-	return plan
+	return plan, nil
 }
 
 // Pull handles replication pull requests.

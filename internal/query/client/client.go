@@ -189,6 +189,18 @@ func (c *Client) Push(ctx context.Context, database string, req storage.Replicat
 // Error handling
 // ============================================================================
 
+type invalidQueryError struct {
+	message string
+}
+
+func (e invalidQueryError) Error() string {
+	return e.message
+}
+
+func (e invalidQueryError) Unwrap() error {
+	return model.ErrInvalidQuery
+}
+
 // statusToError converts gRPC status to domain errors.
 func statusToError(err error) error {
 	if err == nil {
@@ -208,7 +220,7 @@ func statusToError(err error) error {
 	case codes.AlreadyExists:
 		return model.ErrExists
 	case codes.InvalidArgument:
-		return model.ErrInvalidQuery
+		return invalidQueryError{message: st.Message()}
 	case codes.PermissionDenied:
 		return model.ErrPermissionDenied
 	default:

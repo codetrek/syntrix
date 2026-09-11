@@ -2,6 +2,7 @@ package rest
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/syntrixbase/syntrix/pkg/model"
@@ -26,6 +27,10 @@ func (h *Handler) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	docs, err := h.engine.ExecuteQuery(r.Context(), database, q)
 	if err != nil {
+		if errors.Is(err, model.ErrInvalidQuery) {
+			writeError(w, http.StatusBadRequest, ErrCodeBadRequest, err.Error())
+			return
+		}
 		writeInternalError(w, err, "Failed to execute query")
 		return
 	}
