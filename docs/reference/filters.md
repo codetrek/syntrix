@@ -43,6 +43,26 @@ These Query restrictions do not change write-condition, Store, or realtime filte
 semantics. Full indexed execution of `!=`, `in`, and `contains` remains
 [proposed](../../.agents/notes/proposed/bug-fix/2026-09-07-indexed-query-filter-semantics.md).
 
+### Multiple Conditions on One Indexed Field
+
+On a field usable by the selected index, equality and range conditions are
+combined with AND. Their order in `filters` does not change the bounds or result.
+
+| Conditions on `price` | Effective constraint |
+|---|---|
+| `>= 10` and `>= 20` | `>= 20` |
+| `<= 100` and `< 100` | `< 100` |
+| `== 20` and `== 20` | `== 20` |
+| `== 20` and `== 30` | Empty result |
+| `== 20` and `> 20` | Empty result |
+| `>= 20` and `<= 20` | Only value 20 |
+| `> 20` and `<= 20` | Empty result |
+
+These rules use the index's existing encoded-value comparisons and apply to
+ascending and descending fields. Index selection and field-placement requirements
+still apply; this does not add residual filtering for fields outside the usable
+index prefix or support for additional operators.
+
 ## Usage Examples
 
 ### Simple Equality

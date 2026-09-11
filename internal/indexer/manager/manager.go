@@ -3,6 +3,7 @@
 package manager
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -349,8 +350,12 @@ func (m *Manager) Search(ctx context.Context, database string, plan Plan) ([]Doc
 		return nil, err
 	}
 
+	if opts.empty {
+		return []DocRef{}, nil
+	}
+
 	// Execute search via Store interface
-	results, err := m.store.Search(database, pattern, tmplID, opts)
+	results, err := m.store.Search(database, pattern, tmplID, opts.SearchOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -371,10 +376,83 @@ func (m *Manager) validatePlan(plan Plan) error {
 	return nil
 }
 
-func (m *Manager) buildSearchOptions(plan Plan, tmpl *template.Template) (store.SearchOptions, error) {
-	opts := store.SearchOptions{
-		Limit: plan.Limit,
+type searchOptions struct {
+	store.SearchOptions
+	empty bool
+}
+
+type fieldBound struct {
+	value     any
+	key       []byte
+	inclusive bool
+}
+
+type fieldInterval struct {
+	lower    *fieldBound
+	upper    *fieldBound
+	equality bool
+}
+
+func (interval fieldInterval) empty() bool {
+	if interval.lower == nil || interval.upper == nil {
+		return false
 	}
+	comparison := bytes.Compare(interval.lower.key, interval.upper.key)
+	return comparison > 0 || comparison == 0 && (!interval.lower.inclusive || !interval.upper.inclusive)
+}
+
+func tighterBound(current, candidate *fieldBound, lower bool) *fieldBound {
+	if current == nil {
+		return candidate
+	}
+	comparison := bytes.Compare(candidate.key, current.key)
+	if !lower {
+		comparison = -comparison
+	}
+	if comparison > 0 || comparison == 0 && !candidate.inclusive {
+		return candidate
+	}
+	return current
+}
+
+func intersectFieldFilters(filters []Filter) (fieldInterval, error) {
+	var interval fieldInterval
+	for _, filter := range filters {
+		var lower, upper, inclusive bool
+		switch filter.Op {
+		case FilterEq:
+			lower, upper, inclusive = true, true, true
+			interval.equality = true
+		case FilterGt:
+			lower = true
+		case FilterGte:
+			lower, inclusive = true, true
+		case FilterLt:
+			upper = true
+		case FilterLte:
+			upper, inclusive = true, true
+		default:
+			continue
+		}
+
+		// Compare with the index's scalar encoding, including its numeric coercion.
+		key, err := encoding.EncodePrefix([]encoding.Field{{Value: filter.Value, Direction: encoding.Asc}})
+		if err != nil {
+			return fieldInterval{}, fmt.Errorf("failed to encode filter bound: %w", err)
+		}
+		bound := &fieldBound{value: filter.Value, key: key, inclusive: inclusive}
+		if lower {
+			interval.lower = tighterBound(interval.lower, bound, true)
+		}
+		if upper {
+			interval.upper = tighterBound(interval.upper, bound, false)
+		}
+	}
+	return interval, nil
+}
+
+func (m *Manager) buildSearchOptions(plan Plan, tmpl *template.Template) (searchOptions, error) {
+	opts := searchOptions{SearchOptions: store.SearchOptions{Limit: plan.Limit}}
 	if opts.Limit <= 0 {
 		opts.Limit = 100 // default
 	}
@@ -419,94 +497,34 @@ func (m *Manager) buildSearchOptions(plan Plan, tmpl *template.Template) (store.
 			dir = encoding.Asc
 		}
 
-		// Check for equality filter first
-		var eqFilter *Filter
-		var rangeFilters []Filter
-		for j := range filters {
-			if filters[j].Op == FilterEq {
-				eqFilter = &filters[j]
-			} else {
-				rangeFilters = append(rangeFilters, filters[j])
-			}
+		interval, err := intersectFieldFilters(filters)
+		if err != nil {
+			return opts, err
 		}
+		opts.empty = opts.empty || interval.empty()
 
-		if eqFilter != nil {
-			// Equality: add to both lower and upper
-			lowerFields = append(lowerFields, encoding.Field{Value: eqFilter.Value, Direction: dir})
-			upperFields = append(upperFields, encoding.Field{Value: eqFilter.Value, Direction: dir})
+		if interval.equality {
+			lowerFields = append(lowerFields, encoding.Field{Value: interval.lower.value, Direction: dir})
+			upperFields = append(upperFields, encoding.Field{Value: interval.lower.value, Direction: dir})
 			continue
 		}
 
-		// Range filter - this should be on the field after the equality prefix
-		// Process gt/gte for lower bound, lt/lte for upper bound
-		// NOTE: For descending order fields, the bounds are INVERTED because
-		// smaller values encode to larger keys.
-		var hasLowerBound, hasUpperBound bool
-		var lowerVal, upperVal any
-		var lowerInclusive, upperInclusive bool
-
-		for _, rf := range rangeFilters {
-			switch rf.Op {
-			case FilterGt:
-				if dir == encoding.Asc {
-					lowerVal = rf.Value
-					lowerInclusive = false
-					hasLowerBound = true
-				} else {
-					// Descending: > becomes upper bound (larger keys)
-					upperVal = rf.Value
-					upperInclusive = false
-					hasUpperBound = true
-				}
-			case FilterGte:
-				if dir == encoding.Asc {
-					lowerVal = rf.Value
-					lowerInclusive = true
-					hasLowerBound = true
-				} else {
-					upperVal = rf.Value
-					upperInclusive = true
-					hasUpperBound = true
-				}
-			case FilterLt:
-				if dir == encoding.Asc {
-					upperVal = rf.Value
-					upperInclusive = false
-					hasUpperBound = true
-				} else {
-					// Descending: < becomes lower bound (larger keys)
-					lowerVal = rf.Value
-					lowerInclusive = false
-					hasLowerBound = true
-				}
-			case FilterLte:
-				if dir == encoding.Asc {
-					upperVal = rf.Value
-					upperInclusive = true
-					hasUpperBound = true
-				} else {
-					lowerVal = rf.Value
-					lowerInclusive = true
-					hasLowerBound = true
-				}
-			}
+		lower, upper := interval.lower, interval.upper
+		if dir == encoding.Desc {
+			lower, upper = upper, lower
 		}
-
-		// For range filters, we add them to the bounds
-		// After a range filter, we cannot add more constraints
-		if hasLowerBound {
-			lowerFields = append(lowerFields, encoding.Field{Value: lowerVal, Direction: dir})
-			rangeLowerInclusive = lowerInclusive
+		if lower != nil {
+			lowerFields = append(lowerFields, encoding.Field{Value: lower.value, Direction: dir})
+			rangeLowerInclusive = lower.inclusive
 			hasRangeLower = true
 		}
-		if hasUpperBound {
-			upperFields = append(upperFields, encoding.Field{Value: upperVal, Direction: dir})
-			rangeUpperInclusive = upperInclusive
+		if upper != nil {
+			upperFields = append(upperFields, encoding.Field{Value: upper.value, Direction: dir})
+			rangeUpperInclusive = upper.inclusive
 			hasRangeUpper = true
 		}
 
-		// After a range filter, break - can't have more constraints
-		if hasLowerBound || hasUpperBound {
+		if lower != nil || upper != nil {
 			break
 		}
 	}

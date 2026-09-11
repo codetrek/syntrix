@@ -10,13 +10,16 @@ source inspection found that planning discarded these predicates, potentially
 widening results or selecting a different index. The
 [unsupported-operator rejection decision](../../implemented/bug-fix/2026-09-11-query-unsupported-filter-rejection.md)
 prevents that omission by rejecting indexed queries before search. Unordered
-ID-only `==` and `in` queries retain their direct Store path.
+ID-only `==` and `in` queries retain their direct Store path. The
+[same-field intersection decision](../../implemented/bug-fix/2026-09-11-indexed-filter-intersection.md)
+preserves repeated equality and range constraints on usable index fields,
+including contradictions, strict endpoint ties, and ascending or descending keys.
 
 The [filter reference](../../../../docs/reference/filters.md#query-availability)
 records these execution limits. General membership, not-equal, and array
-membership queries remain unavailable through indexed Query; complete operator
-semantics and predicate-combination correctness remain the subject of this
-proposal.
+membership queries remain unavailable through indexed Query. Full operator
+semantics, cross-field residual evaluation, and ordering and pagination across
+execution strategies remain the subject of this proposal.
 
 ## Proposal
 
@@ -25,7 +28,8 @@ predicate has an execution strategy. Implement the shared operator set through
 index-aware plans: union equality ranges for `in`, disjoint ranges for `!=`, and
 array-membership indexing for `contains`. Specify missing-field, null, numeric,
 and array semantics consistently with storage filtering. Composite predicates
-must retain conjunction semantics.
+must retain conjunction semantics, preserving the implemented same-field
+intersection when adding execution strategies.
 
 Merge and deduplicate candidate streams before applying the requested order and limit. When predicates require residual evaluation against fetched documents, continue candidate traversal until enough matching documents are collected or the index is exhausted; never treat an arbitrary candidate limit as the final result limit. Preserve explicit no-matching-index and unsupported-plan failures when no valid strategy exists.
 
