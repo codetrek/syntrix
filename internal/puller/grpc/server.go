@@ -2,7 +2,7 @@ package grpc
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -15,6 +15,7 @@ import (
 	"github.com/syntrixbase/syntrix/internal/puller/events"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // EventSource provides the event handler setter interface.
@@ -22,6 +23,12 @@ import (
 type EventSource interface {
 	SetEventHandler(handler func(ctx context.Context, backendName string, event *events.StoreChangeEvent) error)
 	Replay(ctx context.Context, after map[string]string, coalesce bool) (events.Iterator, error)
+}
+
+type boundarySource interface {
+	BootstrapBoundary(context.Context) (string, error)
+	ValidateBoundary(context.Context, string) error
+	ReplayBoundary(context.Context, string, bool) (events.Iterator, error)
 }
 
 // Server implements the PullerService gRPC interface.
@@ -142,6 +149,45 @@ func (s *Server) Shutdown() {
 	s.logger.Info("Puller gRPC service shut down")
 }
 
+func (s *Server) BootstrapBoundary(ctx context.Context, _ *pullerv1.BootstrapBoundaryRequest) (*pullerv1.BoundaryResponse, error) {
+	source, ok := s.eventSource.(boundarySource)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "source boundaries are unavailable")
+	}
+	progress, err := source.BootstrapBoundary(ctx)
+	if err != nil {
+		code := codes.FailedPrecondition
+		if errors.Is(err, core.ErrCaptureUnavailable) {
+			code = codes.Unavailable
+		}
+		return nil, status.Errorf(code, "bootstrap boundary: %v", err)
+	}
+	response := &pullerv1.BoundaryResponse{Progress: progress}
+	if err := validateResponseSize(response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (s *Server) ValidateBoundary(ctx context.Context, req *pullerv1.ValidateBoundaryRequest) (*pullerv1.BoundaryResponse, error) {
+	source, ok := s.eventSource.(boundarySource)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "source boundaries are unavailable")
+	}
+	if err := source.ValidateBoundary(ctx, req.Progress); err != nil {
+		code := codes.FailedPrecondition
+		if errors.Is(err, core.ErrCaptureUnavailable) {
+			code = codes.Unavailable
+		}
+		return nil, status.Errorf(code, "invalid boundary: %v", err)
+	}
+	response := &pullerv1.BoundaryResponse{Progress: req.Progress}
+	if err := validateResponseSize(response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 // Subscribe implements the PullerService Subscribe RPC.
 func (s *Server) Subscribe(req *pullerv1.SubscribeRequest, stream pullerv1.PullerService_SubscribeServer) error {
 	ctx := stream.Context()
@@ -190,6 +236,23 @@ func (s *Server) Subscribe(req *pullerv1.SubscribeRequest, stream pullerv1.Pulle
 		"coalesceOnCatchUp", sub.CoalesceOnCatchUp,
 	)
 
+	var source boundarySource
+	if req.RequireReady {
+		var ok bool
+		source, ok = s.eventSource.(boundarySource)
+		if !ok {
+			return status.Error(codes.Unimplemented, "verified subscriptions are unavailable")
+		}
+		if err := source.ValidateBoundary(ctx, req.After); err != nil {
+			code := codes.FailedPrecondition
+			if errors.Is(err, core.ErrCaptureUnavailable) {
+				code = codes.Unavailable
+			}
+			return status.Errorf(code, "invalid subscription boundary: %v", err)
+		}
+	}
+	readySent := false
+
 	// Mode: "catchup" or "live"
 	mode := "catchup"
 	if req.GetAfter() == "" {
@@ -227,7 +290,13 @@ func (s *Server) Subscribe(req *pullerv1.SubscribeRequest, stream pullerv1.Pulle
 			sub.GetAndResetOverflow() // Clear overflow flag
 
 			// Start replay
-			iter, err := s.eventSource.Replay(ctx, sub.CurrentProgress().Positions, sub.CoalesceOnCatchUp)
+			var iter events.Iterator
+			var err error
+			if source != nil {
+				iter, err = source.ReplayBoundary(ctx, sub.CurrentProgress().Encode(), sub.CoalesceOnCatchUp)
+			} else {
+				iter, err = s.eventSource.Replay(ctx, sub.CurrentProgress().Positions, sub.CoalesceOnCatchUp)
+			}
 			if err != nil {
 				s.logger.Error("failed to start replay", "error", err)
 				return status.Errorf(codes.Internal, "failed to start replay: %v", err)
@@ -252,10 +321,11 @@ func (s *Server) Subscribe(req *pullerv1.SubscribeRequest, stream pullerv1.Pulle
 					return err
 				}
 			}
-			iter.Close()
-			s.logger.Debug("Replay finished", "totalReplayCount", replayCount, "iterErr", iter.Err())
+			replayErr := iter.Err()
+			closeErr := iter.Close()
+			s.logger.Debug("Replay finished", "totalReplayCount", replayCount, "iterErr", replayErr)
 
-			if err := iter.Err(); err != nil {
+			if err := errors.Join(replayErr, closeErr); err != nil {
 				s.logger.Error("replay error", "error", err)
 				return status.Errorf(codes.Internal, "replay error: %v", err)
 			}
@@ -274,6 +344,12 @@ func (s *Server) Subscribe(req *pullerv1.SubscribeRequest, stream pullerv1.Pulle
 			heartbeatTicker.Reset(heartbeatInterval)
 
 		} else {
+			if req.RequireReady && !readySent {
+				if err := sendResponse(stream, &pullerv1.PullerEvent{Ready: true, Progress: sub.CurrentProgress().Encode()}); err != nil {
+					return err
+				}
+				readySent = true
+			}
 			// Live loop
 			select {
 			case <-ctx.Done():
@@ -285,6 +361,15 @@ func (s *Server) Subscribe(req *pullerv1.SubscribeRequest, stream pullerv1.Pulle
 				return status.Error(codes.Canceled, "subscription closed")
 
 			case <-heartbeatTicker.C:
+				if source != nil {
+					if err := source.ValidateBoundary(ctx, sub.CurrentProgress().Encode()); err != nil {
+						code := codes.FailedPrecondition
+						if errors.Is(err, core.ErrCaptureUnavailable) {
+							code = codes.Unavailable
+						}
+						return status.Errorf(code, "subscription boundary unavailable: %v", err)
+					}
+				}
 				// Send heartbeat (PullerEvent with nil ChangeEvent)
 				if err := s.sendHeartbeat(stream, sub); err != nil {
 					return err
@@ -329,22 +414,23 @@ func (s *Server) sendEvent(stream pullerv1.PullerService_SubscribeServer, sub *c
 	changeEvt, err := s.convertEvent(backend, evt)
 	if err != nil {
 		s.logger.Error("failed to convert event", "error", err)
-		return nil // Skip invalid events
+		return fmt.Errorf("convert puller event: %w", err)
 	}
 
-	// Update subscriber position and add progress marker
-	sub.UpdatePosition(backend, evt.EventID, evt.ClusterTime)
+	position := sub.CurrentProgress()
+	position.SetPosition(backend, evt.EventID)
 
 	pullerEvt := &pullerv1.PullerEvent{
 		ChangeEvent: changeEvt,
-		Progress:    sub.CurrentProgress().Encode(),
+		Progress:    position.Encode(),
 	}
 
 	// Send to client
-	if err := stream.Send(pullerEvt); err != nil {
+	if err := sendResponse(stream, pullerEvt); err != nil {
 		s.logger.Error("failed to send event", "error", err, "consumerId", sub.ID)
 		return err
 	}
+	sub.UpdatePosition(backend, evt.EventID, evt.ClusterTime)
 	return nil
 }
 
@@ -356,7 +442,7 @@ func (s *Server) sendHeartbeat(stream pullerv1.PullerService_SubscribeServer, su
 		Progress:    sub.CurrentProgress().Encode(),
 	}
 
-	if err := stream.Send(pullerEvt); err != nil {
+	if err := sendResponse(stream, pullerEvt); err != nil {
 		s.logger.Error("failed to send heartbeat", "error", err, "consumerId", sub.ID)
 		return err
 	}
@@ -370,17 +456,21 @@ func (s *Server) convertEvent(backend string, evt *events.StoreChangeEvent) (*pu
 	var err error
 
 	if evt.FullDocument != nil {
-		fullDocBytes, err = json.Marshal(evt.FullDocument)
+		fullDocBytes, err = events.MarshalDocument(evt.FullDocument)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal full document: %w", err)
 		}
 	}
 
 	if evt.UpdateDesc != nil {
-		updateDescBytes, err = json.Marshal(evt.UpdateDesc)
+		updateDescBytes, err = events.MarshalUpdateDescription(evt.UpdateDesc)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal update description: %w", err)
 		}
+	}
+
+	if err := events.ValidateEncodedEventSize(evt, fullDocBytes, updateDescBytes); err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
 
 	var txnNumber int64
@@ -404,6 +494,20 @@ func (s *Server) convertEvent(backend string, evt *events.StoreChangeEvent) (*pu
 		TxnNumber: txnNumber,
 		Backend:   backend,
 	}, nil
+}
+
+func validateResponseSize(message proto.Message) error {
+	if size := proto.Size(message); size > events.MaxRPCBytes {
+		return status.Errorf(codes.FailedPrecondition, "complete puller response exceeds 65 MiB (encoded bytes: %d)", size)
+	}
+	return nil
+}
+
+func sendResponse(stream pullerv1.PullerService_SubscribeServer, message *pullerv1.PullerEvent) error {
+	if err := validateResponseSize(message); err != nil {
+		return err
+	}
+	return stream.Send(message)
 }
 
 // SubscriberCount returns the number of active subscribers.

@@ -2,7 +2,6 @@
 package buffer
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/cockroachdb/pebble"
@@ -50,23 +49,24 @@ func (i *bufferIterator) Next() bool {
 		}
 
 		if !valid {
+			i.err = i.iter.Error()
 			return false
 		}
 
-		if isCheckpointKey(i.iter.Key()) {
+		if isMetadataKey(i.iter.Key()) {
 			continue
 		}
 
 		i.key = string(i.iter.Key())
 		value := i.iter.Value()
 
-		var evt events.StoreChangeEvent
-		if err := json.Unmarshal(value, &evt); err != nil {
+		evt, err := events.UnmarshalEvent(value)
+		if err != nil {
 			i.err = fmt.Errorf("failed to unmarshal event: %w", err)
 			return false
 		}
 
-		i.evt = &evt
+		i.evt = evt
 		return true
 	}
 }
@@ -96,7 +96,12 @@ func (i *bufferIterator) Close() error {
 func (b *Buffer) newSnapshotIterator(afterKey string) Iterator {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+	return b.newSnapshotIteratorLocked(afterKey)
+}
 
+// Holding mu across the disk snapshot and queue copy prevents a committed batch
+// from disappearing from the queue before it becomes visible to that snapshot.
+func (b *Buffer) newSnapshotIteratorLocked(afterKey string) Iterator {
 	var evts []*events.StoreChangeEvent
 	var keys []string
 
@@ -192,6 +197,10 @@ func (i *deduplicatingIterator) Next() bool {
 			}
 			i.lastYield = key
 			return true
+		}
+
+		if i.current.Err() != nil {
+			return false
 		}
 
 		// Current iterator exhausted, move to next
