@@ -13,7 +13,7 @@ describe('Replication Full Flow', () => {
     // 1. Setup Mocks
     const checkpoint = new CheckpointManager();
     const outbox = new Outbox();
-    const mockTokenProvider = { getToken: async () => 'test', setToken: () => {}, setRefreshToken: () => {}, refreshToken: async () => 'test' };
+    const mockTokenProvider = { getSessionVersion: () => 0, getToken: async () => 'test', setToken: () => {}, setRefreshToken: () => {}, refreshToken: async () => 'test' };
     const realtime = new RealtimeListener('ws://test', mockTokenProvider as any, 'test-db');
     const puller = new Puller();
     const pusher = new Pusher();

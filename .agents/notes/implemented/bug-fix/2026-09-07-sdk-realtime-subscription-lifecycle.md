@@ -28,7 +28,7 @@ connection initiation explicit.
 | Unsubscribe | Remove that subscription's callbacks and registration state; preserve the shared connection |
 | `disconnect()` | Close the socket, cancel timers, reject connection waiters, and retain logical subscriptions for explicit reconnect |
 | `dispose()` | Stop transport work and clear subscriptions and observers permanently; reject reuse |
-| Logout | Dispose the owned WebSocket client before the existing authentication logout flow |
+| Login, signup, logout | Invalidate the local authentication session, clear cached realtime references, and dispose the owned WebSocket and disconnect SSE before awaiting remote authentication |
 
 `onReady` means registration succeeded. It does not establish historical delivery
 or snapshot completion; applications can schedule reconciliation from it after
@@ -68,11 +68,11 @@ closing a manually managed connection when a subscription ends.
   [Realtime resume](../../proposed/feature/2026-09-07-realtime-client-resume.md) and
   [offline replication](../../proposed/feature/2026-09-07-sdk-offline-replication.md)
   retain those responsibilities.
-- WebSocket teardown does not cancel shared HTTP authentication requests or stop
-  their credential mutations. The
-  [authentication session race](../../proposed/bug-fix/2026-09-10-sdk-authentication-session-race.md)
-  requires coordinated changes across authentication consumers; transport guards
-  remain necessary even after that separate guarantee is implemented.
+- WebSocket teardown and provider ownership have separate responsibilities. The
+  [authentication session decision](2026-09-10-sdk-authentication-session-race.md)
+  prevents obsolete credential mutations and retries across accounts. Transport
+  guards still prevent stopped connections from reviving; outstanding HTTP calls
+  need not be canceled for provider ownership checks to apply.
 
 The [SDK reference](../../../../docs/reference/typescript_sdk.md#4-realtime-ws--sse)
 owns the public usage and lifecycle contract.

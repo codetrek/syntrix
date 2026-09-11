@@ -10,7 +10,7 @@ describe('Replication Scaffolding', () => {
   it('should start and stop coordinator', () => {
     const checkpoint = new CheckpointManager();
     const outbox = new Outbox();
-    const mockTokenProvider = { getToken: async () => 'test', setToken: () => {}, setRefreshToken: () => {}, refreshToken: async () => 'test' };
+    const mockTokenProvider = { getSessionVersion: () => 0, getToken: async () => 'test', setToken: () => {}, setRefreshToken: () => {}, refreshToken: async () => 'test' };
     const realtime = new RealtimeListener('ws://test', mockTokenProvider as any, 'test-db');
     const puller = new Puller();
     const pusher = new Pusher();
@@ -50,7 +50,7 @@ describe('Replication Scaffolding', () => {
     const pusher = new Pusher();
     await pusher.pushChanges([]);
 
-    const mockTokenProvider2 = { getToken: async () => 'test', setToken: () => {}, setRefreshToken: () => {}, refreshToken: async () => 'test' };
+    const mockTokenProvider2 = { getSessionVersion: () => 0, getToken: async () => 'test', setToken: () => {}, setRefreshToken: () => {}, refreshToken: async () => 'test' };
     const realtime = new RealtimeListener('ws://test', mockTokenProvider2 as any, 'test-db');
     // Mock connect to avoid real network attempt and unhandled rejection
     realtime.connect = mock(async () => {});

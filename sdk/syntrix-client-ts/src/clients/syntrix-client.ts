@@ -37,19 +37,31 @@ export class SyntrixClient implements AuthService {
 
   // Auth methods
   async signup(username: string, password: string): Promise<LoginResponse> {
-    return this.tokenProvider.signup(username, password);
+    const operation = this.tokenProvider.signup(username, password);
+    this.clearRealtimeClients();
+    return operation;
   }
 
   async login(username: string, password: string): Promise<LoginResponse> {
-    return this.tokenProvider.login(username, password);
+    const operation = this.tokenProvider.login(username, password);
+    this.clearRealtimeClients();
+    return operation;
   }
 
   async logout(): Promise<void> {
-    if (this.realtimeClient) {
-      this.realtimeClient.dispose();
-      this.realtimeClient = null;
-    }
-    return this.tokenProvider.logout();
+    const operation = this.tokenProvider.logout();
+    this.clearRealtimeClients();
+    return operation;
+  }
+
+  private clearRealtimeClients(): void {
+    const realtime = this.realtimeClient;
+    const sse = this.realtimeSseClient;
+    // Detach both owners before teardown callbacks can create replacements.
+    this.realtimeClient = null;
+    this.realtimeSseClient = null;
+    realtime?.dispose();
+    sse?.disconnect();
   }
 
   isAuthenticated(): boolean {

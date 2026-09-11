@@ -8,6 +8,8 @@ export interface AuthConfig {
 }
 
 export interface TokenProvider {
+  /** Changes on explicit credential replacement, but not same-session refresh. */
+  getSessionVersion(): number;
   getToken(): Promise<string | null>;
   setToken(token: string): void;
   setRefreshToken(token: string): void;

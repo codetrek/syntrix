@@ -79,6 +79,59 @@ describe('SyntrixClient', () => {
   });
 
   describe('Realtime methods', () => {
+    for (const operation of ['login', 'signup', 'logout'] as const) {
+      it(`invalidates credentials and detaches both transports before ${operation} teardown`, async () => {
+        let finish!: (value: any) => void;
+        axios.post = mock(() => new Promise(resolve => { finish = resolve; })) as any;
+        const client = new SyntrixClient('http://localhost', {
+          database: 'test-db', auth: { token: 'A', refreshToken: 'A-refresh' },
+        });
+        const oldWS = client.realtime();
+        const oldSSE = client.realtimeSSE();
+        let replacementWS: ReturnType<SyntrixClient['realtime']>;
+        let replacementSSE: ReturnType<SyntrixClient['realtimeSSE']>;
+        const dispose = mock(() => {
+          expect(client.isAuthenticated()).toBe(false);
+          replacementWS = client.realtime();
+          replacementSSE = client.realtimeSSE();
+          expect(replacementWS).not.toBe(oldWS);
+          expect(replacementSSE).not.toBe(oldSSE);
+        });
+        oldWS.dispose = dispose;
+        const disconnect = mock(() => {
+          expect(client.realtime()).toBe(replacementWS);
+          expect(client.realtimeSSE()).toBe(replacementSSE);
+        });
+        oldSSE.disconnect = disconnect;
+        const pending = operation === 'logout' ? client.logout() : client[operation]('B', 'password');
+        expect(dispose).toHaveBeenCalledTimes(1);
+        expect(disconnect).toHaveBeenCalledTimes(1);
+        finish({ data: { access_token: 'B', refresh_token: 'B-refresh', expires_in: 60 } });
+        await pending;
+        expect(client.isAuthenticated()).toBe(operation !== 'logout');
+        client.realtime().dispose();
+        client.realtimeSSE().disconnect();
+      });
+    }
+
+    it('propagates remote logout failure after clearing owned realtime resources', async () => {
+      const error = new Error('revocation unavailable');
+      axios.post = mock(async () => { throw error; }) as any;
+      const client = new SyntrixClient('http://localhost', {
+        database: 'test-db', auth: { token: 'A', refreshToken: 'A-refresh' },
+      });
+      const oldWS = client.realtime();
+      const oldSSE = client.realtimeSSE();
+      const result = client.logout().catch(failure => failure);
+      expect(client.isAuthenticated()).toBe(false);
+      expect(client.realtime()).not.toBe(oldWS);
+      expect(client.realtimeSSE()).not.toBe(oldSSE);
+      expect(() => oldWS.subscribe({ query: { collection: 'orders' } })).toThrow('disposed');
+      expect(await result).toBe(error);
+      client.realtime().dispose();
+      client.realtimeSSE().disconnect();
+    });
+
     it('should create realtime client', () => {
       const client = new SyntrixClient('http://localhost', { database: 'test-db' });
       const rt = client.realtime();

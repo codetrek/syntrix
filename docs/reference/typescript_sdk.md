@@ -21,7 +21,7 @@ const client = new SyntrixClient('<URL_ENDPOINT>', {
   database: 'my-database',
 });
 
-await client.login('username', 'password', 'my-database');
+await client.login('username', 'password');
 ```
 
 ### Methods
@@ -33,6 +33,70 @@ Creates a reference to a document.
 #### `collection<T>(path: string): CollectionReference<T>`
 
 Creates a reference to a collection.
+
+### Authentication sessions
+
+`login(username, password)` and `signup(username, password)` immediately end the
+current local session before making their request. The last session operation
+started owns its result. Successful authentication installs the new credential
+pair; failure leaves the client logged out. A superseded operation rejects with
+`AuthSessionChangedError` and cannot overwrite the current credentials.
+
+`logout()` immediately clears local credentials, then uses the saved old refresh
+token with the existing server logout endpoint. Remote failure rejects the promise
+while the client remains locally logged out. A late logout response cannot clear
+a subsequent login. Server token expiration and revocation rules still apply;
+local logout does not immediately revoke every issued access or derived refresh
+token.
+
+Login, signup, and logout also clear this client's cached realtime references,
+dispose its old WebSocket client, and disconnect its old SSE client before waiting
+for the authentication request. Create subscriptions again for a new session.
+Independently constructed realtime clients require explicit owner cleanup.
+
+#### Token providers
+
+The `TokenProvider` interface requires synchronous `getSessionVersion(): number`
+alongside `getToken(): Promise<string | null>`, `refreshToken(): Promise<string>`,
+`setToken(token)`, and `setRefreshToken(token)`. A session version is local to one
+provider, changes on explicit session replacement, and must not be reused for a
+later session. Normal token rotation retains the version. Custom providers must
+also prevent obsolete operations from mutating credentials or firing hooks.
+
+For the default provider:
+
+| Operation | Behavior |
+|---|---|
+| `setToken(access)` | Advance version, replace access token, and clear old refresh token |
+| `setRefreshToken(refresh)` | Advance version and attach refresh token to current access credentials |
+| Install a complete pair through setters | Call `setToken()` before `setRefreshToken()` |
+| Refresh-token-only initial configuration | Refresh may obtain an access token within the same session |
+| Concurrent refresh | Share one operation per session; rotation preserves the session version |
+| Login/signup | Advance once when clearing credentials and again when installing a successful pair |
+
+The second login version change prevents requests admitted while login was pending
+from retrying under the newly installed account. Obsolete refresh results neither
+write credentials nor emit `onTokenRefresh`/`onAuthError`. If a hook synchronously
+changes sessions, refresh waiters reject rather than receiving a stale token.
+
+#### Requests and errors
+
+`AuthSessionChangedError` is exported by the package. It extends `Error`, has
+`code === 'AUTH_SESSION_CHANGED'`, and has no HTTP status. It means the operation's
+local session changed; applications should stop that old operation rather than
+retrying it under a new identity.
+
+HTTP requests capture their session at first authentication-interceptor admission.
+Token waits and 401/403 refresh/retry preserve and check that version. An old request
+cannot automatically refresh or retry using a new account. Missing access tokens
+remove any existing Authorization header. Authentication retry remains limited to
+one attempt.
+
+This does not bind ownership at the instant an SDK method is called, cancel an
+already admitted request, filter a successful old response, or undo server effects.
+An admitted request may still send or finish using its old token. See the
+[authentication design](../design/sdk/003_authentication.md) for provider and
+transport ownership.
 
 ## 2. TriggerClient (Internal)
 
@@ -133,7 +197,7 @@ authentication sends an `auth` message containing the token and database.
 | Last unsubscribe | Leave the client-owned connection open |
 | `disconnect()` | Stop socket and timers, reject a pending connection, retain subscriptions and callbacks for explicit reconnect |
 | `dispose()` | Stop transport work and permanently clear subscriptions and observers; reuse is an error |
-| `client.logout()` | Dispose its WebSocket client before running authentication logout |
+| `client.login()`, `client.signup()`, `client.logout()` | Invalidate the old local session and dispose the cached WebSocket and disconnect cached SSE before awaiting authentication |
 
 Disconnect and disposal are repeatable. Late socket messages, authentication
 results, and reconnect timers cannot revive a stopped connection. Synchronous
@@ -150,10 +214,12 @@ success resets the attempt count. Only a structured `unauthorized` error matchin
 the current auth request triggers one token refresh. Invalid authentication,
 missing tokens, refresh errors, and a repeated auth rejection fail the attempt.
 
-WebSocket disposal does not cancel HTTP authentication requests or guarantee that
-an in-flight refresh cannot restore credentials after logout. That shared-provider
-limitation is tracked in the
-[authentication session race proposal](../../.agents/notes/proposed/bug-fix/2026-09-10-sdk-authentication-session-race.md).
+Each connection attempt also belongs to an authentication session. Token waits and
+`auth_ack` validate that session. Automatic reconnect retains its original session
+and stops if credentials are replaced; explicit `connect()` may end an obsolete
+attempt and start under the current session. Disposal need not cancel HTTP
+refresh requests: provider checks prevent obsolete credential writes and callbacks.
+See [authentication sessions](#authentication-sessions) for the shared contract.
 
 ### Server-Sent Events (SSE)
 
@@ -171,3 +237,13 @@ await sse.connect(
 Notes:
 
 - SSE authentication is sent via Authorization header (sourced from the SDK token provider); query-string tokens are rejected.
+- `disconnect()` invalidates pending token acquisition and stops the active fetch.
+  For an established connection in the same session, it emits `onDisconnect`
+  exactly once before abort listeners can create a replacement. Pending or
+  obsolete-session connections do not emit this explicit-disconnect notification.
+  Authentication, response, and read callbacks check both controller ownership and
+  session version. Stale cleanup cannot clear a new connection, and stopped reads
+  cannot deliver buffered events afterward.
+- SSE does not automatically reconnect across session changes. Independently
+  constructed clients remain responsible for explicit disconnect; session checks
+  guard subsequent asynchronous work, not immediate remote token revocation.

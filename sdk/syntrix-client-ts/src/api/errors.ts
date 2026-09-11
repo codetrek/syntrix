@@ -6,6 +6,15 @@ export interface ValidationError {
   message: string;
 }
 
+export class AuthSessionChangedError extends Error {
+  readonly code = 'AUTH_SESSION_CHANGED';
+
+  constructor() {
+    super('The authentication session changed while the operation was pending');
+    this.name = 'AuthSessionChangedError';
+  }
+}
+
 /**
  * API error response structure
  */

@@ -57,10 +57,22 @@ must be fetched. Readiness does not mean historical data or a snapshot is comple
 
 The last unsubscribe leaves the connection open. Use `disconnect()` to stop it
 while retaining subscriptions for explicit reconnect, or `dispose()` for permanent
-cleanup. Logout disposes the client's WebSocket. Low-level `realtime().subscribe()`
-requires an explicit `connect()`; its promise resolves after authentication.
-See the [SDK reference](../../docs/reference/typescript_sdk.md#4-realtime-ws--sse)
-for error routing, timeouts, and the separate shared authentication race limitation.
+cleanup. Login, signup, and logout invalidate the old local authentication session,
+dispose the cached WebSocket, and disconnect cached SSE before awaiting the remote
+operation. Failed replacement login leaves the client logged out; remote logout
+failure rejects while local credentials remain cleared. Low-level
+`realtime().subscribe()` requires an explicit `connect()`; its promise resolves
+after authentication.
+
+Authentication work and automatic retries remain bound to their original session.
+Obsolete operations reject with `AuthSessionChangedError` (`AUTH_SESSION_CHANGED`)
+and cannot restore old credentials or retry under a new account. Custom
+`TokenProvider` implementations must expose synchronous `getSessionVersion()` and
+protect their credential mutations. See the
+[authentication reference](../../docs/reference/typescript_sdk.md#authentication-sessions)
+for setter ordering, ownership, and already admitted request limits, and the
+[realtime reference](../../docs/reference/typescript_sdk.md#4-realtime-ws--sse)
+for error routing and timeouts.
 
 ## Offline Replication (WIP)
 
