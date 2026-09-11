@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"github.com/syntrixbase/syntrix/internal/core/storage"
 	"github.com/syntrixbase/syntrix/internal/indexer"
 	"github.com/syntrixbase/syntrix/pkg/model"
@@ -224,7 +225,8 @@ func TestEngine_QueryToPlan(t *testing.T) {
 		Limit:      50,
 	}
 
-	plan := engine.queryToPlan(query)
+	plan, err := engine.queryToPlan(query)
+	require.NoError(t, err)
 
 	assert.Equal(t, "users", plan.Collection)
 	assert.Equal(t, 50, plan.Limit)
@@ -252,33 +254,110 @@ func TestEngine_QueryToPlan_Ascending(t *testing.T) {
 		Limit:      10,
 	}
 
-	plan := engine.queryToPlan(query)
+	plan, err := engine.queryToPlan(query)
+	require.NoError(t, err)
 
 	assert.Len(t, plan.OrderBy, 1)
 	assert.Equal(t, "name", plan.OrderBy[0].Field)
 	assert.Equal(t, indexer.Asc, plan.OrderBy[0].Direction)
 }
 
-func TestEngine_QueryToPlan_UnsupportedOpSkipped(t *testing.T) {
-	mockStorage := new(MockStorageBackend)
-	engine := New(mockStorage, nil)
+func TestEngine_ExecuteQuery_UnsupportedOperators(t *testing.T) {
+	for _, op := range []model.FilterOp{model.OpNe, model.OpIn, model.OpContains, "unknown"} {
+		for _, mixed := range []bool{false, true} {
+			name := string(op) + "/single"
+			if mixed {
+				name = string(op) + "/mixed"
+			}
+			t.Run(name, func(t *testing.T) {
+				mockStorage := new(MockStorageBackend)
+				mockIndexer := new(MockIndexerService)
+				engine := New(mockStorage, mockIndexer)
+				var value any = "private_value"
+				if op == model.OpIn {
+					value = []string{"private_value"}
+				}
+				filters := model.Filters{{Field: "private_field", Op: op, Value: value}}
+				if mixed {
+					filters = append(model.Filters{{Field: "status", Op: model.OpEq, Value: "active"}}, filters...)
+					filters = append(filters, model.Filter{Field: "age", Op: model.OpGte, Value: 18})
+				}
 
-	query := model.Query{
-		Collection: "users",
-		Filters: model.Filters{
-			{Field: "status", Op: "==", Value: "active"},
-			{Field: "tags", Op: "in", Value: []string{"a", "b"}}, // unsupported
-			{Field: "age", Op: ">=", Value: 18},
-		},
-		Limit: 10,
+				docs, err := engine.ExecuteQuery(context.Background(), "testdb", model.Query{
+					Collection: "users",
+					Filters:    filters,
+					Limit:      10,
+				})
+
+				require.ErrorIs(t, err, model.ErrInvalidQuery)
+				assert.Nil(t, docs)
+				assert.Contains(t, err.Error(), `"`+string(op)+`"`)
+				assert.NotContains(t, err.Error(), "private_field")
+				assert.NotContains(t, err.Error(), "private_value")
+				assert.Empty(t, mockIndexer.Calls)
+				assert.Empty(t, mockStorage.Calls)
+			})
+		}
 	}
+}
 
-	plan := engine.queryToPlan(query)
+func TestEngine_ExecuteQuery_IDMembershipRequiresSupportedIndexedPlan(t *testing.T) {
+	for _, q := range []model.Query{
+		{
+			Collection: "users",
+			Filters:    model.Filters{{Field: "id", Op: model.OpIn, Value: []string{"user1"}}},
+			OrderBy:    []model.Order{{Field: "name", Direction: "asc"}},
+		},
+		{
+			Collection: "users",
+			Filters: model.Filters{
+				{Field: "id", Op: model.OpIn, Value: []string{"user1"}},
+				{Field: "status", Op: model.OpEq, Value: "active"},
+			},
+		},
+	} {
+		mockStorage := new(MockStorageBackend)
+		mockIndexer := new(MockIndexerService)
+		docs, err := New(mockStorage, mockIndexer).ExecuteQuery(context.Background(), "testdb", q)
+		require.ErrorIs(t, err, model.ErrInvalidQuery)
+		assert.Nil(t, docs)
+		assert.Empty(t, mockIndexer.Calls)
+		assert.Empty(t, mockStorage.Calls)
+	}
+}
 
-	// Only supported ops are included
-	assert.Len(t, plan.Filters, 2)
-	assert.Equal(t, "status", plan.Filters[0].Field)
-	assert.Equal(t, "age", plan.Filters[1].Field)
+func TestEngine_ExecuteQuery_IDFiltersUseStorage(t *testing.T) {
+	for _, filters := range []model.Filters{
+		{{Field: "id", Op: model.OpEq, Value: "user1"}},
+		{{Field: "id", Op: model.OpIn, Value: []string{"user1", "user2"}}},
+		{
+			{Field: "id", Op: model.OpEq, Value: "user1"},
+			{Field: "id", Op: model.OpIn, Value: []string{"user1", "user2"}},
+		},
+	} {
+		mockStorage := new(MockStorageBackend)
+		q := model.Query{Collection: "users", Filters: filters, Limit: 10}
+		stored := storage.NewStoredDoc("testdb", "users", "user1", map[string]interface{}{"name": "Alice"})
+		mockStorage.On("Query", mock.Anything, "testdb", q).Return([]*storage.StoredDoc{&stored}, nil).Once()
+
+		docs, err := New(mockStorage, nil).ExecuteQuery(context.Background(), "testdb", q)
+
+		require.NoError(t, err)
+		require.Len(t, docs, 1)
+		assert.Equal(t, "user1", docs[0].GetID())
+		mockStorage.AssertExpectations(t)
+	}
+}
+
+func TestEngine_ExecuteQuery_RequiresIndexerBeforePlanning(t *testing.T) {
+	mockStorage := new(MockStorageBackend)
+	docs, err := New(mockStorage, nil).ExecuteQuery(context.Background(), "testdb", model.Query{
+		Collection: "users",
+		Filters:    model.Filters{{Field: "role", Op: model.OpIn, Value: []string{"admin"}}},
+	})
+	assert.ErrorIs(t, err, ErrIndexerRequired)
+	assert.Nil(t, docs)
+	assert.Empty(t, mockStorage.Calls)
 }
 
 func TestEngine_IsIDOnlyQuery(t *testing.T) {

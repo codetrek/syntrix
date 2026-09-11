@@ -246,6 +246,15 @@ Execute complex queries against a collection.
 
 **Response (200 OK):** Array of documents.
 
+**Response (400 Bad Request):** An indexed query containing `!=`, `in`, or
+`contains` returns code `BAD_REQUEST`. The planner error identifies the operator
+without including its field or value; the entire query fails before index search.
+Unknown operators are rejected by request validation with the same status and
+code, using the generic message `Invalid query parameters`.
+Unordered queries containing only `id ==` or `id in`
+filters retain their direct Store path. See
+[query availability](filters.md#query-availability) for the execution rules.
+
 ## Health Check
 
 Check if the service is running.

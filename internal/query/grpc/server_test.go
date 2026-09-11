@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -271,7 +272,8 @@ func TestServer_ExecuteQuery(t *testing.T) {
 		mockSvc := new(MockService)
 		server := NewServer(mockSvc)
 
-		mockSvc.On("ExecuteQuery", mock.Anything, "database1", mock.AnythingOfType("model.Query")).Return(nil, model.ErrInvalidQuery)
+		queryErr := fmt.Errorf("%w: operator %q is not supported by indexed queries", model.ErrInvalidQuery, "in")
+		mockSvc.On("ExecuteQuery", mock.Anything, "database1", mock.AnythingOfType("model.Query")).Return(nil, queryErr)
 
 		resp, err := server.ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{
 			Database: "database1",
@@ -282,6 +284,7 @@ func TestServer_ExecuteQuery(t *testing.T) {
 		assert.Error(t, err)
 		st, _ := status.FromError(err)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
+		assert.Equal(t, queryErr.Error(), st.Message())
 	})
 }
 

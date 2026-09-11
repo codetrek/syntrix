@@ -1,10 +1,11 @@
 # Query Filters Guide
 
-Syntrix supports a specific set of operators for filtering documents in queries and realtime subscriptions.
+Syntrix uses shared filter syntax for queries, write conditions, and realtime
+subscriptions. Operator availability depends on the operation executing the filter.
 
-## Supported Operators
+## Filter Operators
 
-The following operators are supported:
+The shared syntax recognizes these operators:
 
 | Operator | Description | Example |
 |----------|-------------|---------|
@@ -17,9 +18,30 @@ The following operators are supported:
 | `in` | Value is in a list | `{"field": "role", "op": "in", "value": ["admin", "editor"]}` |
 | `contains` | Array contains value | `{"field": "tags", "op": "contains", "value": "news"}` |
 
-## Performance Considerations
+## Query Availability
 
-- The `!=` operator is supported but may be less efficient for indexing compared to equality or range queries. When possible, consider using alternative query structures or filtering on the client side for better performance.
+For `POST /api/v1/databases/{database}/query`, execution follows these rules:
+
+| Query shape | Behavior |
+|---|---|
+| No filters and no `orderBy` | Query Store directly |
+| Every filter targets `id` with `==` or `in`, with no `orderBy` | Query Store directly |
+| Indexed filters using `==`, `>`, `>=`, `<`, or `<=` | Eligible for index planning; existing index and plan requirements apply |
+| Indexed query containing `!=`, `in`, or `contains` | Reject the entire query with HTTP 400 and code `BAD_REQUEST` before index search |
+| Unknown operator | Request validation rejects it with HTTP 400 and code `BAD_REQUEST` |
+
+The planner error for `!=`, `in`, or `contains` identifies the unsupported
+operator without including its field or value. Unknown operators receive the
+generic request-validation message `Invalid query parameters`. No partial result
+is returned. In particular, `id in [...]` with `orderBy`
+or a non-ID filter uses the indexed path and is rejected. Valid operators alone
+do not guarantee that an index can execute every predicate combination.
+Indexer configuration and request validation errors retain their existing
+precedence over planning errors.
+
+These Query restrictions do not change write-condition, Store, or realtime filter
+semantics. Full indexed execution of `!=`, `in`, and `contains` remains
+[proposed](../../.agents/notes/proposed/bug-fix/2026-09-07-indexed-query-filter-semantics.md).
 
 ## Usage Examples
 
@@ -34,6 +56,9 @@ The following operators are supported:
 ```
 
 ### Not Equal
+
+Shared syntax example; this indexed Query returns HTTP 400 `BAD_REQUEST`.
+
 ```json
 {
   "collection": "users",
@@ -55,6 +80,9 @@ The following operators are supported:
 ```
 
 ### Array Membership
+
+Shared syntax example; this indexed Query returns HTTP 400 `BAD_REQUEST`.
+
 ```json
 {
   "collection": "posts",
@@ -65,11 +93,26 @@ The following operators are supported:
 ```
 
 ### In Query
+
+Membership on a non-ID field is unavailable for indexed Query and returns
+HTTP 400 `BAD_REQUEST`:
+
 ```json
 {
   "collection": "users",
   "filters": [
     {"field": "status", "op": "in", "value": ["online", "away"]}
+  ]
+}
+```
+
+An unordered ID-only query remains available through Store:
+
+```json
+{
+  "collection": "users",
+  "filters": [
+    {"field": "id", "op": "in", "value": ["alice", "bob"]}
   ]
 }
 ```

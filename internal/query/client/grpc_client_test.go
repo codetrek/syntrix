@@ -32,7 +32,12 @@ func TestStatusToError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			grpcErr := status.Error(tt.code, "test error")
 			result := statusToError(grpcErr)
-			assert.Equal(t, tt.wantErr, result)
+			if tt.code == codes.InvalidArgument {
+				assert.ErrorIs(t, result, tt.wantErr)
+				assert.Equal(t, "test error", result.Error())
+			} else {
+				assert.Equal(t, tt.wantErr, result)
+			}
 		})
 	}
 
@@ -262,6 +267,24 @@ func TestClient_ExecuteQuery(t *testing.T) {
 		assert.Len(t, docs, 2)
 		assert.Equal(t, "doc1", docs[0]["id"])
 		assert.Equal(t, "doc2", docs[1]["id"])
+		mockClient.AssertExpectations(t)
+	})
+
+	t.Run("unsupported indexed operator", func(t *testing.T) {
+		mockClient := grpctesting.NewMockQueryServiceClient()
+		client := newTestClient(mockClient)
+		message := `invalid query: operator "in" is not supported by indexed queries`
+		mockClient.On("ExecuteQuery", mock.Anything, mock.Anything).
+			Return(nil, status.Error(codes.InvalidArgument, message)).Once()
+
+		docs, err := client.ExecuteQuery(context.Background(), "database1", model.Query{
+			Collection: "users",
+			Filters:    model.Filters{{Field: "role", Op: model.OpIn, Value: []string{"admin"}}},
+		})
+
+		assert.Nil(t, docs)
+		assert.ErrorIs(t, err, model.ErrInvalidQuery)
+		assert.EqualError(t, err, message)
 		mockClient.AssertExpectations(t)
 	})
 
