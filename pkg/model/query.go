@@ -6,7 +6,7 @@ type Query struct {
 	Filters     Filters `json:"filters"`
 	OrderBy     []Order `json:"orderBy"`
 	Limit       int     `json:"limit"`
-	StartAfter  string  `json:"startAfter"` // Cursor (usually the last document ID or sort key)
+	StartAfter  string  `json:"startAfter"` // Opaque continuation returned by QueryPage.NextCursor.
 	ShowDeleted bool    `json:"showDeleted"`
 }
 
